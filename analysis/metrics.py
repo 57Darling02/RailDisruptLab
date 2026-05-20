@@ -29,11 +29,13 @@ def analyze_timetable(
         df["arrival_sec"] = df["arrival_time"].apply(_time_to_seconds)
         df["departure_sec"] = df["departure_time"].apply(_time_to_seconds)
 
-    canceled_trains = sorted(set(plan_df["train_id"]) - set(adjusted_df["train_id"]))
+    flagged_canceled = set(adjusted_df.loc[adjusted_df["is_canceled"], "train_id"])
+    active_adjusted_df = adjusted_df[~adjusted_df["train_id"].isin(flagged_canceled)].copy()
+    canceled_trains = sorted(set(plan_df["train_id"]) - set(active_adjusted_df["train_id"]))
 
     merged = pd.merge(
         plan_df[["train_id", "station", "arrival_sec", "departure_sec"]],
-        adjusted_df[["train_id", "station", "arrival_sec", "departure_sec"]],
+        active_adjusted_df[["train_id", "station", "arrival_sec", "departure_sec"]],
         on=["train_id", "station"],
         suffixes=("_plan", "_adjusted"),
         how="left",

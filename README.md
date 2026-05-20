@@ -265,6 +265,7 @@ Default batch outputs are written under `<summary-json-dir>/scenario_analysis_ba
 - `scenario_batch_summary.json`
 - `scenario_batch_timetable.png` (planned timetable with all scenarios overlaid)
 - `scenario_batch_type_distribution.png`
+- `scenario_batch_combo_distribution.png` (case-level combination distribution such as Delay, Delay + Interruption, Delay + Speed Limit, etc.)
 - `scenario_batch_case_distribution.png` (time-of-day distribution across the whole batch)
 - `scenario_batch_location_distribution.png`
 - `scenario_batch_coverage_distribution.png`

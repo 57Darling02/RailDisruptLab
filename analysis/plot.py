@@ -8,6 +8,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.dates import DateFormatter
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 
 from core.loader import load_mileage_table
@@ -24,20 +25,39 @@ SCENARIO_TYPE_LABEL = {
 }
 
 
+def _parse_bool_column(df: pd.DataFrame, column: str) -> pd.Series:
+    text = df[column].fillna("").astype(str).str.strip().str.lower()
+    return text.isin({"1", "1.0", "true", "t", "yes", "y", "canceled", "cancelled"})
+
+
 def _read_and_format(path: Path, sheet_name: str = "Sheet1") -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
     required = ["train_ID", "station", "arrival_time", "departure_time"]
     if not all(col in df.columns for col in required) and "train_id" in df.columns:
         df = df.rename(columns={"train_id": "train_ID"})
+    if "is_canceled" not in df.columns:
+        column_lookup = {str(col).strip().lower().replace(" ", "_"): col for col in df.columns}
+        for alias in ("is_canceled", "iscanceled", "canceled", "cancelled", "cancellation"):
+            source = column_lookup.get(alias)
+            if source is not None:
+                df = df.rename(columns={source: "is_canceled"})
+                break
     if not all(col in df.columns for col in required):
         raise ValueError(f"plot input columns must include {required}, got {list(df.columns)}")
 
-    df = df[["train_ID", "station", "arrival_time", "departure_time"]].copy()
+    columns = ["train_ID", "station", "arrival_time", "departure_time"]
+    if "is_canceled" in df.columns:
+        columns.append("is_canceled")
+    df = df[columns].copy()
     for col in ["arrival_time", "departure_time"]:
         parsed = pd.to_datetime(df[col], errors="coerce")
         parsed = parsed.fillna(pd.to_datetime(df[col].astype(str), format="%H:%M:%S", errors="coerce"))
         parsed = parsed.fillna(pd.to_datetime(df[col].astype(str), format="%H:%M", errors="coerce"))
         df[col] = parsed
+    if "is_canceled" in df.columns:
+        df["is_canceled"] = _parse_bool_column(df, "is_canceled")
+    else:
+        df["is_canceled"] = False
 
     return df
 
@@ -116,9 +136,9 @@ def _compute_overlay_y_bounds(scenario_type: str, y_values: list[int]) -> tuple[
     return lower_y, max(upper_y - lower_y, 1e-6)
 
 
-def _add_scenario_overlay(ax, scenario_overlay: pd.DataFrame, station_order: list[str]) -> None:
+def _add_scenario_overlay(ax, scenario_overlay: pd.DataFrame, station_order: list[str]) -> list[Patch]:
     if scenario_overlay.empty:
-        return
+        return []
     station_to_y = {station: idx for idx, station in enumerate(station_order)}
     legend_handles = []
     seen_types = set()
@@ -162,8 +182,7 @@ def _add_scenario_overlay(ax, scenario_overlay: pd.DataFrame, station_order: lis
                 Patch(facecolor=color, edgecolor=color, alpha=0.22, label=SCENARIO_TYPE_LABEL[scenario_type])
             )
 
-    if legend_handles:
-        ax.legend(handles=legend_handles, loc="upper left")
+    return legend_handles
 
 
 def plot_timetable(
@@ -190,11 +209,17 @@ def plot_timetable(
 
     fig, ax = plt.subplots(figsize=(24, 10))
 
+    legend_handles = []
     if scenario_overlay is not None:
-        _add_scenario_overlay(ax, scenario_overlay, stations)
+        legend_handles.extend(_add_scenario_overlay(ax, scenario_overlay, stations))
 
+    canceled_plotted = False
     for train in df["train_ID"].drop_duplicates().tolist():
         train_data = df[df["train_ID"] == train].copy().reset_index(drop=True)
+        is_canceled = bool(train_data["is_canceled"].any())
+        line_style = "--" if is_canceled else "-"
+        line_alpha = 0.55 if is_canceled else 1.0
+        canceled_plotted = canceled_plotted or is_canceled
 
         first_dep = train_data.loc[0, "departure_time"]
         first_station_y = train_data.loc[0, "station_y"]
@@ -207,6 +232,7 @@ def plot_timetable(
                 horizontalalignment="center",
                 fontsize=6,
                 color="red",
+                alpha=line_alpha,
                 rotation=270,
                 zorder=4,
             )
@@ -218,7 +244,15 @@ def plot_timetable(
             arr_station_y = train_data.loc[i + 1, "station_y"]
 
             if pd.notna(dep) and pd.notna(arr) and pd.notna(dep_station_y) and pd.notna(arr_station_y):
-                ax.plot([dep, arr], [dep_station_y, arr_station_y], color="red", lw=0.8, zorder=3)
+                ax.plot(
+                    [dep, arr],
+                    [dep_station_y, arr_station_y],
+                    color="red",
+                    lw=0.8,
+                    linestyle=line_style,
+                    alpha=line_alpha,
+                    zorder=3,
+                )
 
     all_times = pd.concat(
         [df["arrival_time"], df["departure_time"]], ignore_index=True
@@ -240,6 +274,10 @@ def plot_timetable(
     ax.set_title(title, pad=20)
     ax.grid(show_grid)
     plt.xticks(rotation=0)
+    if canceled_plotted:
+        legend_handles.append(Line2D([0], [0], color="red", lw=0.8, linestyle="--", alpha=0.55, label="Canceled train"))
+    if legend_handles:
+        ax.legend(handles=legend_handles, loc="upper left")
 
     if subtitle:
         subtitle_wrapped = textwrap.fill(subtitle, width=150)

@@ -25,6 +25,26 @@ SCENARIO_TYPE_COLOR = {
     "speed_limit": "#4e79a7",
     "interruption": "#e15759",
 }
+SCENARIO_COMBO_ORDER = [
+    "Delay",
+    "Speed Limit",
+    "Interruption",
+    "Delay + Interruption",
+    "Delay + Speed Limit",
+    "Interruption + Speed Limit",
+    "Delay + Interruption + Speed Limit",
+    "No Scenario",
+]
+SCENARIO_COMBO_COLOR = {
+    "Delay": "#f28e2b",
+    "Speed Limit": "#4e79a7",
+    "Interruption": "#e15759",
+    "Delay + Interruption": "#d37295",
+    "Delay + Speed Limit": "#76b7b2",
+    "Interruption + Speed Limit": "#59a14f",
+    "Delay + Interruption + Speed Limit": "#edc948",
+    "No Scenario": "#bab0ab",
+}
 SPATIAL_BASIS_LABEL = {
     "station": "Station",
     "section": "Section",
@@ -263,6 +283,34 @@ def _build_type_summary(scenario_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_combo_summary(case_df: pd.DataFrame) -> pd.DataFrame:
+    if case_df.empty:
+        return pd.DataFrame(columns=["combo_label", "count", "ratio"])
+
+    def _combo_label(row: pd.Series) -> str:
+        parts = []
+        if int(row.get("delay_count", 0)) > 0:
+            parts.append("Delay")
+        if int(row.get("interruption_count", 0)) > 0:
+            parts.append("Interruption")
+        if int(row.get("speed_limit_count", 0)) > 0:
+            parts.append("Speed Limit")
+        return " + ".join(parts) if parts else "No Scenario"
+
+    combo_counts = case_df.apply(_combo_label, axis=1).value_counts()
+    ordered_labels = [label for label in SCENARIO_COMBO_ORDER if label in combo_counts.index]
+    total = int(combo_counts.sum())
+    rows = []
+    for label in ordered_labels:
+        count = int(combo_counts[label])
+        rows.append({
+            "combo_label": label,
+            "count": count,
+            "ratio": 0.0 if total == 0 else float(count) / float(total),
+        })
+    return pd.DataFrame(rows)
+
+
 def _build_location_summary(scenario_df: pd.DataFrame) -> pd.DataFrame:
     if scenario_df.empty:
         return pd.DataFrame(columns=["location_key", "scenario_type", "count"])
@@ -381,6 +429,53 @@ def _plot_type_distribution(type_df: pd.DataFrame, output_path: Path, title: str
     axes[1].set_title("Scenario Count")
     axes[1].set_ylabel("Count")
     axes[1].grid(axis="y", alpha=0.3)
+    for idx, count in enumerate(counts):
+        axes[1].text(idx, count, str(count), ha="center", va="bottom", fontsize=9)
+
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0.0, 0.0, 0.9, 1.0))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+    return output_path
+
+
+def _plot_combo_distribution(combo_df: pd.DataFrame, output_path: Path, title: str) -> Path:
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5.5))
+    counts = combo_df["count"].tolist()
+    labels = combo_df["combo_label"].tolist()
+    colors = [SCENARIO_COMBO_COLOR.get(label, "#bab0ab") for label in labels]
+
+    if sum(counts) > 0:
+        wedges, _, autotexts = axes[0].pie(
+            counts,
+            labels=None,
+            autopct=lambda pct: f"{pct:.1f}%" if pct > 0 else "",
+            colors=colors,
+            startangle=90,
+            textprops={"fontsize": 9},
+            wedgeprops={"linewidth": 1.0, "edgecolor": "white"},
+        )
+        for autotext in autotexts:
+            autotext.set_color("white")
+            autotext.set_fontsize(9)
+        axes[0].legend(
+            wedges,
+            [f"{label} ({count})" for label, count in zip(labels, counts)],
+            loc="center left",
+            bbox_to_anchor=(1.0, 0.5),
+            frameon=False,
+        )
+        axes[0].set_title("Case Ratio")
+    else:
+        axes[0].text(0.5, 0.5, "No inferred scenarios", ha="center", va="center")
+        axes[0].set_axis_off()
+
+    axes[1].bar(labels, counts, color=colors)
+    axes[1].set_title("Case Count")
+    axes[1].set_ylabel("Count")
+    axes[1].grid(axis="y", alpha=0.3)
+    plt.setp(axes[1].get_xticklabels(), rotation=25, ha="right")
     for idx, count in enumerate(counts):
         axes[1].text(idx, count, str(count), ha="center", va="bottom", fontsize=9)
 
@@ -673,6 +768,7 @@ def generate_case_scenario_report(
     with pd.ExcelWriter(summary_excel_path, engine="openpyxl") as writer:
         pd.DataFrame([summary]).to_excel(writer, sheet_name="summary", index=False)
         type_df.to_excel(writer, sheet_name="type_distribution", index=False)
+        combo_df.to_excel(writer, sheet_name="combo_distribution", index=False)
         location_df.to_excel(writer, sheet_name="location_distribution", index=False)
         coverage_df.to_excel(writer, sheet_name="coverage_distribution", index=False)
         scenario_df.to_excel(writer, sheet_name="scenarios", index=False)
@@ -726,6 +822,7 @@ def generate_batch_scenario_report(
     case_df = pd.DataFrame(case_rows)
     if not case_df.empty:
         case_df = case_df.sort_values(["total_scenarios", "case_id"], ascending=[False, True])
+    combo_df = _build_combo_summary(case_df)
 
     timetable_df = read_timetable(config.input.timetable_path, sheet_name=config.input.timetable_sheet_name)
     timetable_df["arrival_sec"] = timetable_df["arrival_time"].apply(_time_to_seconds)
@@ -737,6 +834,7 @@ def generate_batch_scenario_report(
     summary_json_path = report_dir / "scenario_batch_summary.json"
     summary_excel_path = report_dir / "scenario_batch_summary.xlsx"
     type_plot_path = report_dir / "scenario_batch_type_distribution.png"
+    combo_plot_path = report_dir / "scenario_batch_combo_distribution.png"
     case_plot_path = report_dir / "scenario_batch_case_distribution.png"
     location_plot_path = report_dir / "scenario_batch_location_distribution.png"
     coverage_plot_path = report_dir / "scenario_batch_coverage_distribution.png"
@@ -754,6 +852,7 @@ def generate_batch_scenario_report(
         "timetable_span_sec": int(total_coverage["timetable_span_sec"]),
         "time_coverage_ratio": float(total_coverage["time_coverage_ratio"]),
         "type_distribution": type_df.to_dict(orient="records"),
+        "combo_distribution": combo_df.to_dict(orient="records"),
         "location_distribution": location_df.to_dict(orient="records"),
         "coverage_distribution": coverage_batch_df.to_dict(orient="records"),
     }
@@ -776,12 +875,14 @@ def generate_batch_scenario_report(
             }
         ]).to_excel(writer, sheet_name="summary", index=False)
         type_df.to_excel(writer, sheet_name="type_distribution", index=False)
+        combo_df.to_excel(writer, sheet_name="combo_distribution", index=False)
         location_df.to_excel(writer, sheet_name="location_distribution", index=False)
         coverage_batch_df.to_excel(writer, sheet_name="coverage_distribution", index=False)
         case_df.to_excel(writer, sheet_name="case_distribution", index=False)
         all_scenarios.to_excel(writer, sheet_name="all_scenarios", index=False)
 
     _plot_type_distribution(type_df, type_plot_path, title="Batch Scenario Distribution")
+    _plot_combo_distribution(combo_df, combo_plot_path, title="Batch Scenario Combination Distribution")
     _plot_location_distribution(location_df, location_plot_path, title="Batch Scenario Locations")
     _plot_coverage_distribution(coverage_batch_df, coverage_plot_path, title="Batch Scenario Coverage")
     _plot_time_distribution(all_scenarios, case_plot_path, title="Batch Scenario Time Distribution")
@@ -792,6 +893,7 @@ def generate_batch_scenario_report(
         "summary_json": str(summary_json_path).replace("\\", "/"),
         "summary_excel": str(summary_excel_path).replace("\\", "/"),
         "type_plot": str(type_plot_path).replace("\\", "/"),
+        "combo_plot": str(combo_plot_path).replace("\\", "/"),
         "location_plot": str(location_plot_path).replace("\\", "/"),
         "coverage_plot": str(coverage_plot_path).replace("\\", "/"),
         "case_plot": str(case_plot_path).replace("\\", "/"),
