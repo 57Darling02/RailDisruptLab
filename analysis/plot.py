@@ -30,6 +30,17 @@ def _parse_bool_column(df: pd.DataFrame, column: str) -> pd.Series:
     return text.isin({"1", "1.0", "true", "t", "yes", "y", "canceled", "cancelled"})
 
 
+def _parse_time_series(values: pd.Series) -> pd.Series:
+    text = values.astype(str).str.strip()
+    text = text.replace({"": pd.NA, "nan": pd.NA, "NaT": pd.NA, "None": pd.NA})
+
+    # Parse as time-of-day only so plotted train lines share the same date anchor
+    # as scenario overlays built from second-of-day values.
+    parsed = pd.to_datetime(text, format="%H:%M:%S", errors="coerce")
+    fallback = pd.to_datetime(text, format="%H:%M", errors="coerce")
+    return parsed.fillna(fallback)
+
+
 def _read_and_format(path: Path, sheet_name: str = "Sheet1") -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
     required = ["train_ID", "station", "arrival_time", "departure_time"]
@@ -50,10 +61,7 @@ def _read_and_format(path: Path, sheet_name: str = "Sheet1") -> pd.DataFrame:
         columns.append("is_canceled")
     df = df[columns].copy()
     for col in ["arrival_time", "departure_time"]:
-        parsed = pd.to_datetime(df[col], errors="coerce")
-        parsed = parsed.fillna(pd.to_datetime(df[col].astype(str), format="%H:%M:%S", errors="coerce"))
-        parsed = parsed.fillna(pd.to_datetime(df[col].astype(str), format="%H:%M", errors="coerce"))
-        df[col] = parsed
+        df[col] = _parse_time_series(df[col])
     if "is_canceled" in df.columns:
         df["is_canceled"] = _parse_bool_column(df, "is_canceled")
     else:
