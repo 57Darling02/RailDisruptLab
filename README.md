@@ -152,6 +152,62 @@ Graph fields are intentionally minimal:
 
 `speed_limit: 0` represents an interruption. `end_time` is not stored in the graph; it is always derived as `start_time + duration`.
 
+## Math VAE Graph JSON
+
+Use `export_typed_vae_learning_graph.py` to export the mathematical model input for the context-conditioned disturbance graph VAE. RailGraph2Gurobi owns all railway semantics and compiles them into numeric pools, numeric edges, task rules, and supervision labels. The VAE reads only math graph samples; `dataset_profile.json` is a context-bound explanation file for humans and RailGraph2Gurobi checks.
+
+Single config:
+
+```bash
+python scripts/export_typed_vae_learning_graph.py \
+  --config config/mixed_scenarios_demo.yaml \
+  --output outputs/mixed_scenarios_demo/vae_math_learning_graph.json
+```
+
+Batch graph export:
+
+```bash
+python scripts/export_typed_vae_learning_graph.py \
+  --config-glob "config/batch_case_configs_demo/**/*.yaml" \
+  --output-dir outputs/vae_math_dataset
+```
+
+The math learning graph contains:
+
+| Field | Meaning |
+|---|---|
+| `rules` | Numeric pool, edge type, task, and parameter-domain rules |
+| `graph.pool_x` | Numeric candidate-pool feature matrices |
+| `graph.edges` | Numeric typed edges between pool indexes |
+| `supervision.targets` | Count, anchor-index, and parameter labels |
+| `supervision.target_relations` | Optional numeric relation features for encoder-side learning |
+| `decode_handle` | Opaque handle copied back for RailGraph2Gurobi decode |
+
+Batch export writes math samples under `outputs/vae_math_dataset/graphs/` and one `outputs/vae_math_dataset/dataset_profile.json` at the dataset root. The profile is bound to one `base_context_path` and retains feature names, anchor ids, task/edge descriptions, exporter settings, source config paths, and decode contracts. VAE code reads `graphs/` and does not read the profile.
+
+Generated math graph decode:
+
+```bash
+python scripts/decode_typed_generated_graph.py \
+  --typed-graph outputs/mixed_scenarios_demo/generated_math_graph.json \
+  --output-disturbance-graph outputs/mixed_scenarios_demo/generated_disturbance_graph.json
+
+python scripts/import_disturbance_graph.py \
+  --graph outputs/mixed_scenarios_demo/generated_disturbance_graph.json \
+  --base-config config/base_demo.yaml \
+  --output-config config/generated_from_vae.yaml
+```
+
+The generated math graph contains only `decode_handle` and numeric `task_outputs`. RailGraph2Gurobi decodes task ids, pool indexes, and parameter vectors back into a standard `disturbance_graph`.
+
+VAE output boundary:
+
+| Direction | Format |
+|---|---|
+| RailGraph2Gurobi -> VAE | `vae_math_learning_graph` |
+| VAE -> RailGraph2Gurobi | `vae_math_generated_graph` |
+| RailGraph2Gurobi internal/import | `disturbance_graph` |
+
 ## Batch Pipeline
 
 Prepare the context first:
