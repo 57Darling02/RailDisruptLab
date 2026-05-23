@@ -54,3 +54,4 @@ test_*.py
 *_test.py
 *.test.py
 docs/
+config/batch_case_configs_demo

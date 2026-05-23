@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config-root",
-        default="tests/case_library",
+        default="config/batch_case_configs_demo",
         help="Root directory containing case config files.",
     )
     parser.add_argument(

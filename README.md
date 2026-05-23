@@ -166,7 +166,7 @@ Generate case configs:
 
 ```bash
 python -u scripts/case_library_builder.py \
-  --output-root tests/case_library \
+  --output-root config/batch_case_configs_demo \
   --project-output-root outputs/case_library \
   --interruption-count 10 \
   --clean > outputs/case_library_builder.log 2>&1
@@ -175,10 +175,10 @@ python -u scripts/case_library_builder.py \
 Run all 4 batch stages in order:
 
 ```bash
-python -u scripts/bench_build.py            --config-root tests/case_library > outputs/bench_build.log 2>&1
-python -u scripts/bench_solve.py            --config-root tests/case_library > outputs/bench_solve.log 2>&1
-python -u scripts/bench_export_timetable.py --config-root tests/case_library > outputs/bench_export_timetable.log 2>&1
-python -u scripts/bench_analyze.py          --config-root tests/case_library > outputs/bench_analyze.log 2>&1
+python -u scripts/bench_build.py            --config-root config/batch_case_configs_demo > outputs/bench_build.log 2>&1
+python -u scripts/bench_solve.py            --config-root config/batch_case_configs_demo > outputs/bench_solve.log 2>&1
+python -u scripts/bench_export_timetable.py --config-root config/batch_case_configs_demo > outputs/bench_export_timetable.log 2>&1
+python -u scripts/bench_analyze.py          --config-root config/batch_case_configs_demo > outputs/bench_analyze.log 2>&1
 ```
 
 Use `Get-Content -Wait outputs/<script>.log` on PowerShell, or `tail -f outputs/<script>.log` in a Unix-like shell.

@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config-root",
-        default="tests/case_library",
+        default="config/batch_case_configs_demo",
         help="Root directory containing case config files.",
     )
     parser.add_argument(
@@ -66,6 +66,12 @@ def _resolve_path(path_text: str) -> Path:
 
 def _to_posix(path_value: Path) -> str:
     return str(path_value).replace("\\", "/")
+
+
+def _case_id_from_path(config_path: Path) -> str:
+    if config_path.name == "config.yaml":
+        return config_path.parent.name
+    return config_path.stem
 
 
 def _collect_configs(config_root: Path, pattern: str, limit: int) -> List[Path]:
@@ -112,7 +118,7 @@ def main() -> None:
         record: Dict[str, object] = {
             "index": idx,
             "config_file": _to_posix(config_path),
-            "case_id": config_path.parent.name,
+            "case_id": _case_id_from_path(config_path),
             "status": "ok",
             "error": "",
             "output_dir": "",
@@ -127,6 +133,7 @@ def main() -> None:
                 raise RuntimeError(f"cmd_build returned non-zero code: {code}")
 
             loaded = load_config(config_path)
+            record["case_id"] = loaded.project.name or _case_id_from_path(config_path)
             record["output_dir"] = _to_posix(loaded.project.output_dir)
             record["lp_path"] = _to_posix(loaded.build.lp_path)
             record["lp_exists"] = loaded.build.lp_path.exists()
@@ -184,5 +191,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

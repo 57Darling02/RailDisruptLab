@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-root",
-        default="tests/case_library",
+        default="config/batch_case_configs_demo",
         help="Directory where caseXXXX.yaml files will be written.",
     )
     parser.add_argument(
