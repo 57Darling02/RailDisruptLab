@@ -4,17 +4,20 @@ from datetime import datetime, time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
 from core.types import (
     AnalyzeConfig,
     AppConfig,
+    BaseContext,
     BuildConfig,
     DelayScenario,
+    EventAnchor,
     ExportTimetableConfig,
     InputConfig,
-    InterruptionScenario,
     ProjectConfig,
     RawTable,
     ScenarioConfig,
+    SectionAnchor,
     SolveConfig,
     SolverConfig,
     SpeedLimitScenario,
@@ -163,6 +166,83 @@ def _required_path(value: Any, field_name: str) -> Path:
     return Path(text)
 
 
+def _has_text(item: Dict[str, Any], key: str) -> bool:
+    return key in item and str(item.get(key, "")).strip() != ""
+
+
+def _resolve_event_anchor(item: Dict[str, Any], base_context: BaseContext) -> EventAnchor:
+    anchor_id = str(item.get("event_anchor_id", "")).strip()
+    anchor = base_context.event_anchors.get(anchor_id) if anchor_id else None
+    if anchor_id and anchor is None:
+        raise ValueError(f"Unknown event_anchor_id: {anchor_id}")
+
+    semantic_keys = ("train_id", "station", "event_type")
+    semantic_present = [_has_text(item, key) for key in semantic_keys]
+    if any(semantic_present):
+        missing = [key for key, present in zip(semantic_keys, semantic_present) if not present]
+        if missing:
+            raise ValueError(
+                "Delay scenarios using semantic fields must include train_id, station, and event_type; "
+                f"missing: {', '.join(missing)}"
+            )
+        key = (
+            str(item["train_id"]).strip(),
+            str(item["station"]).strip(),
+            str(item["event_type"]).strip(),
+        )
+        semantic_anchor = event_anchor_by_key(base_context).get(key)
+        if semantic_anchor is None:
+            raise ValueError(f"Delay scenario event not found in BaseContext: {key}")
+        if anchor is not None and anchor.anchor_id != semantic_anchor.anchor_id:
+            raise ValueError(
+                "Delay scenario event_anchor_id conflicts with train_id/station/event_type: "
+                f"{anchor.anchor_id} != {semantic_anchor.anchor_id}"
+            )
+        return semantic_anchor
+
+    if anchor is None:
+        raise ValueError(
+            "Delay scenarios must use event_anchor_id or train_id/station/event_type."
+        )
+    return anchor
+
+
+def _resolve_section_anchor(item: Dict[str, Any], base_context: BaseContext) -> SectionAnchor:
+    anchor_id = str(item.get("section_anchor_id", "")).strip()
+    anchor = base_context.section_anchors.get(anchor_id) if anchor_id else None
+    if anchor_id and anchor is None:
+        raise ValueError(f"Unknown section_anchor_id: {anchor_id}")
+
+    semantic_keys = ("start_station", "end_station")
+    semantic_present = [_has_text(item, key) for key in semantic_keys]
+    if any(semantic_present):
+        missing = [key for key, present in zip(semantic_keys, semantic_present) if not present]
+        if missing:
+            raise ValueError(
+                "Speed limit scenarios using semantic fields must include start_station and end_station; "
+                f"missing: {', '.join(missing)}"
+            )
+        key = (
+            str(item["start_station"]).strip(),
+            str(item["end_station"]).strip(),
+        )
+        semantic_anchor = section_anchor_by_key(base_context).get(key)
+        if semantic_anchor is None:
+            raise ValueError(f"Speed limit scenario section not found in BaseContext: {key}")
+        if anchor is not None and anchor.anchor_id != semantic_anchor.anchor_id:
+            raise ValueError(
+                "Speed limit scenario section_anchor_id conflicts with start_station/end_station: "
+                f"{anchor.anchor_id} != {semantic_anchor.anchor_id}"
+            )
+        return semantic_anchor
+
+    if anchor is None:
+        raise ValueError(
+            "Speed limit scenarios must use section_anchor_id or start_station/end_station."
+        )
+    return anchor
+
+
 def load_config(path: Path) -> AppConfig:
     yaml = _require_yaml()
     with path.open("r", encoding="utf-8") as file:
@@ -174,13 +254,19 @@ def load_config(path: Path) -> AppConfig:
     export_cfg = payload.get("export-timetable", payload.get("export_timetable", {})) or {}
     analyze_cfg = payload.get("analyze", payload.get("analysis", {})) or {}
 
-    # Backward-compatible sections.
-    input_cfg = payload.get("input", {}) or {}
+    if "input" in payload:
+        raise ValueError("Legacy config section 'input' is no longer supported; use project.base_context_path.")
     root_solver_cfg = payload.get("solver", {}) or {}
-    root_scenarios_cfg = payload.get("scenarios", {}) or {}
+    if "scenarios" in payload:
+        raise ValueError("Legacy top-level 'scenarios' is no longer supported; use build.scenarios.")
+    for legacy_key in ("timetable_path", "mileage_path", "timetable_sheet_name", "mileage_sheet_name"):
+        if legacy_key in project_cfg:
+            raise ValueError(f"Legacy project.{legacy_key} is no longer supported; use project.base_context_path.")
 
     case_name = _str_or_default(project_cfg.get("name"), path.stem)
     output_dir = _path_or_default(project_cfg.get("output_dir"), Path("outputs") / case_name)
+    base_context_path = _required_path(project_cfg.get("base_context_path"), "project.base_context_path")
+    base_context = load_base_context(base_context_path)
 
     # Convention-first artifact paths.
     # build output: output_dir/<name>.lp
@@ -192,26 +278,9 @@ def load_config(path: Path) -> AppConfig:
     metrics_default_path = output_dir / "analysis_metrics.xlsx"
     plot_default_path = output_dir / "timetable_plot.png"
 
-    # project holds base input info in new schema; fall back to legacy input section.
-    timetable_path = _required_path(
-        project_cfg.get("timetable_path", input_cfg.get("timetable_path")),
-        "project.timetable_path (or legacy input.timetable_path)",
-    )
-    mileage_path = _required_path(
-        project_cfg.get("mileage_path", input_cfg.get("mileage_path")),
-        "project.mileage_path (or legacy input.mileage_path)",
-    )
-    timetable_sheet_name = _str_or_default(
-        project_cfg.get("timetable_sheet_name", input_cfg.get("timetable_sheet_name")),
-        "Sheet1",
-    )
-    mileage_sheet_name = _str_or_default(
-        project_cfg.get("mileage_sheet_name", input_cfg.get("mileage_sheet_name")),
-        "Sheet1",
-    )
-
-    # build reads build.scenarios first, then fallback to legacy top-level scenarios.
-    scenarios_cfg = build_cfg.get("scenarios", root_scenarios_cfg) or {}
+    scenarios_cfg = build_cfg.get("scenarios", {}) or {}
+    if "interruptions" in scenarios_cfg:
+        raise ValueError("Legacy build.scenarios.interruptions is no longer supported; use speed_limits with limit_speed=0.")
 
     solve_solver_cfg = solve_cfg.get("solver", {}) or {}
 
@@ -239,34 +308,49 @@ def load_config(path: Path) -> AppConfig:
     metrics_output_path = _path_or_default(analyze_cfg.get("metrics_output_path"), metrics_default_path)
     plot_output_path = _path_or_default(analyze_cfg.get("plot_output_path"), plot_default_path)
 
-    delays = [
-        DelayScenario(
-            train_id=str(item["train_id"]).strip(),
-            station=str(item["station"]).strip(),
-            event_type=str(item["event_type"]).strip(),
-            seconds=int(item["seconds"]),
+    delays = []
+    for item in scenarios_cfg.get("delays", []):
+        anchor = _resolve_event_anchor(item, base_context)
+        seconds = int(item["seconds"])
+        if seconds <= 0:
+            raise ValueError("Delay seconds must be > 0")
+        delays.append(
+            DelayScenario(
+                event_anchor_id=anchor.anchor_id,
+                train_id=anchor.train_id,
+                station=anchor.station,
+                event_type=anchor.event_type,
+                seconds=seconds,
+            )
         )
-        for item in scenarios_cfg.get("delays", [])
-    ]
-    speed_limits = [
-        SpeedLimitScenario(
-            start_station=str(item["start_station"]).strip(),
-            end_station=str(item["end_station"]).strip(),
-            extra_seconds=int(item["extra_seconds"]),
-            start_time=_parse_time_to_seconds(item["start_time"]),
-            end_time=_parse_time_to_seconds(item["end_time"]),
+
+    speed_limits = []
+    for item in scenarios_cfg.get("speed_limits", []):
+        if any(key in item for key in ("extra_seconds", "end_time")):
+            raise ValueError(
+                "Speed limit scenarios must use section_anchor_id/start_time/duration/limit_speed; "
+                "extra_seconds/end_time are no longer supported."
+            )
+        anchor = _resolve_section_anchor(item, base_context)
+        start_time = _parse_time_to_seconds(item["start_time"])
+        duration = int(item["duration"])
+        limit_speed = float(item["limit_speed"])
+        if duration <= 0:
+            raise ValueError("Speed limit duration must be > 0")
+        if start_time + duration > 24 * 3600:
+            raise ValueError("Speed limit start_time + duration must not exceed 24:00:00")
+        if limit_speed < 0:
+            raise ValueError("Speed limit limit_speed must be >= 0")
+        speed_limits.append(
+            SpeedLimitScenario(
+                section_anchor_id=anchor.anchor_id,
+                start_station=anchor.start_station,
+                end_station=anchor.end_station,
+                start_time=start_time,
+                duration=duration,
+                limit_speed=limit_speed,
+            )
         )
-        for item in scenarios_cfg.get("speed_limits", [])
-    ]
-    interruptions = [
-        InterruptionScenario(
-            start_station=str(item["start_station"]).strip(),
-            end_station=str(item["end_station"]).strip(),
-            start_time=_parse_time_to_seconds(item["start_time"]),
-            end_time=_parse_time_to_seconds(item["end_time"]),
-        )
-        for item in scenarios_cfg.get("interruptions", [])
-    ]
 
     objective_mode_raw = str(_solve_value("objective_mode", "abs")).strip()
     cancellation_default = False
@@ -278,12 +362,12 @@ def load_config(path: Path) -> AppConfig:
         cancellation_default = True
 
     return AppConfig(
-        project=ProjectConfig(name=case_name, output_dir=output_dir),
+        project=ProjectConfig(name=case_name, output_dir=output_dir, base_context_path=base_context_path),
         input=InputConfig(
-            timetable_path=timetable_path,
-            mileage_path=mileage_path,
-            timetable_sheet_name=timetable_sheet_name,
-            mileage_sheet_name=mileage_sheet_name,
+            timetable_path=base_context.source_timetable_path,
+            mileage_path=base_context.source_mileage_path,
+            timetable_sheet_name=base_context.timetable_sheet_name,
+            mileage_sheet_name=base_context.mileage_sheet_name,
         ),
         solver=SolverConfig(
             objective_delay_weight=float(_solve_value("objective_delay_weight", 1.0)),
@@ -309,7 +393,6 @@ def load_config(path: Path) -> AppConfig:
         scenarios=ScenarioConfig(
             delays=delays,
             speed_limits=speed_limits,
-            interruptions=interruptions,
         ),
         build=BuildConfig(lp_path=lp_default_path),
         solve=SolveConfig(lp_path=solve_lp_path, solution_path=solution_default_path),
@@ -322,14 +405,15 @@ def load_config(path: Path) -> AppConfig:
             enable_plot=bool(analyze_cfg.get("enable_plot", False)),
             plot_grid=bool(analyze_cfg.get("plot_grid", False)),
             plot_title=str(analyze_cfg.get("plot_title", "Train Timetable")),
-            plan_timetable_path=timetable_path,
-            plan_timetable_sheet_name=timetable_sheet_name,
+            plan_timetable_path=base_context.source_timetable_path,
+            plan_timetable_sheet_name=base_context.timetable_sheet_name,
             adjusted_timetable_path=adjusted_timetable_path,
             adjusted_timetable_sheet_name=adjusted_timetable_sheet_name,
             metrics_output_path=metrics_output_path,
             plot_output_path=plot_output_path,
             plot_timetable_path=adjusted_timetable_path,
         ),
+        base_context=base_context,
     )
 
 

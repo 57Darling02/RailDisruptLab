@@ -10,8 +10,7 @@ import pandas as pd
 from matplotlib.dates import DateFormatter
 from matplotlib.patches import Patch, Rectangle
 
-from analysis.io import read_timetable
-from core.loader import load_mileage_table
+from analysis.io import timetable_from_base_context
 from core.types import AppConfig, TranslatedData
 
 SCENARIO_TYPE_ORDER = ["delay", "speed_limit", "interruption"]
@@ -77,24 +76,8 @@ def _seconds_to_timestamp(seconds: int) -> pd.Timestamp:
     return pd.to_datetime(_seconds_to_hms(seconds), format="%H:%M:%S")
 
 
-def _read_mileage_order(path: Path, sheet_name: str) -> List[str]:
-    raw = load_mileage_table(path, sheet_name)
-    records: List[Tuple[str, float]] = []
-    for row in raw.rows:
-        station = str(row.get("station") or "").strip()
-        mileage_text = str(row.get("mileage") or "").strip()
-        if not station or mileage_text == "":
-            continue
-        try:
-            mileage = float(mileage_text)
-        except ValueError:
-            continue
-        records.append((station, mileage))
-    return [station for station, _ in sorted(records, key=lambda item: item[1])]
-
-
 def _build_station_order(config: AppConfig, timetable_df: pd.DataFrame) -> List[str]:
-    mileage_order = _read_mileage_order(config.input.mileage_path, config.input.mileage_sheet_name)
+    mileage_order = config.base_context.station_order
     if mileage_order:
         timetable_stations = set(timetable_df["station"].dropna().astype(str).tolist())
         ordered = [station for station in mileage_order if station in timetable_stations]
@@ -176,7 +159,7 @@ def _build_scenario_rows(
                 "station": station,
                 "event_type": event_type,
                 "seconds": delay_seconds,
-                "extra_seconds": 0,
+                "limit_speed": 0,
                 "start_station": station,
                 "end_station": station,
                 "window_start_sec": planned_time,
@@ -203,7 +186,7 @@ def _build_scenario_rows(
                 "station": "",
                 "event_type": "",
                 "seconds": 0,
-                "extra_seconds": int(item["extra_seconds"]),
+                "limit_speed": float(item["limit_speed"]),
                 "start_station": start_station,
                 "end_station": end_station,
                 "window_start_sec": start_sec,
@@ -230,7 +213,7 @@ def _build_scenario_rows(
                 "station": "",
                 "event_type": "",
                 "seconds": 0,
-                "extra_seconds": 0,
+                "limit_speed": 0,
                 "start_station": start_station,
                 "end_station": end_station,
                 "window_start_sec": start_sec,
@@ -251,7 +234,7 @@ def _build_scenario_rows(
         "station",
         "event_type",
         "seconds",
-        "extra_seconds",
+        "limit_speed",
         "start_station",
         "end_station",
         "window_start_sec",
@@ -600,7 +583,7 @@ def _plot_timetable_with_scenarios(
     output_path: Path,
     title: str,
 ) -> Path:
-    timetable_df = read_timetable(config.input.timetable_path, sheet_name=config.input.timetable_sheet_name)
+    timetable_df = timetable_from_base_context(config.base_context)
     station_order = _build_station_order(config, timetable_df)
     station_to_y = {station: idx for idx, station in enumerate(station_order)}
 
@@ -688,7 +671,7 @@ def build_case_scenario_report_data(
     config: AppConfig,
     translated: TranslatedData,
 ) -> Dict[str, object]:
-    timetable_df = read_timetable(config.input.timetable_path, sheet_name=config.input.timetable_sheet_name)
+    timetable_df = timetable_from_base_context(config.base_context)
     timetable_df["arrival_sec"] = timetable_df["arrival_time"].apply(_time_to_seconds)
     timetable_df["departure_sec"] = timetable_df["departure_time"].apply(_time_to_seconds)
     station_order = _build_station_order(config, timetable_df)
@@ -743,10 +726,12 @@ def generate_case_scenario_report(
     type_df = report_data["type_distribution"]
     location_df = report_data["location_distribution"]
     coverage_df = report_data["coverage_distribution"]
+    combo_df = _build_combo_summary(pd.DataFrame([summary]))
 
     summary_json_path = report_dir / "scenario_summary.json"
     summary_excel_path = report_dir / "scenario_summary.xlsx"
     type_plot_path = report_dir / "scenario_type_distribution.png"
+    combo_plot_path = report_dir / "scenario_combo_distribution.png"
     location_plot_path = report_dir / "scenario_location_distribution.png"
     coverage_plot_path = report_dir / "scenario_coverage_distribution.png"
     time_plot_path = report_dir / "scenario_time_distribution.png"
@@ -774,6 +759,7 @@ def generate_case_scenario_report(
         scenario_df.to_excel(writer, sheet_name="scenarios", index=False)
 
     _plot_type_distribution(type_df, type_plot_path, title=f"Scenario Distribution - {case_id}")
+    _plot_combo_distribution(combo_df, combo_plot_path, title=f"Scenario Combination - {case_id}")
     _plot_location_distribution(location_df, location_plot_path, title=f"Scenario Locations - {case_id}")
     _plot_coverage_distribution(coverage_df, coverage_plot_path, title=f"Scenario Coverage - {case_id}")
     _plot_time_distribution(scenario_df, time_plot_path, title=f"Scenario Time Distribution - {case_id}")
@@ -790,8 +776,10 @@ def generate_case_scenario_report(
         "summary_json": str(summary_json_path).replace("\\", "/"),
         "summary_excel": str(summary_excel_path).replace("\\", "/"),
         "type_plot": str(type_plot_path).replace("\\", "/"),
+        "combo_plot": str(combo_plot_path).replace("\\", "/"),
         "location_plot": str(location_plot_path).replace("\\", "/"),
         "coverage_plot": str(coverage_plot_path).replace("\\", "/"),
+        "case_plot": str(time_plot_path).replace("\\", "/"),
         "timetable_plot": str(timetable_plot_path).replace("\\", "/"),
         "summary": summary,
         "scenario_rows": scenario_df,
@@ -824,7 +812,7 @@ def generate_batch_scenario_report(
         case_df = case_df.sort_values(["total_scenarios", "case_id"], ascending=[False, True])
     combo_df = _build_combo_summary(case_df)
 
-    timetable_df = read_timetable(config.input.timetable_path, sheet_name=config.input.timetable_sheet_name)
+    timetable_df = timetable_from_base_context(config.base_context)
     timetable_df["arrival_sec"] = timetable_df["arrival_time"].apply(_time_to_seconds)
     timetable_df["departure_sec"] = timetable_df["departure_time"].apply(_time_to_seconds)
     station_order = _build_station_order(config, timetable_df)

@@ -1,16 +1,12 @@
 project:
   name: base_demo
   output_dir: outputs/base_demo
-  timetable_path: inputs/上行计划时刻表.xlsx
-  mileage_path: inputs/区间里程.xlsx
-  timetable_sheet_name: Sheet1
-  mileage_sheet_name: Sheet1
+  base_context_path: inputs/context_下行计划时刻表.json
 
 build:
   scenarios:
     delays: []
     speed_limits: []
-    interruptions: []
 
 solve:
   lp_path: ""

@@ -12,6 +12,7 @@ OrderKey = Tuple[str, str, str, str]
 
 @dataclass(frozen=True)
 class DelayScenario:
+    event_anchor_id: str
     train_id: str
     station: str
     event_type: str
@@ -20,19 +21,16 @@ class DelayScenario:
 
 @dataclass(frozen=True)
 class SpeedLimitScenario:
-    start_station: str
-    end_station: str
-    extra_seconds: int
-    start_time: int
-    end_time: int
-
-
-@dataclass(frozen=True)
-class InterruptionScenario:
+    section_anchor_id: str
     start_station: str
     end_station: str
     start_time: int
-    end_time: int
+    duration: int
+    limit_speed: float
+
+    @property
+    def end_time(self) -> int:
+        return self.start_time + self.duration
 
 
 @dataclass(frozen=True)
@@ -47,6 +45,7 @@ class InputConfig:
 class ProjectConfig:
     name: str
     output_dir: Path
+    base_context_path: Path
 
 
 @dataclass(frozen=True)
@@ -98,7 +97,6 @@ class SolverConfig:
 class ScenarioConfig:
     delays: List[DelayScenario]
     speed_limits: List[SpeedLimitScenario]
-    interruptions: List[InterruptionScenario]
 
 
 @dataclass(frozen=True)
@@ -111,6 +109,7 @@ class AppConfig:
     solve: SolveConfig
     export_timetable: ExportTimetableConfig
     analyze: AnalyzeConfig
+    base_context: BaseContext
 
 
 @dataclass(frozen=True)
@@ -159,6 +158,45 @@ class TranslatedData:
     dep_order_pair: List[OrderKey]
     arr_order_single: List[OrderKey]
     dep_order_single: List[OrderKey]
+
+
+@dataclass(frozen=True)
+class EventAnchor:
+    anchor_id: str
+    train_id: str
+    station: str
+    event_type: str
+    planned_time: int
+    train_index: int
+    station_index: int
+    direction: str
+    station_order: int
+
+
+@dataclass(frozen=True)
+class SectionAnchor:
+    anchor_id: str
+    start_station: str
+    end_station: str
+    direction: str
+    section_order: int
+    mileage: float
+    min_runtime: int
+
+
+@dataclass(frozen=True)
+class BaseContext:
+    schema_version: int
+    source_timetable_path: Path
+    source_mileage_path: Path
+    timetable_sheet_name: str
+    mileage_sheet_name: str
+    validated: ValidatedInput
+    translated: TranslatedData
+    station_order: List[str]
+    mileage_by_station: Dict[str, float]
+    event_anchors: Dict[str, EventAnchor]
+    section_anchors: Dict[str, SectionAnchor]
 
 
 @dataclass(frozen=True)

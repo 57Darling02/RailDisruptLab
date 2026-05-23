@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260320)
     parser.add_argument("--delay-count", type=int, default=10)
     parser.add_argument("--speed-count", type=int, default=10)
-    parser.add_argument("--disruption-count", type=int, default=10)
+    parser.add_argument("--interruption-count", type=int, default=10)
     parser.add_argument("--combo-per-type", type=int, default=10)
     parser.add_argument("--clean", action="store_true")
     return parser.parse_args()
@@ -61,7 +61,7 @@ def _validate_counts(args: argparse.Namespace) -> None:
     gen.validate_case_counts(
         delay_count=args.delay_count,
         speed_count=args.speed_count,
-        disruption_count=args.disruption_count,
+        interruption_count=args.interruption_count,
         combo_per_type=args.combo_per_type,
     )
 
@@ -103,7 +103,7 @@ def main() -> None:
         case_index = 1
         case_index = gen.generate_delay_cases(rng, base, output_root, case_index, args.delay_count)
         case_index = gen.generate_speed_cases(rng, base, output_root, case_index, args.speed_count)
-        case_index = gen.generate_disruption_cases(rng, base, output_root, case_index, args.disruption_count)
+        case_index = gen.generate_interruption_cases(rng, base, output_root, case_index, args.interruption_count)
         case_index = gen.generate_combo_cases(rng, base, output_root, case_index, args.combo_per_type)
     finally:
         gen.write_case = original_write_case

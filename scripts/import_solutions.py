@@ -72,30 +72,18 @@ def _build_case_config(
     payload = copy.deepcopy(base_payload)
 
     project = dict(payload.get("project", {}))
-    legacy_input = dict(payload.get("input", {}))
-    required_project_defaults = {
-        "timetable_path": "",
-        "mileage_path": "",
-        "timetable_sheet_name": "Sheet1",
-        "mileage_sheet_name": "Sheet1",
-    }
-    for key, default_value in required_project_defaults.items():
-        current_value = project.get(key)
-        current_text = "" if current_value is None else str(current_value).strip()
-        if current_text != "":
-            continue
-        legacy_value = legacy_input.get(key, default_value)
-        project[key] = default_value if legacy_value is None else legacy_value
+    if not str(project.get("base_context_path", "")).strip():
+        raise ValueError("Base config must define project.base_context_path.")
 
     project["name"] = case_name
     project["output_dir"] = _to_posix(output_dir)
     payload["project"] = project
+    payload.pop("input", None)
 
     build = dict(payload.get("build", {}))
     build["scenarios"] = {
         "delays": [],
         "speed_limits": [],
-        "interruptions": [],
     }
     payload["build"] = build
 

@@ -21,8 +21,10 @@ def analyze_timetable(
     output_path: Path,
     plan_sheet_name: str = "Sheet1",
     adjusted_sheet_name: str = "Sheet1",
+    plan_df: pd.DataFrame | None = None,
 ) -> Path:
-    plan_df = read_timetable(plan_path, sheet_name=plan_sheet_name)
+    if plan_df is None:
+        plan_df = read_timetable(plan_path, sheet_name=plan_sheet_name)
     adjusted_df = read_timetable(adjusted_path, sheet_name=adjusted_sheet_name)
 
     for df in (plan_df, adjusted_df):
