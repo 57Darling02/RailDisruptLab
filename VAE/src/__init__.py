@@ -1,3 +1,3 @@
 """VAE package for RailGraph2Gurobi math disturbance graphs."""
 
-__all__: list[str] = []
+__all__ = []

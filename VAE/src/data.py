@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from torch.utils.data import Dataset
@@ -67,7 +67,7 @@ class MathGraphSample:
     target_relation_index: torch.Tensor
     target_relation_x: torch.Tensor
 
-    def to(self, device: torch.device | str) -> "MathGraphSample":
+    def to(self, device: Union[torch.device, str]) -> "MathGraphSample":
         for pool_id, value in list(self.pool_x.items()):
             self.pool_x[pool_id] = value.to(device)
         for edge_type_id, edge in list(self.edges.items()):
@@ -91,7 +91,7 @@ class MathGraphSample:
 
 
 class RailDisturbanceDataset(Dataset):
-    def __init__(self, graph_root: str | Path, num_instances: Optional[int] = None):
+    def __init__(self, graph_root: Union[str, Path], num_instances: Optional[int] = None):
         self.graph_root = Path(graph_root)
         self.files = list_learning_graph_files(self.graph_root)
         if num_instances is not None:
@@ -107,7 +107,7 @@ class RailDisturbanceDataset(Dataset):
         return math_graph_to_sample(payload, graph_path=str(self.files[index]))
 
 
-def list_learning_graph_files(root: str | Path) -> List[Path]:
+def list_learning_graph_files(root: Union[str, Path]) -> List[Path]:
     root_path = Path(root)
     if root_path.is_file():
         candidates = [root_path]
@@ -117,7 +117,7 @@ def list_learning_graph_files(root: str | Path) -> List[Path]:
     return [path for path in candidates if path.is_file() and _is_math_learning_graph(path)]
 
 
-def load_learning_graph(path: str | Path) -> Dict[str, object]:
+def load_learning_graph(path: Union[str, Path]) -> Dict[str, object]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if payload.get("graph_type") != MATH_GRAPH_TYPE:
         raise ValueError(f"Unsupported graph_type in {path}: {payload.get('graph_type')}")

@@ -5,13 +5,13 @@ import json
 import math
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence, Union
 
 MATH_GRAPH_TYPE = "vae_math_learning_graph"
 MATH_GENERATED_GRAPH_TYPE = "vae_math_generated_graph"
 
 
-def load_json_graphs(root: str | Path, graph_type: str = "") -> List[Dict[str, object]]:
+def load_json_graphs(root: Union[str, Path], graph_type: str = "") -> List[Dict[str, object]]:
     root_path = Path(root)
     if root_path.is_file():
         candidates = [root_path]
@@ -152,7 +152,7 @@ def compare_graph_sets(
     }
 
 
-def load_solver_table(path: str | Path) -> List[Dict[str, object]]:
+def load_solver_table(path: Union[str, Path]) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
