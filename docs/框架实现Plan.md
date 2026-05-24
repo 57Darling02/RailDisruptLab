@@ -7,13 +7,14 @@
 代码当前状态：
 
 - `core/vae_learning_graph.py` 已能生成 `vae_math_learning_graph` 和 `vae_math_dataset_profile`。
-- `scripts/export_typed_vae_learning_graph.py` 批量导出布局为 `dataset_profile.json + graphs/*.json`。
-- `scripts/decode_typed_generated_graph.py` 已能解码 `vae_math_generated_graph`。
+- `scripts/bench_build.py` 现在统一 build MILP `case_library` 和 VAE `case_graph_library`，并发布 latest 固定目录。
+- `scripts/decode_typed_generated_graph.py` 已能解码单个 `vae_math_generated_graph`。
+- `scripts/decode_import_generated_graphs.py` 已能批量完成 generated graph -> disturbance graph -> config。
 - `VAE/src` 已扁平化为数学 reader、VAE 模型、训练入口、生成入口和评估入口。
 - 原 ACM-MILP 的 MILP 二分图转换、MIS/CA/SetCover 配置、Hydra 训练入口和旧 benchmark 流程已移除。
 - VAE 模型已使用 typed message passing：节点先看自己的特征，再沿 `graph.edges.edge_index` 接收相邻节点和边特征的信息。
 - `src.evaluate` 已保留结构/分布相似性与求解难度评估入口；求解难度读取 RailGraph2Gurobi `bench_solve.py --summary-csv`。
-- 本机无 torch，只验证了不依赖 torch 的链路；服务器必须继续跑 `docs/test.md`。
+- 本机无 torch，只验证了不依赖 torch 的链路；服务器验收以 `docs/exp.md` 为准。
 
 ## Summary
 
@@ -174,4 +175,4 @@ RailGraph2Gurobi 读取 `decode_handle + task_outputs`，恢复标准 `disturban
 - model generate。
 - 解码、回灌、build/solve/export/analyze 全链路。
 
-服务器验证步骤见 `docs/test.md`。
+服务器验证步骤见 `docs/exp.md`。

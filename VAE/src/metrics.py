@@ -16,7 +16,12 @@ def load_json_graphs(root: Union[str, Path], graph_type: str = "") -> List[Dict[
     if root_path.is_file():
         candidates = [root_path]
     else:
-        graph_root = root_path / "graphs" if (root_path / "graphs").is_dir() else root_path
+        if (root_path / "graphs").is_dir():
+            graph_root = root_path / "graphs"
+        elif (root_path / "math_sample").is_dir():
+            graph_root = root_path / "math_sample"
+        else:
+            graph_root = root_path
         candidates = sorted(graph_root.rglob("*.json"))
 
     graphs: List[Dict[str, object]] = []

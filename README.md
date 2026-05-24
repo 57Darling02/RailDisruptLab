@@ -154,23 +154,7 @@ Graph fields are intentionally minimal:
 
 ## Math VAE Graph JSON
 
-Use `export_typed_vae_learning_graph.py` to export the mathematical model input for the context-conditioned disturbance graph VAE. RailGraph2Gurobi owns all railway semantics and compiles them into numeric pools, numeric edges, task rules, and supervision labels. The VAE reads only math graph samples; `dataset_profile.json` is a context-bound explanation file for humans and RailGraph2Gurobi checks.
-
-Single config:
-
-```bash
-python scripts/export_typed_vae_learning_graph.py \
-  --config config/mixed_scenarios_demo.yaml \
-  --output outputs/mixed_scenarios_demo/vae_math_learning_graph.json
-```
-
-Batch graph export:
-
-```bash
-python scripts/export_typed_vae_learning_graph.py \
-  --config-glob "config/batch_case_configs_demo/**/*.yaml" \
-  --output-dir outputs/vae_math_dataset
-```
+`bench_build.py` exports the mathematical model input for the context-conditioned disturbance graph VAE while building the case library. RailGraph2Gurobi owns all railway semantics and compiles them into numeric pools, numeric edges, task rules, and supervision labels. The VAE reads only math graph samples; `dataset_profile.json` is a context-bound explanation file for humans and RailGraph2Gurobi checks.
 
 The math learning graph contains:
 
@@ -183,19 +167,32 @@ The math learning graph contains:
 | `supervision.target_relations` | Optional numeric relation features for encoder-side learning |
 | `decode_handle` | Opaque handle copied back for RailGraph2Gurobi decode |
 
-Batch export writes math samples under `outputs/vae_math_dataset/graphs/` and one `outputs/vae_math_dataset/dataset_profile.json` at the dataset root. The profile is bound to one `base_context_path` and retains feature names, anchor ids, task/edge descriptions, exporter settings, source config paths, and decode contracts. VAE code reads `graphs/` and does not read the profile.
+`bench_build.py` writes the timestamped graph library under `outputs/bench_build/<timestamp>/case_graph_library/` and publishes the latest copy to `outputs/bench_build/case_graph_library/`. The profile is bound to one `base_context_path` and retains feature names, anchor ids, task/edge descriptions, exporter settings, source config paths, and decode contracts. VAE code reads `graphs/` and does not read the profile.
+
+Train and generate from the repository root:
+
+```bash
+python scripts/train_vae.py \
+  --graphs-root outputs/bench_build/case_graph_library \
+  --epochs 3 \
+  --batch-size 1 \
+  --message-passing-steps 2
+
+python scripts/generate_vae.py \
+  --checkpoint outputs/train/model/model.pt \
+  --context-graphs outputs/bench_build/case_graph_library \
+  --num-samples 100 \
+  --mode model
+```
+
+Each generate run creates `outputs/generate/YYYY-MM-DD_HH-MM-SS/`; generated math graph JSON files are written under that run's `math_sample/` directory.
 
 Generated math graph decode:
 
 ```bash
-python scripts/decode_typed_generated_graph.py \
-  --typed-graph outputs/mixed_scenarios_demo/generated_math_graph.json \
-  --output-disturbance-graph outputs/mixed_scenarios_demo/generated_disturbance_graph.json
-
-python scripts/import_disturbance_graph.py \
-  --graph outputs/mixed_scenarios_demo/generated_disturbance_graph.json \
-  --base-config config/base_demo.yaml \
-  --output-config config/generated_from_vae.yaml
+python scripts/decode_import_generated_graphs.py \
+  --generated-graphs outputs/generate/<run> \
+  --base-config config/base_demo.yaml
 ```
 
 The generated math graph contains only `decode_handle` and numeric `task_outputs`. RailGraph2Gurobi decodes task ids, pool indexes, and parameter vectors back into a standard `disturbance_graph`.
@@ -223,7 +220,6 @@ Generate case configs:
 ```bash
 python -u scripts/case_library_builder.py \
   --output-root config/batch_case_configs_demo \
-  --project-output-root outputs/case_library \
   --interruption-count 10 \
   --clean > outputs/case_library_builder.log 2>&1
 ```
@@ -231,13 +227,13 @@ python -u scripts/case_library_builder.py \
 Run all 4 batch stages in order:
 
 ```bash
-python -u scripts/bench_build.py            --config-root config/batch_case_configs_demo > outputs/bench_build.log 2>&1
-python -u scripts/bench_solve.py            --config-root config/batch_case_configs_demo > outputs/bench_solve.log 2>&1
-python -u scripts/bench_export_timetable.py --config-root config/batch_case_configs_demo > outputs/bench_export_timetable.log 2>&1
-python -u scripts/bench_analyze.py          --config-root config/batch_case_configs_demo > outputs/bench_analyze.log 2>&1
+python -u scripts/bench_build.py            --config-root config/batch_case_configs_demo
+python -u scripts/bench_solve.py            --config-root outputs/bench_build/case_library > outputs/bench_solve.log 2>&1
+python -u scripts/bench_export_timetable.py --config-root outputs/bench_build/case_library > outputs/bench_export_timetable.log 2>&1
+python -u scripts/bench_analyze.py          --config-root outputs/bench_build/case_library > outputs/bench_analyze.log 2>&1
 ```
 
-Use `Get-Content -Wait outputs/<script>.log` on PowerShell, or `tail -f outputs/<script>.log` in a Unix-like shell.
+`bench_build.py` creates `outputs/bench_build/<timestamp>/case_library/` and `outputs/bench_build/<timestamp>/case_graph_library/`, then publishes the latest copies to `outputs/bench_build/case_library/` and `outputs/bench_build/case_graph_library/`. It writes `summary.csv`, `summary.json`, and `bench_build.log` in the timestamped run directory while also printing to the terminal.
 
 ### bench_solve.py Options
 
