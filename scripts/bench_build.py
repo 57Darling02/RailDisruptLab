@@ -341,7 +341,7 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
     print(f"Context graph: {context_graph_path}")
 
     if not failed_records and not args.no_publish_latest:
-        latest_build = _resolve_path("outputs/bench_build/latest")
+        latest_build = REPO_ROOT / "outputs/bench_build/latest"
         _replace_symlink(latest_build, run_dir)
         print(f"Latest build link: {latest_build} -> {run_dir}")
     elif failed_records:
