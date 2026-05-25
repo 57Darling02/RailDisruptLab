@@ -8,8 +8,10 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 from torch.utils.data import Dataset
 
-MATH_GRAPH_TYPE = "vae_math_learning_graph"
+MATH_CONTEXT_GRAPH_TYPE = "vae_math_context_graph"
+MATH_LEARNING_SAMPLE_TYPE = "vae_math_learning_sample"
 MATH_GENERATED_GRAPH_TYPE = "vae_math_generated_graph"
+CONTEXT_FILENAME = "context.json"
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class TaskRule:
     task_id: int
     target_pool_id: int
     max_slots: int
+    count_bounds: Tuple[int, int]
     param_dim: int
     param_bounds: Tuple[Tuple[float, float], ...]
     param_constraints: Tuple[Dict[str, object], ...]
@@ -93,44 +96,103 @@ class MathGraphSample:
 class RailDisturbanceDataset(Dataset):
     def __init__(self, graph_root: Union[str, Path], num_instances: Optional[int] = None):
         self.graph_root = Path(graph_root)
-        self.files = list_learning_graph_files(self.graph_root)
+        self.context_payload = _load_library_context(self.graph_root)
+        if self.context_payload is None:
+            raise FileNotFoundError(f"Missing {CONTEXT_FILENAME}: {self.graph_root}")
+        self.files = list_learning_sample_files(self.graph_root)
         if num_instances is not None:
             self.files = self.files[:num_instances]
         if not self.files:
-            raise FileNotFoundError(f"No {MATH_GRAPH_TYPE} JSON files found: {self.graph_root}")
+            raise FileNotFoundError(f"No VAE learning sample JSON files found: {self.graph_root}")
 
     def __len__(self) -> int:
         return len(self.files)
 
     def __getitem__(self, index: int) -> MathGraphSample:
-        payload = load_learning_graph(self.files[index])
-        return math_graph_to_sample(payload, graph_path=str(self.files[index]))
+        path = self.files[index]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("graph_type") != MATH_LEARNING_SAMPLE_TYPE:
+            raise ValueError(f"Unsupported graph_type in {path}: {payload.get('graph_type')}")
+        return math_learning_sample_to_sample(self.context_payload, payload, graph_path=str(path))
 
 
-def list_learning_graph_files(root: Union[str, Path]) -> List[Path]:
+class RailDisturbanceContextDataset(Dataset):
+    def __init__(self, graph_root: Union[str, Path], num_instances: Optional[int] = None):
+        self.graph_root = Path(graph_root)
+        self.files = list_context_graph_files(self.graph_root)
+        if num_instances is not None:
+            self.files = self.files[:num_instances]
+        if not self.files:
+            raise FileNotFoundError(f"No {MATH_CONTEXT_GRAPH_TYPE} JSON files found: {self.graph_root}")
+
+    def __len__(self) -> int:
+        return len(self.files)
+
+    def __getitem__(self, index: int) -> MathGraphSample:
+        payload = load_context_graph(self.files[index])
+        return math_context_graph_to_sample(payload, graph_path=str(self.files[index]))
+
+
+def list_learning_sample_files(root: Union[str, Path]) -> List[Path]:
     root_path = Path(root)
     if root_path.is_file():
         candidates = [root_path]
     else:
-        graph_root = root_path / "graphs" if (root_path / "graphs").is_dir() else root_path
-        candidates = sorted(graph_root.rglob("*.json"))
-    return [path for path in candidates if path.is_file() and _is_math_learning_graph(path)]
+        graph_sample_root = root_path / "graph_samples"
+        if not graph_sample_root.is_dir():
+            return []
+        candidates = sorted(graph_sample_root.rglob("*.json"))
+    return [path for path in candidates if path.is_file() and _is_math_learning_sample(path)]
 
 
-def load_learning_graph(path: Union[str, Path]) -> Dict[str, object]:
+def list_context_graph_files(root: Union[str, Path]) -> List[Path]:
+    root_path = Path(root)
+    if root_path.is_file():
+        candidates = [root_path]
+    elif (root_path / CONTEXT_FILENAME).is_file():
+        candidates = [root_path / CONTEXT_FILENAME]
+    else:
+        candidates = []
+    return [path for path in candidates if path.is_file() and _is_math_context_graph(path)]
+
+
+def load_context_graph(path: Union[str, Path]) -> Dict[str, object]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if payload.get("graph_type") != MATH_GRAPH_TYPE:
+    if payload.get("graph_type") != MATH_CONTEXT_GRAPH_TYPE:
         raise ValueError(f"Unsupported graph_type in {path}: {payload.get('graph_type')}")
     return payload
 
 
-def math_graph_to_sample(payload: Dict[str, object], graph_path: str = "") -> MathGraphSample:
-    if payload.get("graph_type") != MATH_GRAPH_TYPE:
+def load_learning_sample(path: Union[str, Path]) -> Dict[str, object]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if payload.get("graph_type") != MATH_LEARNING_SAMPLE_TYPE:
+        raise ValueError(f"Unsupported graph_type in {path}: {payload.get('graph_type')}")
+    return payload
+
+
+def math_learning_sample_to_sample(
+    context_payload: Dict[str, object],
+    sample_payload: Dict[str, object],
+    graph_path: str = "",
+) -> MathGraphSample:
+    if sample_payload.get("graph_type") != MATH_LEARNING_SAMPLE_TYPE:
+        raise ValueError(f"Unsupported graph_type: {sample_payload.get('graph_type')}")
+    sample = math_context_graph_to_sample(context_payload, graph_path=graph_path)
+    supervision = _object(sample_payload.get("supervision"), "supervision")
+    sample.targets = _target_tensors(supervision.get("targets"), sample.task_rules, sample.pool_rules)
+    sample.target_relation_index, sample.target_relation_x = _relation_tensors(
+        supervision.get("target_relations", []),
+        int(_object(context_payload.get("rules"), "rules").get("target_relation_feature_dim", 0) or 0),
+    )
+    return sample
+
+
+def math_context_graph_to_sample(payload: Dict[str, object], graph_path: str = "") -> MathGraphSample:
+    if payload.get("graph_type") != MATH_CONTEXT_GRAPH_TYPE:
         raise ValueError(f"Unsupported graph_type: {payload.get('graph_type')}")
 
     rules = _object(payload.get("rules"), "rules")
     body = _object(payload.get("graph"), "graph")
-    supervision = _object(payload.get("supervision"), "supervision")
     decode_handle = _object(payload.get("decode_handle"), "decode_handle")
 
     pool_rules = _pool_rules(rules.get("pools"))
@@ -138,11 +200,7 @@ def math_graph_to_sample(payload: Dict[str, object], graph_path: str = "") -> Ma
     edge_type_rules = _edge_type_rules(rules.get("edge_types"))
     pool_x = _pool_tensors(body.get("pool_x"), pool_rules)
     edges = _edge_tensors(body.get("edges"), edge_type_rules)
-    targets = _target_tensors(supervision.get("targets"), task_rules, pool_rules)
-    relation_index, relation_x = _relation_tensors(
-        supervision.get("target_relations", []),
-        int(rules.get("target_relation_feature_dim", 0) or 0),
-    )
+    relation_feature_dim = int(rules.get("target_relation_feature_dim", 0) or 0)
 
     return MathGraphSample(
         graph_path=graph_path,
@@ -152,14 +210,13 @@ def math_graph_to_sample(payload: Dict[str, object], graph_path: str = "") -> Ma
         edge_type_rules=edge_type_rules,
         pool_x=pool_x,
         edges=edges,
-        targets=targets,
-        target_relation_index=relation_index,
-        target_relation_x=relation_x,
+        targets=_empty_targets(task_rules),
+        target_relation_index=torch.empty((0, 4), dtype=torch.long),
+        target_relation_x=torch.empty((0, relation_feature_dim), dtype=torch.float32),
     )
 
 
-def target_copy_generated_graph(payload: Dict[str, object]) -> Dict[str, object]:
-    sample = math_graph_to_sample(payload)
+def target_copy_sample(sample: MathGraphSample) -> Dict[str, object]:
     task_outputs: Dict[str, object] = {}
     for task_id, rule in sorted(sample.task_rules.items()):
         target = sample.targets[task_id]
@@ -169,20 +226,55 @@ def target_copy_generated_graph(payload: Dict[str, object]) -> Dict[str, object]
             "params": target.params.cpu().tolist(),
         }
     return {
-        "schema_version": int(payload.get("schema_version", 1)),
+        "schema_version": 1,
         "graph_type": MATH_GENERATED_GRAPH_TYPE,
         "decode_handle": dict(sample.decode_handle),
         "task_outputs": task_outputs,
     }
 
 
-def _is_math_learning_graph(path: Path) -> bool:
+def _is_math_context_graph(path: Path) -> bool:
     try:
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, json.JSONDecodeError):
         return False
-    return payload.get("graph_type") == MATH_GRAPH_TYPE
+    return payload.get("graph_type") == MATH_CONTEXT_GRAPH_TYPE
+
+
+def _is_math_learning_sample(path: Path) -> bool:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return payload.get("graph_type") == MATH_LEARNING_SAMPLE_TYPE
+
+
+def _load_library_context(root: Path) -> Optional[Dict[str, object]]:
+    if root.is_file():
+        try:
+            payload = json.loads(root.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if payload.get("graph_type") == MATH_CONTEXT_GRAPH_TYPE:
+            return payload
+        return None
+    context_path = root / CONTEXT_FILENAME
+    if context_path.is_file():
+        return load_context_graph(context_path)
+    return None
+
+
+def _empty_targets(task_rules: Dict[int, TaskRule]) -> Dict[int, TargetData]:
+    result: Dict[int, TargetData] = {}
+    for task_id, rule in task_rules.items():
+        result[task_id] = TargetData(
+            count=0,
+            anchor_index=torch.empty((0,), dtype=torch.long),
+            params=torch.empty((0, rule.param_dim), dtype=torch.float32),
+        )
+    return result
 
 
 def _pool_rules(value: object) -> Dict[int, PoolRule]:
@@ -204,6 +296,16 @@ def _task_rules(value: object) -> Dict[int, TaskRule]:
         entry = _object(item, "rules.tasks[]")
         task_id = _int(entry.get("task_id"), "task_id")
         param_dim = _int(entry.get("param_dim"), "param_dim")
+        max_slots = _int(entry.get("max_slots"), "max_slots")
+        count_bounds_raw = _list(entry.get("count_bounds", [0, max_slots]), "count_bounds")
+        if len(count_bounds_raw) != 2:
+            raise ValueError(f"Task {task_id} count_bounds must contain [min, max].")
+        count_bounds = (
+            _int(count_bounds_raw[0], "count_bounds.min"),
+            _int(count_bounds_raw[1], "count_bounds.max"),
+        )
+        if count_bounds[0] < 0 or count_bounds[1] < count_bounds[0] or count_bounds[1] > max_slots:
+            raise ValueError(f"Task {task_id} count_bounds must satisfy 0 <= min <= max <= max_slots.")
         bounds = tuple(
             (_float(row[0], "param_bounds.min"), _float(row[1], "param_bounds.max"))
             for row in _list(entry.get("param_bounds", []), "param_bounds")
@@ -213,7 +315,8 @@ def _task_rules(value: object) -> Dict[int, TaskRule]:
         result[task_id] = TaskRule(
             task_id=task_id,
             target_pool_id=_int(entry.get("target_pool_id"), "target_pool_id"),
-            max_slots=_int(entry.get("max_slots"), "max_slots"),
+            max_slots=max_slots,
+            count_bounds=count_bounds,
             param_dim=param_dim,
             param_bounds=bounds or tuple((0.0, 1.0) for _ in range(param_dim)),
             param_constraints=tuple(
@@ -305,6 +408,8 @@ def _target_tensors(
         count = _int(target.get("count"), "count")
         if count < 0 or count > rule.max_slots:
             raise ValueError(f"Task {task_id} count must be between 0 and max_slots.")
+        if count < rule.count_bounds[0] or count > rule.count_bounds[1]:
+            raise ValueError(f"Task {task_id} count must be within count_bounds.")
         anchor_index = [_int(value, "anchor_index") for value in _list(target.get("anchor_index"), "anchor_index")]
         params = _matrix(target.get("params"), "params")
         if len(anchor_index) != count or len(params) != count:

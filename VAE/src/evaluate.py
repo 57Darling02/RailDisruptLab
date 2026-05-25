@@ -16,7 +16,7 @@ from src.metrics import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate generated math graphs and solver difficulty.")
-    parser.add_argument("--reference-graphs", default="", help="Reference vae_math_learning_graph file or dataset directory.")
+    parser.add_argument("--reference-graphs", default="", help="Reference compact VAE graph library.")
     parser.add_argument("--generated-graphs", default="", help="Generated graph file or directory.")
     parser.add_argument("--reference-solve-csv", default="", help="Reference solver metrics CSV.")
     parser.add_argument("--generated-solve-csv", default="", help="Generated solver metrics CSV.")

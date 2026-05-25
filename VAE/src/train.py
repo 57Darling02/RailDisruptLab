@@ -3,33 +3,21 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import shutil
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 TRAIN_ROOT = Path("outputs/train")
-LATEST_MODEL_DIR = TRAIN_ROOT / "model"
+LATEST_PATH = TRAIN_ROOT / "latest"
+DEFAULT_CONFIG_PATH = "config/train.yml"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the math rail-disturbance VAE.")
-    parser.add_argument("--graphs-root", required=True, help="Math learning graph file or directory.")
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--hidden-dim", type=int, default=64)
-    parser.add_argument("--latent-dim", type=int, default=32)
-    parser.add_argument("--message-passing-steps", type=int, default=2)
-    parser.add_argument("--kl-weight", type=float, default=1e-3)
-    parser.add_argument("--limit", type=int, default=0, help="Optional number of graphs to load; 0 means all.")
-    parser.add_argument("--seed", type=int, default=1)
-    parser.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:<index>.")
-    parser.add_argument("--log-every", type=int, default=1, help="Write every N training steps to training.log.")
-    parser.add_argument("--no-publish-latest", action="store_true", help=argparse.SUPPRESS)
-    return parser.parse_args()
+    parser.add_argument("config", nargs="?", default=DEFAULT_CONFIG_PATH, help="Training YAML config path.")
+    return _load_train_config(parser.parse_args().config)
 
 
 def main() -> None:
@@ -59,7 +47,7 @@ def main() -> None:
     config_payload = vars(args).copy()
     config_payload["created_at"] = datetime.now().isoformat(timespec="seconds")
     config_payload["run_dir"] = str(output_dir.resolve()).replace("\\", "/")
-    config_payload["latest_model_dir"] = str(LATEST_MODEL_DIR.resolve()).replace("\\", "/")
+    config_payload["latest_path"] = str(LATEST_PATH.resolve()).replace("\\", "/")
     config_payload["resolved_output_dir"] = str(output_dir.resolve()).replace("\\", "/")
     (output_dir / "training_config.json").write_text(
         json.dumps(config_payload, ensure_ascii=False, indent=2),
@@ -70,16 +58,19 @@ def main() -> None:
         encoding="utf-8",
     )
     logger.log("Training started")
+    logger.log(f"config={args.config}")
     logger.log(f"graphs_root={args.graphs_root}")
     logger.log(f"run_dir={output_dir}")
-    logger.log(f"latest_model_dir={LATEST_MODEL_DIR}")
+    logger.log(f"latest_path={LATEST_PATH}")
     logger.log(f"samples={len(dataset)} epochs={args.epochs} batch_size={args.batch_size} device={device}")
     logger.log(f"training_config={output_dir / 'training_config.json'}")
     logger.log(f"schema_summary={output_dir / 'schema_summary.json'}")
     logger.log(f"history={output_dir / 'history.json'}")
-    logger.log(f"checkpoint={output_dir / 'model.pt'}")
+    logger.log(f"best_checkpoint={output_dir / 'best_model.pt'}")
+    logger.log(f"last_checkpoint={output_dir / 'last_model.pt'}")
 
     history: List[Dict[str, float]] = []
+    best_metrics: Dict[str, float] | None = None
     completed = False
     try:
         for epoch in range(1, args.epochs + 1):
@@ -100,7 +91,14 @@ def main() -> None:
                 for index in batch_indices:
                     sample = dataset[index].to(device)
                     outputs = model(sample)
-                    loss, metrics = vae_loss(sample, outputs, kl_weight=args.kl_weight)
+                    loss, metrics = vae_loss(
+                        sample,
+                        outputs,
+                        kl_weight=args.kl_weight,
+                        count_weight=args.count_weight,
+                        anchor_weight=args.anchor_weight,
+                        param_weight=args.param_weight,
+                    )
                     if not torch.isfinite(loss):
                         raise ValueError(f"Non-finite loss for sample: {sample.graph_path}")
                     batch_loss = loss if batch_loss is None else batch_loss + loss
@@ -131,28 +129,110 @@ def main() -> None:
             averaged["epoch"] = float(epoch)
             history.append(averaged)
             (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+            if best_metrics is None or averaged["loss"] < best_metrics["loss"]:
+                best_metrics = dict(averaged)
+                _save_checkpoint(model, output_dir / "best_model.pt", best_metrics)
+                logger.log(f"Best checkpoint updated: {output_dir / 'best_model.pt'}")
             logger.epoch_end(epoch, args.epochs, averaged, time.perf_counter() - epoch_start)
 
-        torch.save(
-            {
-                "state_dict": model.state_dict(),
-                "model_config": model.config_dict(),
-            },
-            output_dir / "model.pt",
+        last_metrics = dict(history[-1]) if history else {}
+        _save_checkpoint(model, output_dir / "last_model.pt", last_metrics)
+        (output_dir / "training_summary.json").write_text(
+            json.dumps(
+                {
+                    "last_epoch": int(last_metrics.get("epoch", 0)),
+                    "last_metrics": last_metrics,
+                    "best_epoch": int(best_metrics.get("epoch", 0)) if best_metrics else 0,
+                    "best_metrics": best_metrics or {},
+                    "last_model": str((output_dir / "last_model.pt").resolve()).replace("\\", "/"),
+                    "best_model": str((output_dir / "best_model.pt").resolve()).replace("\\", "/"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
-        logger.log(f"Model checkpoint written: {output_dir / 'model.pt'}")
+        logger.log(f"Last checkpoint written: {output_dir / 'last_model.pt'}")
+        logger.log(f"Best checkpoint: {output_dir / 'best_model.pt'}")
         completed = True
     finally:
         logger.close()
     if completed and not args.no_publish_latest:
-        _publish_latest_model(output_dir)
-        print(f"Latest model directory: {LATEST_MODEL_DIR}", flush=True)
+        _publish_latest(output_dir)
+        print(f"Latest training run: {LATEST_PATH}", flush=True)
 
 
 def _device(value: str, torch_module) -> object:
     if value == "auto":
         return torch_module.device("cuda" if torch_module.cuda.is_available() else "cpu")
     return torch_module.device(value)
+
+
+def _save_checkpoint(model, path: Path, metrics: Dict[str, float]) -> None:
+    import torch
+
+    torch.save(
+        {
+            "state_dict": model.state_dict(),
+            "model_config": model.config_dict(),
+            "metrics": dict(metrics),
+        },
+        path,
+    )
+
+
+def _load_train_config(path_text: str) -> argparse.Namespace:
+    path = Path(path_text)
+    if not path.exists():
+        raise FileNotFoundError(f"Training config not found: {path}")
+    yaml = _require_yaml()
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Training config must be a YAML object: {path}")
+    data = _section(payload, "data")
+    model = _section(payload, "model")
+    optimization = _section(payload, "optimization")
+    loss_weights = _section(payload, "loss_weights")
+    output = _section(payload, "output")
+    graphs_root = str(data.get("graphs_root", "")).strip()
+    if not graphs_root:
+        raise ValueError("config.data.graphs_root is required.")
+    return argparse.Namespace(
+        config=str(path),
+        graphs_root=graphs_root,
+        limit=int(data.get("limit", 0)),
+        hidden_dim=int(model.get("hidden_dim", 64)),
+        latent_dim=int(model.get("latent_dim", 32)),
+        message_passing_steps=int(model.get("message_passing_steps", 2)),
+        epochs=int(optimization.get("epochs", 3)),
+        batch_size=int(optimization.get("batch_size", 1)),
+        lr=float(optimization.get("lr", 1e-3)),
+        seed=int(optimization.get("seed", 1)),
+        device=str(optimization.get("device", "auto")),
+        log_every=int(optimization.get("log_every", 1)),
+        count_weight=float(loss_weights.get("count", 1.0)),
+        anchor_weight=float(loss_weights.get("anchor", 1.0)),
+        param_weight=float(loss_weights.get("param", 1.0)),
+        kl_weight=float(loss_weights.get("kl", 1e-3)),
+        no_publish_latest=not bool(output.get("publish_latest", True)),
+    )
+
+
+def _section(payload: Dict[str, object], name: str) -> Dict[str, object]:
+    value = payload.get(name, {})
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"config.{name} must be a YAML object.")
+    return value
+
+
+def _require_yaml() -> Any:
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("Missing dependency: pyyaml") from exc
+    return yaml
 
 
 def _run_dir() -> Path:
@@ -170,18 +250,16 @@ def _timestamp_for_path() -> str:
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
-def _publish_latest_model(run_dir: Path) -> None:
-    temp_dir = LATEST_MODEL_DIR.with_name(f"{LATEST_MODEL_DIR.name}.tmp_publish")
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir)
-    shutil.copytree(run_dir, temp_dir)
-    if LATEST_MODEL_DIR.exists():
-        if LATEST_MODEL_DIR.is_dir():
-            shutil.rmtree(LATEST_MODEL_DIR)
-        else:
-            LATEST_MODEL_DIR.unlink()
-    temp_dir.rename(LATEST_MODEL_DIR)
-    (TRAIN_ROOT / "latest_run.txt").write_text(str(run_dir).replace("\\", "/") + "\n", encoding="utf-8")
+def _publish_latest(run_dir: Path) -> None:
+    _replace_symlink(LATEST_PATH, run_dir)
+
+
+def _replace_symlink(link_path: Path, target: Path) -> None:
+    if link_path.is_symlink() or link_path.is_file():
+        link_path.unlink()
+    elif link_path.exists():
+        raise FileExistsError(f"Refusing to replace non-symlink directory: {link_path}")
+    link_path.symlink_to(target.resolve(), target_is_directory=True)
 
 
 def _schema_summary(sample) -> Dict[str, object]:
@@ -205,6 +283,7 @@ def _schema_summary(sample) -> Dict[str, object]:
             str(task_id): {
                 "target_pool_id": rule.target_pool_id,
                 "max_slots": rule.max_slots,
+                "count_bounds": rule.count_bounds,
                 "param_dim": rule.param_dim,
             }
             for task_id, rule in sample.task_rules.items()

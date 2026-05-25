@@ -21,11 +21,11 @@ from main import cmd_export_timetable
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Batch run main export-timetable stage for case configs produced by case_library_builder.py."
+        description="Batch run main export-timetable stage for configs produced by bench_build.py."
     )
     parser.add_argument(
         "--config-root",
-        default="config/batch_case_configs_demo",
+        default="outputs/bench_build/latest/configs",
         help="Root directory containing case config files.",
     )
     parser.add_argument(
@@ -203,4 +203,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

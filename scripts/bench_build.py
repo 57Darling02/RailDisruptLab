@@ -4,7 +4,6 @@ import argparse
 import csv
 import contextlib
 import json
-import shutil
 import sys
 import time
 from datetime import datetime
@@ -24,17 +23,19 @@ from core.vae_learning_graph import (
     DEFAULT_MAX_SLOTS,
     DEFAULT_SECTION_ORDER_WINDOW,
     DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
+    infer_math_dataset_schema,
     relative_to_repo,
     scenario_to_typed_vae_learning_graph,
     typed_learning_graph_to_dataset_profile,
-    typed_learning_graph_to_math_learning_graph,
+    typed_learning_graph_to_math_context_graph,
+    typed_learning_graph_to_math_learning_sample,
 )
 from main import cmd_build
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Batch run main build stage for case configs produced by case_library_builder.py."
+        description="Batch run main build stage for scenario input configs."
     )
     parser.add_argument(
         "--config-root",
@@ -164,20 +165,25 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
     yaml = _require_yaml()
     summary_csv = run_dir / "summary.csv"
     summary_json = run_dir / "summary.json"
-    case_library_dir = run_dir / "case_library"
-    case_graph_library_dir = run_dir / "case_graph_library"
-    graph_dir = case_graph_library_dir / "graphs"
+    configs_dir = run_dir / "configs"
+    lp_samples_dir = run_dir / "lp_simples"
+    graph_samples_dir = run_dir / "graph_samples"
+    context_graph_path = run_dir / "context.json"
 
     configs = _collect_configs(config_root, args.glob, args.limit)
     print(f"Run directory: {run_dir}")
     print(f"Log file: {log_file}")
-    print(f"Case library: {case_library_dir}")
-    print(f"Case graph library: {case_graph_library_dir}")
+    print(f"Configs: {configs_dir}")
+    print(f"LP samples: {lp_samples_dir}")
+    print(f"Graph samples: {graph_samples_dir}")
+    print(f"Context graph: {context_graph_path}")
     print(f"Found configs: {len(configs)}")
 
     records: List[Dict[str, object]] = []
     graph_sample_records: List[Dict[str, object]] = []
+    learning_samples: List[Dict[str, object]] = []
     profile_source_graph: Optional[Dict[str, object]] = None
+    shared_context_graph: Optional[Dict[str, object]] = None
 
     for idx, config_path in enumerate(configs, start=1):
         time.sleep(0.2)
@@ -193,14 +199,15 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
             "output_dir": "",
             "lp_path": "",
             "lp_exists": False,
-            "math_graph_path": "",
+            "learning_sample_path": "",
             "duration_sec": 0.0,
         }
 
         try:
             case_id, build_config_path = _prepare_case_config(
                 source_config_path=config_path,
-                case_library_dir=case_library_dir,
+                configs_dir=configs_dir,
+                lp_samples_dir=lp_samples_dir,
                 yaml=yaml,
             )
             record["case_id"] = case_id
@@ -232,16 +239,28 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
             elif typed_graph.get("base_context_path") != profile_source_graph.get("base_context_path"):
                 raise ValueError("Math graph export only supports one base_context_path per case graph library.")
 
-            math_graph = typed_learning_graph_to_math_learning_graph(typed_graph)
-            math_graph_path = graph_dir / f"{_sanitize(case_id)}.json"
-            _write_json(math_graph_path, math_graph)
+            context_graph = typed_learning_graph_to_math_context_graph(typed_graph)
+            if shared_context_graph is None:
+                shared_context_graph = context_graph
+            elif context_graph != shared_context_graph:
+                raise ValueError("Math graph export only supports one shared context graph per case graph library.")
+
+            learning_sample = typed_learning_graph_to_math_learning_sample(
+                typed_graph,
+                context_ref="context.json",
+                sample_id=case_id,
+            )
+            learning_sample_path = graph_samples_dir / f"{_sanitize(case_id)}.json"
+            _write_json(learning_sample_path, learning_sample)
+            learning_samples.append(learning_sample)
             graph_sample_records.append(
                 {
-                    "math_graph_path": relative_to_repo(math_graph_path, REPO_ROOT),
+                    "learning_sample_path": relative_to_repo(learning_sample_path, REPO_ROOT),
+                    "context_graph_path": relative_to_repo(context_graph_path, REPO_ROOT),
                     "source_config_path": relative_to_repo(build_config_path, REPO_ROOT),
                 }
             )
-            record["math_graph_path"] = _to_posix(math_graph_path)
+            record["learning_sample_path"] = _to_posix(learning_sample_path)
         except Exception as exc:  # pragma: no cover
             record["status"] = "failed"
             record["error"] = str(exc)
@@ -273,17 +292,29 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
         "status_counts": status_counts,
         "run_dir": _to_posix(run_dir),
         "log_file": _to_posix(log_file),
-        "case_library": _to_posix(case_library_dir),
-        "case_graph_library": _to_posix(case_graph_library_dir),
+        "configs_dir": _to_posix(configs_dir),
+        "lp_samples_dir": _to_posix(lp_samples_dir),
+        "graph_samples_dir": _to_posix(graph_samples_dir),
+        "context_graph": _to_posix(context_graph_path),
+        "dataset_profile": _to_posix(run_dir / "dataset_profile.json"),
         "summary_csv": _to_posix(summary_csv),
         "summary_json": _to_posix(summary_json),
     }
 
+    inferred_schema: Dict[str, object] = {}
+    if shared_context_graph is not None:
+        inferred_context_graph, inferred_schema = infer_math_dataset_schema(
+            shared_context_graph,
+            learning_samples,
+        )
+        _write_json(context_graph_path, inferred_context_graph)
+
     if profile_source_graph is not None:
-        _write_case_graph_profile(
-            case_graph_library_dir=case_graph_library_dir,
+        _write_dataset_profile(
+            run_dir=run_dir,
             profile_source_graph=profile_source_graph,
             sample_records=graph_sample_records,
+            inferred_schema=inferred_schema,
             args=args,
         )
 
@@ -304,23 +335,17 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
     print(f"Summary CSV: {summary_csv}")
     print(f"Summary JSON: {summary_json}")
     print(f"Log file: {log_file}")
-    print(f"Case library: {case_library_dir}")
-    print(f"Case graph library: {case_graph_library_dir}")
+    print(f"Configs: {configs_dir}")
+    print(f"LP samples: {lp_samples_dir}")
+    print(f"Graph samples: {graph_samples_dir}")
+    print(f"Context graph: {context_graph_path}")
 
     if not failed_records and not args.no_publish_latest:
-        latest_case_library = _resolve_path("outputs/bench_build/case_library")
-        latest_case_graph_library = _resolve_path("outputs/bench_build/case_graph_library")
-        _publish_case_library(case_library_dir, latest_case_library, yaml)
-        _publish_directory(case_graph_library_dir, latest_case_graph_library)
-        _rewrite_latest_case_graph_profile(latest_case_graph_library)
-        (_resolve_path("outputs/bench_build/latest_run.txt")).write_text(
-            _to_posix(run_dir) + "\n",
-            encoding="utf-8",
-        )
-        print(f"Latest case library: {latest_case_library}")
-        print(f"Latest case graph library: {latest_case_graph_library}")
+        latest_build = _resolve_path("outputs/bench_build/latest")
+        _replace_symlink(latest_build, run_dir)
+        print(f"Latest build link: {latest_build} -> {run_dir}")
     elif failed_records:
-        print("Latest case libraries were not updated because build had failures.", file=sys.stderr)
+        print("Latest build link was not updated because build had failures.", file=sys.stderr)
 
 
 def _case_id_from_source(config_path: Path, yaml: Any) -> str:
@@ -337,7 +362,13 @@ def _case_id_from_source(config_path: Path, yaml: Any) -> str:
     return _case_id_from_path(config_path)
 
 
-def _prepare_case_config(*, source_config_path: Path, case_library_dir: Path, yaml: Any) -> Tuple[str, Path]:
+def _prepare_case_config(
+    *,
+    source_config_path: Path,
+    configs_dir: Path,
+    lp_samples_dir: Path,
+    yaml: Any,
+) -> Tuple[str, Path]:
     payload = yaml.safe_load(source_config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
         raise ValueError(f"Config must be a YAML object: {source_config_path}")
@@ -345,21 +376,21 @@ def _prepare_case_config(*, source_config_path: Path, case_library_dir: Path, ya
     if not isinstance(project, dict):
         raise ValueError(f"Config project section must be a YAML object: {source_config_path}")
     case_id = str(project.get("name", "")).strip() or _case_id_from_path(source_config_path)
-    case_dir = case_library_dir / _sanitize(case_id)
     project["name"] = case_id
-    project["output_dir"] = _repo_path_text(case_dir)
-    build_config_path = case_dir / "config.yaml"
+    project["output_dir"] = _repo_path_text(lp_samples_dir / _sanitize(case_id))
+    build_config_path = configs_dir / f"{_sanitize(case_id)}.yaml"
     build_config_path.parent.mkdir(parents=True, exist_ok=True)
     with build_config_path.open("w", encoding="utf-8") as file:
         yaml.safe_dump(payload, file, allow_unicode=True, sort_keys=False)
     return case_id, build_config_path
 
 
-def _write_case_graph_profile(
+def _write_dataset_profile(
     *,
-    case_graph_library_dir: Path,
+    run_dir: Path,
     profile_source_graph: Dict[str, object],
     sample_records: List[Dict[str, object]],
+    inferred_schema: Dict[str, object],
     args: argparse.Namespace,
 ) -> None:
     profile = typed_learning_graph_to_dataset_profile(
@@ -372,55 +403,21 @@ def _write_case_graph_profile(
             "speed_interruption_threshold": float(args.speed_interruption_threshold),
         },
         samples=sample_records,
+        inferred_schema=inferred_schema,
     )
-    _write_json(case_graph_library_dir / "dataset_profile.json", profile)
+    _write_json(run_dir / "dataset_profile.json", profile)
 
 
-def _publish_case_library(source: Path, destination: Path, yaml: Any) -> None:
-    _publish_directory(source, destination)
-    for config_path in destination.rglob("config.yaml"):
-        payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        if not isinstance(payload, dict):
-            continue
-        project = payload.setdefault("project", {})
-        if not isinstance(project, dict):
-            continue
-        project["output_dir"] = _repo_path_text(config_path.parent)
-        with config_path.open("w", encoding="utf-8") as file:
-            yaml.safe_dump(payload, file, allow_unicode=True, sort_keys=False)
-
-
-def _publish_directory(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temp_destination = destination.with_name(f"{destination.name}.tmp_publish")
-    if temp_destination.exists():
-        shutil.rmtree(temp_destination)
-    shutil.copytree(source, temp_destination)
-    if destination.exists():
-        shutil.rmtree(destination)
-    temp_destination.rename(destination)
-
-
-def _rewrite_latest_case_graph_profile(case_graph_library_dir: Path) -> None:
-    profile_path = case_graph_library_dir / "dataset_profile.json"
-    if not profile_path.exists():
-        return
-    profile = json.loads(profile_path.read_text(encoding="utf-8"))
-    samples = profile.get("samples")
-    if isinstance(samples, list):
-        for sample in samples:
-            if not isinstance(sample, dict):
-                continue
-            graph_path = str(sample.get("math_graph_path", ""))
-            if graph_path:
-                sample["math_graph_path"] = _repo_path_text(case_graph_library_dir / "graphs" / Path(graph_path).name)
-            source_path = str(sample.get("source_config_path", ""))
-            if source_path:
-                case_id = Path(source_path).parent.name if Path(source_path).name == "config.yaml" else Path(source_path).stem
-                sample["source_config_path"] = _repo_path_text(
-                    _resolve_path("outputs/bench_build/case_library") / _sanitize(case_id) / "config.yaml"
-                )
-    _write_json(profile_path, profile)
+def _replace_symlink(link_path: Path, target: Path) -> None:
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    if link_path.is_symlink() or link_path.is_file():
+        link_path.unlink()
+    elif link_path.exists():
+        raise FileExistsError(
+            f"Refusing to replace non-symlink directory: {link_path}. "
+            "Remove it manually once before using the symlink-based layout."
+        )
+    link_path.symlink_to(target.resolve(), target_is_directory=True)
 
 
 def _repo_path_text(path: Path) -> str:
@@ -438,4 +435,3 @@ def _sanitize(value: str) -> str:
 
 if __name__ == "__main__":
     main()
-

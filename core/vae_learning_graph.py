@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -16,12 +17,14 @@ from core.types import AppConfig, BaseContext, EventAnchor, SectionAnchor
 SCHEMA_VERSION = 1
 GRAPH_TYPE = "typed_vae_learning_graph"
 GENERATED_GRAPH_TYPE = "generated_typed_disturbance_graph"
-MATH_GRAPH_TYPE = "vae_math_learning_graph"
+MATH_CONTEXT_GRAPH_TYPE = "vae_math_context_graph"
+MATH_LEARNING_SAMPLE_TYPE = "vae_math_learning_sample"
 MATH_GENERATED_GRAPH_TYPE = "vae_math_generated_graph"
 PROFILE_GRAPH_TYPE = "vae_math_dataset_profile"
 
 DEFAULT_MAX_SLOTS = 8
 DEFAULT_SPEED_INTERRUPTION_THRESHOLD = 20.0
+DEFAULT_SPEED_LIMIT_MAX = 350.0
 DEFAULT_EVENT_TIME_WINDOW = 3600
 DEFAULT_EVENT_TOP_K = 8
 DEFAULT_SECTION_ORDER_WINDOW = 2
@@ -53,23 +56,14 @@ SECTION_POOL_FEATURES = [
 EVENT_EVENT_EDGE_FEATURES = [
     "same_train",
     "same_station",
-    "same_direction",
     "planned_time_diff_norm",
-    "planned_time_affinity",
-    "station_order_diff_norm",
 ]
 SECTION_SECTION_EDGE_FEATURES = [
-    "shared_endpoint",
-    "adjacent_section",
-    "same_direction",
-    "section_order_diff_norm",
     "mileage_diff_norm",
 ]
 EVENT_SECTION_EDGE_FEATURES = [
-    "event_station_is_section_endpoint",
-    "same_direction",
-    "station_to_section_order_distance_norm",
     "train_route_contains_section",
+    "station_to_section_order_distance_norm",
 ]
 DISTURBANCE_RELATION_FEATURES = [
     "same_anchor",
@@ -103,28 +97,6 @@ def scenario_to_typed_vae_learning_graph(
         section_order_window=section_order_window,
         speed_interruption_threshold=speed_interruption_threshold,
     )
-
-
-def scenario_to_vae_math_learning_graph(
-    config: AppConfig,
-    *,
-    source_config_path: str = "",
-    max_slots: int = DEFAULT_MAX_SLOTS,
-    event_time_window: int = DEFAULT_EVENT_TIME_WINDOW,
-    event_top_k: int = DEFAULT_EVENT_TOP_K,
-    section_order_window: int = DEFAULT_SECTION_ORDER_WINDOW,
-    speed_interruption_threshold: float = DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
-) -> Dict[str, object]:
-    typed_graph = scenario_to_typed_vae_learning_graph(
-        config,
-        source_config_path=source_config_path,
-        max_slots=max_slots,
-        event_time_window=event_time_window,
-        event_top_k=event_top_k,
-        section_order_window=section_order_window,
-        speed_interruption_threshold=speed_interruption_threshold,
-    )
-    return typed_learning_graph_to_math_learning_graph(typed_graph)
 
 
 def semantic_disturbance_graph_to_typed_learning_graph(
@@ -233,7 +205,7 @@ def derive_disturbance_relation_features(
     return relations
 
 
-def typed_learning_graph_to_math_learning_graph(graph: Dict[str, object]) -> Dict[str, object]:
+def typed_learning_graph_to_math_context_graph(graph: Dict[str, object]) -> Dict[str, object]:
     if not isinstance(graph, dict):
         raise ValueError("Typed learning graph must be a JSON object.")
     if graph.get("graph_type") != GRAPH_TYPE:
@@ -244,13 +216,10 @@ def typed_learning_graph_to_math_learning_graph(graph: Dict[str, object]) -> Dic
         raise ValueError("Typed learning graph context_pools must be a JSON object.")
     generation_tasks = _objects(graph.get("generation_tasks"), "generation_tasks")
     context_edges = _objects(graph.get("context_edges"), "context_edges")
-    targets = graph.get("targets")
-    if not isinstance(targets, dict):
-        raise ValueError("Typed learning graph targets must be a JSON object.")
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "graph_type": MATH_GRAPH_TYPE,
+        "graph_type": MATH_CONTEXT_GRAPH_TYPE,
         "decode_handle": {
             "base_context_path": str(graph.get("base_context_path", "")).replace("\\", "/"),
         },
@@ -264,11 +233,61 @@ def typed_learning_graph_to_math_learning_graph(graph: Dict[str, object]) -> Dic
             "pool_x": _math_pool_x(pools),
             "edges": _math_edges(context_edges),
         },
+    }
+
+
+def typed_learning_graph_to_math_learning_sample(
+    graph: Dict[str, object],
+    *,
+    context_ref: str = "context.json",
+    sample_id: str = "",
+) -> Dict[str, object]:
+    if not isinstance(graph, dict):
+        raise ValueError("Typed learning graph must be a JSON object.")
+    if graph.get("graph_type") != GRAPH_TYPE:
+        raise ValueError(f"Unsupported typed learning graph graph_type: {graph.get('graph_type')}")
+    targets = graph.get("targets")
+    if not isinstance(targets, dict):
+        raise ValueError("Typed learning graph targets must be a JSON object.")
+    payload: Dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "graph_type": MATH_LEARNING_SAMPLE_TYPE,
+        "context_ref": context_ref.replace("\\", "/"),
         "supervision": {
             "targets": _math_targets(targets),
             "target_relations": _math_target_relations(graph.get("derived_relations", [])),
         },
     }
+    if sample_id:
+        payload["sample_id"] = sample_id
+    return payload
+
+
+def infer_math_dataset_schema(
+    context_graph: Dict[str, object],
+    learning_samples: List[Dict[str, object]],
+) -> Tuple[Dict[str, object], Dict[str, object]]:
+    if context_graph.get("graph_type") != MATH_CONTEXT_GRAPH_TYPE:
+        raise ValueError(f"Unsupported math context graph graph_type: {context_graph.get('graph_type')}")
+    rules = context_graph.get("rules")
+    if not isinstance(rules, dict):
+        raise ValueError("Math context graph rules must be a JSON object.")
+
+    task_stats = _infer_task_stats(rules.get("tasks"), learning_samples)
+    inferred = deepcopy(context_graph)
+    inferred_rules = inferred["rules"]
+    inferred_tasks: List[Dict[str, object]] = []
+    for task in _objects(inferred_rules.get("tasks"), "rules.tasks"):
+        task_id = _int_value(task.get("task_id"), "task.task_id")
+        stat = task_stats[str(task_id)]
+        updated = dict(task)
+        updated["max_slots"] = int(stat["count_bounds"][1])
+        updated["count_bounds"] = list(stat["count_bounds"])
+        updated["param_bounds"] = [list(row) for row in stat["param_bounds"]]
+        updated["slot_constraints"] = dict(stat["slot_count_per_disturbance"])
+        inferred_tasks.append(updated)
+    inferred_rules["tasks"] = inferred_tasks
+    return inferred, {"tasks": task_stats}
 
 
 def typed_learning_graph_to_dataset_profile(
@@ -276,6 +295,7 @@ def typed_learning_graph_to_dataset_profile(
     *,
     export_profile: Dict[str, object] | None = None,
     samples: List[Dict[str, object]] | None = None,
+    inferred_schema: Dict[str, object] | None = None,
 ) -> Dict[str, object]:
     if not isinstance(graph, dict):
         raise ValueError("Typed learning graph must be a JSON object.")
@@ -289,23 +309,24 @@ def typed_learning_graph_to_dataset_profile(
     return {
         "schema_version": SCHEMA_VERSION,
         "graph_type": PROFILE_GRAPH_TYPE,
-        "math_graph_type": MATH_GRAPH_TYPE,
+        "math_context_graph_type": MATH_CONTEXT_GRAPH_TYPE,
+        "math_learning_sample_type": MATH_LEARNING_SAMPLE_TYPE,
         "base_context_path": str(graph.get("base_context_path", "")).replace("\\", "/"),
         "export_profile": dict(export_profile or {}),
         "type_system": graph.get("type_system", {}),
         "pools": _profile_pools(pools),
         "tasks": _objects(graph.get("generation_tasks"), "generation_tasks"),
+        "inferred_schema": dict(inferred_schema or {}),
         "decode_contract": graph.get("decode_contract", {}),
         "samples": list(samples or []),
     }
 
 
-def summarize_math_learning_graph(graph: Dict[str, object]) -> Dict[str, object]:
-    if graph.get("graph_type") != MATH_GRAPH_TYPE:
-        raise ValueError(f"Unsupported math learning graph graph_type: {graph.get('graph_type')}")
+def summarize_math_context_graph(graph: Dict[str, object]) -> Dict[str, object]:
+    if graph.get("graph_type") != MATH_CONTEXT_GRAPH_TYPE:
+        raise ValueError(f"Unsupported math context graph graph_type: {graph.get('graph_type')}")
     rules = graph.get("rules", {})
     body = graph.get("graph", {})
-    supervision = graph.get("supervision", {})
     pool_counts = {
         str(pool["pool_id"]): int(pool["size"])
         for pool in _objects(rules.get("pools"), "rules.pools")
@@ -314,13 +335,6 @@ def summarize_math_learning_graph(graph: Dict[str, object]) -> Dict[str, object]
     if isinstance(body, dict):
         for edge in _objects(body.get("edges"), "graph.edges"):
             edge_counts[str(edge.get("edge_type_id", ""))] += 1
-    target_counts = {}
-    if isinstance(supervision, dict) and isinstance(supervision.get("targets"), dict):
-        target_counts = {
-            str(task_id): int(target.get("count", 0))
-            for task_id, target in supervision["targets"].items()
-            if isinstance(target, dict)
-        }
     return {
         "graph_type": graph.get("graph_type", ""),
         "base_context_path": graph.get("decode_handle", {}).get("base_context_path", "")
@@ -328,10 +342,6 @@ def summarize_math_learning_graph(graph: Dict[str, object]) -> Dict[str, object]
         else "",
         "pool_counts": dict(sorted(pool_counts.items())),
         "edge_counts": dict(sorted(edge_counts.items())),
-        "target_counts": dict(sorted(target_counts.items())),
-        "target_relation_count": len(
-            _objects(supervision.get("target_relations"), "supervision.target_relations")
-        ) if isinstance(supervision, dict) else 0,
     }
 
 
@@ -415,7 +425,7 @@ def typed_generated_graph_to_disturbance_graph(
         params = section_output["params"][slot]
         start_time = round(_number(params[0], "start_time_norm") * DAY_SECONDS)
         duration = round(_number(params[1], "duration_norm") * DAY_SECONDS)
-        speed_value = _number(params[2], "speed_limit_continuous")
+        speed_value = _speed_limit_from_norm(_number(params[2], "speed_limit_norm"))
         speed_limit = 0 if speed_value < speed_interruption_threshold else _clean_number(speed_value)
         if start_time < 0:
             raise ValueError(f"Decoded start_time must be >= 0 for {disturbance_id}.")
@@ -544,7 +554,7 @@ def _math_task_rules(tasks: List[Dict[str, object]]) -> List[Dict[str, object]]:
             "target_pool_id": _int_value(task.get("target_pool_id"), f"task_{task_id}.target_pool_id"),
             "max_slots": _int_value(task.get("max_slots"), f"task_{task_id}.max_slots"),
             "param_dim": param_dim,
-            "param_bounds": _task_param_bounds(task_id, param_dim),
+            "param_bounds": _fallback_param_bounds(task_id, param_dim),
         }
         constraints = _task_param_constraints(task_id)
         if constraints:
@@ -615,6 +625,97 @@ def _math_targets(targets: Dict[str, object]) -> Dict[str, object]:
     return result
 
 
+def _infer_task_stats(
+    tasks_value: object,
+    learning_samples: List[Dict[str, object]],
+) -> Dict[str, Dict[str, object]]:
+    stats: Dict[str, Dict[str, object]] = {}
+    for task in _objects(tasks_value, "rules.tasks"):
+        task_id = _int_value(task.get("task_id"), "task.task_id")
+        param_dim = _int_value(task.get("param_dim"), f"task_{task_id}.param_dim")
+        counts: List[int] = []
+        param_values: List[List[float]] = [[] for _ in range(param_dim)]
+        anchor_lengths: List[int] = []
+        param_lengths: List[int] = []
+
+        for sample in learning_samples:
+            supervision = sample.get("supervision")
+            if not isinstance(supervision, dict):
+                raise ValueError("Learning sample supervision must be a JSON object.")
+            targets = supervision.get("targets")
+            if not isinstance(targets, dict):
+                raise ValueError("Learning sample supervision.targets must be a JSON object.")
+            target = targets.get(str(task_id))
+            if not isinstance(target, dict):
+                raise ValueError(f"Learning sample is missing target: {task_id}")
+            count = _int_value(target.get("count"), f"target_{task_id}.count")
+            anchors = _values(target.get("anchor_index"), f"target_{task_id}.anchor_index")
+            params = _vectors(target.get("params"), f"target_{task_id}.params")
+            if len(anchors) != count or len(params) != count:
+                raise ValueError(f"Target {task_id} anchor_index and params lengths must equal count.")
+            counts.append(count)
+            if count > 0:
+                anchor_lengths.append(len(anchors) // count)
+                param_lengths.append(len(params) // count)
+            for row in params:
+                if len(row) != param_dim:
+                    raise ValueError(f"Target {task_id} params width must equal param_dim.")
+                for dim, value in enumerate(row):
+                    param_values[dim].append(float(value))
+
+        if not counts:
+            raise ValueError(f"No samples available to infer task {task_id} schema.")
+        param_bounds = [
+            _observed_bounds(values, fallback=_fallback_param_bounds(task_id, param_dim)[dim])
+            for dim, values in enumerate(param_values)
+        ]
+        stats[str(task_id)] = {
+            "count_bounds": [min(counts), max(counts)],
+            "param_bounds": param_bounds,
+            "observed_count_values": dict(sorted(Counter(counts).items())),
+            "observed_param_stats": [
+                _observed_param_stats(values)
+                for values in param_values
+            ],
+            "slot_count_per_disturbance": {
+                "anchor_count_bounds": _observed_bounds(anchor_lengths, fallback=[1, 1], integer=True),
+                "param_row_count_bounds": _observed_bounds(param_lengths, fallback=[1, 1], integer=True),
+            },
+        }
+    return stats
+
+
+def _observed_bounds(
+    values: List[float] | List[int],
+    *,
+    fallback: List[float] | List[int],
+    integer: bool = False,
+) -> List[float] | List[int]:
+    if not values:
+        return list(fallback)
+    lower = min(values)
+    upper = max(values)
+    if integer:
+        return [int(lower), int(upper)]
+    if lower == upper:
+        eps = max(1.0 / DAY_SECONDS, abs(float(lower)) * 0.01)
+        lower = max(0.0, float(lower) - eps)
+        upper = min(1.0, float(upper) + eps)
+    return [float(lower), float(upper)]
+
+
+def _observed_param_stats(values: List[float]) -> Dict[str, object]:
+    if not values:
+        return {"count": 0, "min": None, "max": None}
+    total = sum(values)
+    return {
+        "count": len(values),
+        "min": min(values),
+        "mean": total / len(values),
+        "max": max(values),
+    }
+
+
 def _math_target_relations(relations_value: object) -> List[Dict[str, object]]:
     result: List[Dict[str, object]] = []
     for relation in _objects(relations_value, "derived_relations"):
@@ -648,11 +749,11 @@ def _profile_pools(pools: Dict[str, object]) -> Dict[str, object]:
     return result
 
 
-def _task_param_bounds(task_id: int, param_dim: int) -> List[List[float]]:
+def _fallback_param_bounds(task_id: int, param_dim: int) -> List[List[float]]:
     if task_id == TASK_EVENT_DELAY:
         return [[1.0 / DAY_SECONDS, 1.0]]
     if task_id == TASK_SECTION_SPEED:
-        return [[0.0, 1.0], [1.0 / DAY_SECONDS, 1.0], [0.0, 350.0]]
+        return [[0.0, 1.0], [1.0 / DAY_SECONDS, 1.0], [0.0, 1.0]]
     return [[0.0, 1.0] for _ in range(param_dim)]
 
 
@@ -801,7 +902,6 @@ def _event_event_aux_edges(
 
     window = max(1, int(event_time_window))
     top_k = max(1, int(event_top_k))
-    max_station_order = max((anchor.station_order for anchor in anchors), default=0)
     candidates: Dict[Tuple[str, str], Dict[str, object]] = {}
     by_anchor: Dict[str, List[Tuple[Tuple[str, str], Tuple[float, int, str]]]] = defaultdict(list)
 
@@ -832,7 +932,7 @@ def _event_event_aux_edges(
             POOL_EVENT_ANCHORS,
             event_index[target],
             False,
-            _event_event_feature_vector(candidates[(source, target)], max_station_order),
+            _event_event_feature_vector(candidates[(source, target)]),
             {"source_id": source, "target_id": target},
         )
         for source, target in sorted(selected)
@@ -846,7 +946,6 @@ def _section_section_aux_edges(
 ) -> List[Dict[str, object]]:
     anchors = _sorted_section_anchors(base_context)
     window = max(0, int(section_order_window))
-    max_section_order = max((anchor.section_order for anchor in anchors), default=0)
     max_mileage = max((abs(float(anchor.mileage)) for anchor in anchors), default=1.0)
     edges: List[Dict[str, object]] = []
 
@@ -863,7 +962,7 @@ def _section_section_aux_edges(
                     POOL_SECTION_ANCHORS,
                     section_index[right.anchor_id],
                     False,
-                    _section_section_feature_vector(raw, max_section_order, max_mileage),
+                    _section_section_feature_vector(raw, max_mileage),
                     {"source_id": left.anchor_id, "target_id": right.anchor_id},
                 )
             )
@@ -932,7 +1031,7 @@ def _targets_from_disturbance_graph(
             [
                 _day_norm(_int_field(disturbance, "start_time")),
                 _day_norm(_int_field(disturbance, "duration")),
-                _clean_number(_float_field(disturbance, "speed_limit")),
+                _speed_limit_norm(_float_field(disturbance, "speed_limit")),
             ]
         )
         section_debug.append({"disturbance_id": disturbance_id, "anchor_id": anchor_id})
@@ -978,7 +1077,7 @@ def _generation_tasks(max_slots: int) -> List[Dict[str, object]]:
             "target_pool_id": POOL_SECTION_ANCHORS,
             "max_slots": slots,
             "param_dim": 3,
-            "param_names": ["start_time_norm", "duration_norm", "speed_limit_continuous"],
+            "param_names": ["start_time_norm", "duration_norm", "speed_limit_norm"],
         },
     ]
 
@@ -987,6 +1086,7 @@ def _decode_contract(max_slots: int, speed_interruption_threshold: float) -> Dic
     return {
         "day_seconds": DAY_SECONDS,
         "speed_interruption_threshold": float(speed_interruption_threshold),
+        "speed_limit_max": DEFAULT_SPEED_LIMIT_MAX,
         "generated_graph_type": GENERATED_GRAPH_TYPE,
         "tasks": {
             _task_key(TASK_EVENT_DELAY): {
@@ -1003,8 +1103,9 @@ def _decode_contract(max_slots: int, speed_interruption_threshold: float) -> Dic
                 "role": "on_section",
                 "disturbance_kind": "speed_limit",
                 "max_slots": int(max_slots),
-                "param_names": ["start_time_norm", "duration_norm", "speed_limit_continuous"],
-                "interruption_rule": "speed_limit = 0 if generated_speed < threshold else generated_speed",
+                "param_names": ["start_time_norm", "duration_norm", "speed_limit_norm"],
+                "speed_limit_rule": "speed_limit = speed_limit_norm * speed_limit_max",
+                "interruption_rule": "speed_limit = 0 if decoded_speed < threshold else decoded_speed",
             },
         },
     }
@@ -1049,12 +1150,15 @@ def _validate_task_output(
         elif task_id == TASK_SECTION_SPEED:
             start_time = round(values[0] * DAY_SECONDS)
             duration = round(values[1] * DAY_SECONDS)
+            speed_norm = values[2]
             if start_time < 0:
                 raise ValueError(f"Task output {task_key} params[{slot}] decodes to negative start_time.")
             if duration <= 0:
                 raise ValueError(f"Task output {task_key} params[{slot}] decodes to non-positive duration.")
             if start_time + duration > DAY_SECONDS:
                 raise ValueError(f"Task output {task_key} params[{slot}] exceeds 24:00:00.")
+            if speed_norm < 0.0 or speed_norm > 1.0:
+                raise ValueError(f"Task output {task_key} params[{slot}] speed_limit_norm must be in [0, 1].")
 
 
 def _disturbance_relation_vector(
@@ -1117,21 +1221,16 @@ def _event_event_raw_features(left: EventAnchor, right: EventAnchor, window: int
     return {
         "same_train": int(left.train_id == right.train_id),
         "same_station": int(left.station == right.station),
-        "same_direction": int(left.direction == right.direction),
         "planned_time_diff": time_diff,
         "planned_time_affinity": round(math.exp(-time_diff / max(1, window)), 8),
-        "station_order_diff": abs(int(left.station_order) - int(right.station_order)),
     }
 
 
-def _event_event_feature_vector(raw: Dict[str, object], max_station_order: int) -> List[float]:
+def _event_event_feature_vector(raw: Dict[str, object]) -> List[float]:
     return [
         float(raw["same_train"]),
         float(raw["same_station"]),
-        float(raw["same_direction"]),
         _day_norm(float(raw["planned_time_diff"])),
-        float(raw["planned_time_affinity"]),
-        _norm(float(raw["station_order_diff"]), max_station_order),
     ]
 
 
@@ -1141,7 +1240,6 @@ def _section_section_raw_features(left: SectionAnchor, right: SectionAnchor) -> 
     return {
         "shared_endpoint": int(bool(left_stations & right_stations)),
         "adjacent_section": int(left.end_station == right.start_station or right.end_station == left.start_station),
-        "same_direction": int(left.direction == right.direction),
         "section_order_diff": abs(int(left.section_order) - int(right.section_order)),
         "mileage_diff": abs(float(left.mileage) - float(right.mileage)),
     }
@@ -1149,14 +1247,9 @@ def _section_section_raw_features(left: SectionAnchor, right: SectionAnchor) -> 
 
 def _section_section_feature_vector(
     raw: Dict[str, object],
-    max_section_order: int,
     max_mileage: float,
 ) -> List[float]:
     return [
-        float(raw["shared_endpoint"]),
-        float(raw["adjacent_section"]),
-        float(raw["same_direction"]),
-        _norm(float(raw["section_order_diff"]), max_section_order),
         _norm(float(raw["mileage_diff"]), max_mileage),
     ]
 
@@ -1181,7 +1274,6 @@ def _event_section_raw_features(
         "event_station_is_section_endpoint": int(
             event_anchor.station in {section_anchor.start_station, section_anchor.end_station}
         ),
-        "same_direction": int(event_anchor.direction == section_anchor.direction),
         "station_to_section_order_distance": distance,
         "train_route_contains_section": int(section_key in route_sections),
     }
@@ -1190,10 +1282,8 @@ def _event_section_raw_features(
 def _event_section_feature_vector(raw: Dict[str, object], max_station_order: int) -> List[float]:
     distance = float(raw["station_to_section_order_distance"])
     return [
-        float(raw["event_station_is_section_endpoint"]),
-        float(raw["same_direction"]),
-        0.0 if distance < 0 else _norm(distance, max_station_order),
         float(raw["train_route_contains_section"]),
+        0.0 if distance < 0 else _norm(distance, max_station_order),
     ]
 
 
@@ -1274,6 +1364,14 @@ def _day_norm(value: int | float) -> float:
     return round(float(value) / DAY_SECONDS, 8)
 
 
+def _speed_limit_norm(value: int | float) -> float:
+    return round(float(value) / DEFAULT_SPEED_LIMIT_MAX, 8)
+
+
+def _speed_limit_from_norm(value: int | float) -> float:
+    return float(value) * DEFAULT_SPEED_LIMIT_MAX
+
+
 def _norm(value: int | float, max_value: int | float) -> float:
     denominator = max(1.0, float(max_value))
     return round(float(value) / denominator, 8)
@@ -1281,7 +1379,10 @@ def _norm(value: int | float, max_value: int | float) -> float:
 
 def _clean_number(value: float) -> int | float:
     value = float(value)
-    return int(value) if value.is_integer() else round(value, 8)
+    nearest = round(value)
+    if abs(value - nearest) <= 1e-6:
+        return int(nearest)
+    return round(value, 8)
 
 
 def _objects(value: Any, label: str) -> List[Dict[str, object]]:

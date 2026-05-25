@@ -7,7 +7,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Union
 
-MATH_GRAPH_TYPE = "vae_math_learning_graph"
+MATH_CONTEXT_GRAPH_TYPE = "vae_math_context_graph"
+MATH_LEARNING_SAMPLE_TYPE = "vae_math_learning_sample"
 MATH_GENERATED_GRAPH_TYPE = "vae_math_generated_graph"
 
 
@@ -16,13 +17,17 @@ def load_json_graphs(root: Union[str, Path], graph_type: str = "") -> List[Dict[
     if root_path.is_file():
         candidates = [root_path]
     else:
-        if (root_path / "graphs").is_dir():
-            graph_root = root_path / "graphs"
+        if (root_path / "context.json").is_file() and (root_path / "graph_samples").is_dir():
+            candidates = [root_path / "context.json"] + sorted((root_path / "graph_samples").rglob("*.json"))
+        elif (root_path / "graph_samples").is_dir():
+            graph_root = root_path / "graph_samples"
+            candidates = sorted(graph_root.rglob("*.json"))
         elif (root_path / "math_sample").is_dir():
             graph_root = root_path / "math_sample"
+            candidates = sorted(graph_root.rglob("*.json"))
         else:
             graph_root = root_path
-        candidates = sorted(graph_root.rglob("*.json"))
+            candidates = sorted(graph_root.rglob("*.json"))
 
     graphs: List[Dict[str, object]] = []
     for path in candidates:
@@ -45,12 +50,16 @@ def math_graph_structure_stats(graphs: Sequence[Dict[str, object]]) -> Dict[str,
     sample_count = 0
 
     for graph in graphs:
-        if graph.get("graph_type") != MATH_GRAPH_TYPE:
+        if graph.get("graph_type") == MATH_LEARNING_SAMPLE_TYPE:
+            supervision = _object(graph.get("supervision"), "supervision")
+            relation_counts.append(float(len(_objects(supervision.get("target_relations", []), "target_relations"))))
+            continue
+        if graph.get("graph_type") == MATH_CONTEXT_GRAPH_TYPE:
+            rules = _object(graph.get("rules"), "rules")
+            body = _object(graph.get("graph"), "graph")
+        else:
             continue
         sample_count += 1
-        rules = _object(graph.get("rules"), "rules")
-        body = _object(graph.get("graph"), "graph")
-        supervision = _object(graph.get("supervision"), "supervision")
         pool_size_by_id = {
             str(_int(pool.get("pool_id"), "pool_id")): _int(pool.get("size"), "size")
             for pool in _objects(rules.get("pools"), "rules.pools")
@@ -72,8 +81,6 @@ def math_graph_structure_stats(graphs: Sequence[Dict[str, object]]) -> Dict[str,
             source_degrees[edge_type_id].extend(float(value) for value in degree_counter.values())
         for edge_type_id, degree_counter in per_target_degree.items():
             target_degrees[edge_type_id].extend(float(value) for value in degree_counter.values())
-
-        relation_counts.append(float(len(_objects(supervision.get("target_relations", []), "target_relations"))))
 
     return {
         "sample_count": sample_count,
@@ -229,7 +236,7 @@ def disturbance_graph_stats(disturbance_graph: Dict[str, object]) -> Dict[str, o
 
 
 def _task_outputs(graph: Dict[str, object]) -> Dict[str, Dict[str, object]]:
-    if graph.get("graph_type") == MATH_GRAPH_TYPE:
+    if graph.get("graph_type") == MATH_LEARNING_SAMPLE_TYPE:
         supervision = _object(graph.get("supervision"), "supervision")
         return {
             str(task_id): _object(output, "supervision.targets[]")

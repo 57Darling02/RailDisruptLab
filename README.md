@@ -154,33 +154,29 @@ Graph fields are intentionally minimal:
 
 ## Math VAE Graph JSON
 
-`bench_build.py` exports the mathematical model input for the context-conditioned disturbance graph VAE while building the case library. RailGraph2Gurobi owns all railway semantics and compiles them into numeric pools, numeric edges, task rules, and supervision labels. The VAE reads only math graph samples; `dataset_profile.json` is a context-bound explanation file for humans and RailGraph2Gurobi checks.
+`bench_build.py` exports the mathematical model input for the context-conditioned disturbance graph VAE while building the case library. RailGraph2Gurobi owns all railway semantics and compiles them into numeric pools, numeric edges, task rules, and supervision labels. The VAE reads one shared context graph plus per-sample labels; `dataset_profile.json` is a context-bound explanation file for humans and RailGraph2Gurobi checks.
 
-The math learning graph contains:
+The shared context graph is `outputs/bench_build/case_library/context.json` and contains:
 
 | Field | Meaning |
 |---|---|
 | `rules` | Numeric pool, edge type, task, and parameter-domain rules |
 | `graph.pool_x` | Numeric candidate-pool feature matrices |
 | `graph.edges` | Numeric typed edges between pool indexes |
-| `supervision.targets` | Count, anchor-index, and parameter labels |
-| `supervision.target_relations` | Optional numeric relation features for encoder-side learning |
 | `decode_handle` | Opaque handle copied back for RailGraph2Gurobi decode |
 
-`bench_build.py` writes the timestamped graph library under `outputs/bench_build/<timestamp>/case_graph_library/` and publishes the latest copy to `outputs/bench_build/case_graph_library/`. The profile is bound to one `base_context_path` and retains feature names, anchor ids, task/edge descriptions, exporter settings, source config paths, and decode contracts. VAE code reads `graphs/` and does not read the profile.
+Per-sample labels are written under `outputs/bench_build/case_library/graph_samples/*.json` as `vae_math_learning_sample` files. Each sample keeps `context_ref`, `supervision.targets`, and `supervision.target_relations`; it does not duplicate `rules`, `graph.pool_x`, or `graph.edges`.
+
+`bench_build.py` writes one timestamped run under `outputs/bench_build/<timestamp>/` and updates `outputs/bench_build/case_library` as a symlink to that latest run. The profile is bound to one `base_context_path` and retains feature names, anchor ids, task/edge descriptions, exporter settings, source config paths, and decode contracts. VAE code reads `context.json` and `graph_samples/`; it does not read the profile.
 
 Train and generate from the repository root:
 
 ```bash
-python scripts/train_vae.py \
-  --graphs-root outputs/bench_build/case_graph_library \
-  --epochs 3 \
-  --batch-size 1 \
-  --message-passing-steps 2
+python scripts/train_vae.py
 
 python scripts/generate_vae.py \
-  --checkpoint outputs/train/model/model.pt \
-  --context-graphs outputs/bench_build/case_graph_library \
+  --checkpoint outputs/train/model.pt \
+  --context-graph outputs/bench_build/case_library/context.json \
   --num-samples 100 \
   --mode model
 ```
@@ -201,7 +197,8 @@ VAE output boundary:
 
 | Direction | Format |
 |---|---|
-| RailGraph2Gurobi -> VAE | `vae_math_learning_graph` |
+| RailGraph2Gurobi -> VAE train | `vae_math_context_graph` + `vae_math_learning_sample` |
+| RailGraph2Gurobi -> VAE generate | `vae_math_context_graph` |
 | VAE -> RailGraph2Gurobi | `vae_math_generated_graph` |
 | RailGraph2Gurobi internal/import | `disturbance_graph` |
 
@@ -228,12 +225,12 @@ Run all 4 batch stages in order:
 
 ```bash
 python -u scripts/bench_build.py            --config-root config/batch_case_configs_demo
-python -u scripts/bench_solve.py            --config-root outputs/bench_build/case_library > outputs/bench_solve.log 2>&1
-python -u scripts/bench_export_timetable.py --config-root outputs/bench_build/case_library > outputs/bench_export_timetable.log 2>&1
-python -u scripts/bench_analyze.py          --config-root outputs/bench_build/case_library > outputs/bench_analyze.log 2>&1
+python -u scripts/bench_solve.py            --config-root outputs/bench_build/case_library/configs > outputs/bench_solve.log 2>&1
+python -u scripts/bench_export_timetable.py --config-root outputs/bench_build/case_library/configs > outputs/bench_export_timetable.log 2>&1
+python -u scripts/bench_analyze.py          --config-root outputs/bench_build/case_library/configs > outputs/bench_analyze.log 2>&1
 ```
 
-`bench_build.py` creates `outputs/bench_build/<timestamp>/case_library/` and `outputs/bench_build/<timestamp>/case_graph_library/`, then publishes the latest copies to `outputs/bench_build/case_library/` and `outputs/bench_build/case_graph_library/`. It writes `summary.csv`, `summary.json`, and `bench_build.log` in the timestamped run directory while also printing to the terminal.
+`bench_build.py` creates `outputs/bench_build/<timestamp>/configs/`, `lp_simples/`, `graph_samples/`, `context.json`, `dataset_profile.json`, `summary.csv`, `summary.json`, and `bench_build.log`. It then points `outputs/bench_build/case_library` at the latest successful run.
 
 ### bench_solve.py Options
 

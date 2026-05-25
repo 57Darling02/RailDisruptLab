@@ -33,6 +33,7 @@ class RailDisturbanceVAE(nn.Module):
             int(task_id): {
                 "target_pool_id": int(defn["target_pool_id"]),
                 "max_slots": int(defn["max_slots"]),
+                "count_bounds": tuple(int(item) for item in defn.get("count_bounds", (0, int(defn["max_slots"])))),
                 "param_dim": int(defn["param_dim"]),
                 "param_bounds": tuple(tuple(float(item) for item in row) for row in defn.get("param_bounds", [])),
                 "param_constraints": tuple(dict(item) for item in defn.get("param_constraints", [])),
@@ -58,13 +59,13 @@ class RailDisturbanceVAE(nn.Module):
         )
         self.forward_message_layers = nn.ModuleDict(
             {
-                str(edge_type_id): _mlp(hidden_dim * 2, hidden_dim)
+                str(edge_type_id): _mlp(hidden_dim * 3, hidden_dim)
                 for edge_type_id in self.edge_feature_dims
             }
         )
         self.reverse_message_layers = nn.ModuleDict(
             {
-                str(edge_type_id): _mlp(hidden_dim * 2, hidden_dim)
+                str(edge_type_id): _mlp(hidden_dim * 3, hidden_dim)
                 for edge_type_id in self.edge_feature_dims
             }
         )
@@ -124,6 +125,7 @@ class RailDisturbanceVAE(nn.Module):
                 task_id: {
                     "target_pool_id": rule.target_pool_id,
                     "max_slots": rule.max_slots,
+                    "count_bounds": rule.count_bounds,
                     "param_dim": rule.param_dim,
                     "param_bounds": rule.param_bounds,
                     "param_constraints": rule.param_constraints,
@@ -228,8 +230,9 @@ class RailDisturbanceVAE(nn.Module):
                 edge_h = self.edge_encoders[str(edge_type_id)](edge.edge_attr.to(device))
 
                 source_h = current[source_pool_id].index_select(0, source_index)
+                target_h = current[target_pool_id].index_select(0, target_index)
                 forward_message = self.forward_message_layers[str(edge_type_id)](
-                    torch.cat([source_h, edge_h], dim=-1)
+                    torch.cat([source_h, target_h, edge_h], dim=-1)
                 )
                 _index_add_messages(aggregated[target_pool_id], degrees[target_pool_id], target_index, forward_message)
 
@@ -239,9 +242,10 @@ class RailDisturbanceVAE(nn.Module):
                     reverse_source_index = target_index.index_select(0, reverse_rows)
                     reverse_target_index = source_index.index_select(0, reverse_rows)
                     reverse_source_h = current[target_pool_id].index_select(0, reverse_source_index)
+                    reverse_target_h = current[source_pool_id].index_select(0, reverse_target_index)
                     reverse_edge_h = edge_h.index_select(0, reverse_rows)
                     reverse_message = self.reverse_message_layers[str(edge_type_id)](
-                        torch.cat([reverse_source_h, reverse_edge_h], dim=-1)
+                        torch.cat([reverse_source_h, reverse_target_h, reverse_edge_h], dim=-1)
                     )
                     _index_add_messages(
                         aggregated[source_pool_id],
@@ -332,6 +336,9 @@ def vae_loss(
     sample: MathGraphSample,
     outputs: Dict[str, object],
     kl_weight: float = 1.0,
+    count_weight: float = 1.0,
+    anchor_weight: float = 1.0,
+    param_weight: float = 1.0,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     device = outputs["prior_mu"].device
     count_loss = torch.tensor(0.0, device=device)
@@ -360,7 +367,12 @@ def vae_loss(
         outputs["prior_mu"],
         outputs["prior_logvar"],
     )
-    total = count_loss + anchor_loss + param_loss + float(kl_weight) * kl
+    total = (
+        float(count_weight) * count_loss
+        + float(anchor_weight) * anchor_loss
+        + float(param_weight) * param_loss
+        + float(kl_weight) * kl
+    )
     metrics = {
         "loss": float(total.detach().cpu()),
         "count_loss": float(count_loss.detach().cpu()),
@@ -379,7 +391,8 @@ def generated_outputs_to_json(
     for task_id, rule in sorted(sample.task_rules.items()):
         raw = task_outputs[task_id]
         count = int(torch.argmax(raw["count_logits"]).item())
-        count = max(0, min(count, rule.max_slots))
+        count_min, count_max = rule.count_bounds
+        count = max(int(count_min), min(count, int(count_max)))
         anchor_logits = raw["anchor_logits"]
         params = _repair_params(raw["params"], rule).detach().cpu()
         outputs[str(task_id)] = {
@@ -421,11 +434,28 @@ def _repair_params(params: torch.Tensor, rule: TaskRule) -> torch.Tensor:
             continue
         limit = float(constraint.get("limit", 1.0))
         repair_index = int(constraint.get("repair_param_index", indexes[-1]))
-        overflow = repaired[:, indexes[0]] + repaired[:, indexes[1]] - limit
-        needs_repair = overflow > 0
-        repaired[needs_repair, repair_index] = repaired[needs_repair, repair_index] - overflow[needs_repair]
-        lower, upper = rule.param_bounds[repair_index]
-        repaired[:, repair_index] = repaired[:, repair_index].clamp(float(lower), float(upper))
+        if repair_index not in indexes:
+            repair_index = indexes[-1]
+        other_index = indexes[0] if repair_index == indexes[1] else indexes[1]
+        repair_lower, repair_upper = (float(value) for value in rule.param_bounds[repair_index])
+        other_lower, other_upper = (float(value) for value in rule.param_bounds[other_index])
+
+        repaired[:, repair_index] = torch.minimum(
+            repaired[:, repair_index],
+            torch.full_like(repaired[:, repair_index], limit) - repaired[:, other_index],
+        ).clamp(repair_lower, repair_upper)
+
+        overflow = repaired[:, indexes[0]] + repaired[:, indexes[1]] > limit
+        if bool(overflow.any()):
+            repaired[overflow, other_index] = torch.minimum(
+                repaired[overflow, other_index],
+                torch.full_like(repaired[overflow, other_index], limit) - repaired[overflow, repair_index],
+            )
+            repaired[:, other_index] = repaired[:, other_index].clamp(other_lower, other_upper)
+            repaired[:, repair_index] = torch.minimum(
+                repaired[:, repair_index],
+                torch.full_like(repaired[:, repair_index], limit) - repaired[:, other_index],
+            ).clamp(repair_lower, repair_upper)
     return repaired
 
 

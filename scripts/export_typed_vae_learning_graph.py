@@ -20,19 +20,20 @@ from core.vae_learning_graph import (
     DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
     relative_to_repo,
     scenario_to_typed_vae_learning_graph,
-    summarize_math_learning_graph,
+    summarize_math_context_graph,
     typed_learning_graph_to_dataset_profile,
-    typed_learning_graph_to_math_learning_graph,
+    typed_learning_graph_to_math_context_graph,
+    typed_learning_graph_to_math_learning_sample,
 )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export math VAE learning graphs and one dataset profile.")
+    parser = argparse.ArgumentParser(description="Export a compact math VAE graph library.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--config", help="Source YAML config for single-graph export.")
     source.add_argument("--config-glob", help="Glob pattern for batch export.")
-    parser.add_argument("--output", help="Output math JSON path for single-graph export.")
-    parser.add_argument("--output-dir", help="Output dataset root for batch export. Math samples are written to <output-dir>/graphs.")
+    parser.add_argument("--output", help="Output sample JSON path for single-config export; context.json is written beside it.")
+    parser.add_argument("--output-dir", help="Output dataset root for batch export. Samples are written to <output-dir>/graph_samples.")
     parser.add_argument("--profile-output", help="Optional dataset profile JSON path.")
     parser.add_argument("--no-profile", action="store_true", help="Do not write dataset profile JSON.")
     parser.add_argument("--max-slots", type=int, default=DEFAULT_MAX_SLOTS)
@@ -57,9 +58,16 @@ def _export_single(args: argparse.Namespace) -> None:
     config_path = _resolve(args.config)
     output_path = _resolve(args.output)
     typed_graph = _build_typed_graph(config_path, args)
-    graph = typed_learning_graph_to_math_learning_graph(typed_graph)
+    context = typed_learning_graph_to_math_context_graph(typed_graph)
+    sample = typed_learning_graph_to_math_learning_sample(
+        typed_graph,
+        context_ref="context.json",
+        sample_id=config_path.stem,
+    )
 
-    _write_json(output_path, graph)
+    context_path = _context_path_for_sample(output_path)
+    _write_json(context_path, context)
+    _write_json(output_path, sample)
     if not args.no_profile:
         profile_path = _resolve(args.profile_output) if args.profile_output else _default_profile_path(output_path)
         profile = typed_learning_graph_to_dataset_profile(
@@ -67,17 +75,18 @@ def _export_single(args: argparse.Namespace) -> None:
             export_profile=_export_profile(args),
             samples=[
                 _sample_record(
-                    math_graph_path=output_path,
+                    learning_sample_path=output_path,
+                    context_graph_path=context_path,
                     source_config_path=config_path,
                 )
             ],
         )
         _write_json(profile_path, profile)
         print(f"Dataset profile exported: {profile_path}")
-    summary = summarize_math_learning_graph(graph)
-    print(f"Math VAE learning graph exported: {output_path}")
+    summary = summarize_math_context_graph(context)
+    print(f"Math VAE context graph exported: {context_path}")
+    print(f"Math VAE learning sample exported: {output_path}")
     print(f"Pools: {summary['pool_counts']}")
-    print(f"Targets: {summary['target_counts']}")
     print(f"Context edges: {sum(summary['edge_counts'].values())}")
 
 
@@ -89,10 +98,12 @@ def _export_batch(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"No configs matched --config-glob: {args.config_glob}")
 
     output_dir = _resolve(args.output_dir)
-    graph_dir = output_dir / "graphs"
-    graph_dir.mkdir(parents=True, exist_ok=True)
+    sample_dir = output_dir / "graph_samples"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    context_path = output_dir / "context.json"
     used_names: Dict[str, int] = {}
     profile_source_graph: Dict[str, object] | None = None
+    shared_context: Dict[str, object] | None = None
     sample_records: List[Dict[str, object]] = []
     for config_path in config_paths:
         typed_graph = _build_typed_graph(config_path, args)
@@ -101,13 +112,30 @@ def _export_batch(args: argparse.Namespace) -> None:
         elif typed_graph.get("base_context_path") != profile_source_graph.get("base_context_path"):
             raise ValueError("Batch export only supports one base_context_path per dataset profile.")
 
-        graph = typed_learning_graph_to_math_learning_graph(typed_graph)
-        file_name = _graph_file_name(config_path, used_names)
-        graph_path = graph_dir / file_name
-        _write_json(graph_path, graph)
-        sample_records.append(_sample_record(math_graph_path=graph_path, source_config_path=config_path))
+        context = typed_learning_graph_to_math_context_graph(typed_graph)
+        if shared_context is None:
+            shared_context = context
+            _write_json(context_path, context)
+        elif context != shared_context:
+            raise ValueError("Batch export only supports one shared context graph.")
 
-    print(f"Math VAE learning graphs exported: {graph_dir}")
+        sample = typed_learning_graph_to_math_learning_sample(
+            typed_graph,
+            context_ref="context.json",
+            sample_id=config_path.stem,
+        )
+        file_name = _graph_file_name(config_path, used_names)
+        sample_path = sample_dir / file_name
+        _write_json(sample_path, sample)
+        sample_records.append(
+            _sample_record(
+                learning_sample_path=sample_path,
+                context_graph_path=context_path,
+                source_config_path=config_path,
+            )
+        )
+
+    print(f"Math VAE graph library exported: {output_dir}")
     if not args.no_profile and profile_source_graph is not None:
         profile_path = _resolve(args.profile_output) if args.profile_output else output_dir / "dataset_profile.json"
         profile = typed_learning_graph_to_dataset_profile(
@@ -117,7 +145,7 @@ def _export_batch(args: argparse.Namespace) -> None:
         )
         _write_json(profile_path, profile)
         print(f"Dataset profile exported: {profile_path}")
-    print(f"Graphs: {len(config_paths)}")
+    print(f"Samples: {len(config_paths)}")
 
 
 def _build_typed_graph(config_path: Path, args: argparse.Namespace) -> Dict[str, object]:
@@ -147,15 +175,26 @@ def _glob_configs(pattern: str) -> List[Path]:
 
 
 def _graph_file_name(config_path: Path, used_names: Dict[str, int]) -> str:
-    stem = _sanitize(config_path.stem)
+    stem = _sanitize(_case_id_from_path(config_path))
     used_names[stem] = used_names.get(stem, 0) + 1
     if used_names[stem] == 1:
         return f"{stem}.json"
     return f"{stem}_{used_names[stem]:04d}.json"
 
 
+def _case_id_from_path(config_path: Path) -> str:
+    if config_path.name == "config.yaml":
+        return config_path.parent.name
+    return config_path.stem
+
+
 def _default_profile_path(output_path: Path) -> Path:
-    return output_path.parent / "dataset_profile.json"
+    return _context_path_for_sample(output_path).parent / "dataset_profile.json"
+
+
+def _context_path_for_sample(sample_path: Path) -> Path:
+    root = sample_path.parent.parent if sample_path.parent.name == "graph_samples" else sample_path.parent
+    return root / "context.json"
 
 
 def _export_profile(args: argparse.Namespace) -> Dict[str, object]:
@@ -168,9 +207,10 @@ def _export_profile(args: argparse.Namespace) -> Dict[str, object]:
     }
 
 
-def _sample_record(*, math_graph_path: Path, source_config_path: Path) -> Dict[str, object]:
+def _sample_record(*, learning_sample_path: Path, context_graph_path: Path, source_config_path: Path) -> Dict[str, object]:
     return {
-        "math_graph_path": relative_to_repo(math_graph_path, REPO_ROOT),
+        "learning_sample_path": relative_to_repo(learning_sample_path, REPO_ROOT),
+        "context_graph_path": relative_to_repo(context_graph_path, REPO_ROOT),
         "source_config_path": relative_to_repo(source_config_path, REPO_ROOT),
     }
 

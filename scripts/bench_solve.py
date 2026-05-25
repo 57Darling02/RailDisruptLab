@@ -21,9 +21,9 @@ from core.solver import solve_lp
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Batch run main solve stage for case configs produced by case_library_builder.py."
+        description="Batch run main solve stage for configs produced by bench_build.py."
     )
-    parser.add_argument("--config-root", default="config/batch_case_configs_demo")
+    parser.add_argument("--config-root", default="outputs/bench_build/latest/configs")
     parser.add_argument("--glob", default="**/*.yaml")
     parser.add_argument("--start-index", type=int, default=1, help="1-based start index (inclusive).")
     parser.add_argument("--end-index", type=int, default=0, help="1-based end index (inclusive, 0 = no upper bound).")

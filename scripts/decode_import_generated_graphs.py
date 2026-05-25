@@ -252,7 +252,7 @@ def _resolve(path_text: str) -> Path:
     path = Path(path_text)
     if path.is_absolute():
         return path
-    return (REPO_ROOT / path).resolve()
+    return REPO_ROOT / path
 
 
 def _clean_path_text(path_text: str) -> str:
@@ -265,9 +265,9 @@ def _join_path_text(root_text: str, name: str) -> str:
 
 
 def _config_path_text(path: Path) -> str:
-    resolved = path.resolve()
+    resolved = path if path.is_absolute() else REPO_ROOT / path
     try:
-        relative = resolved.relative_to(REPO_ROOT.resolve())
+        relative = resolved.relative_to(REPO_ROOT)
     except ValueError:
         return _to_posix(resolved)
     return _to_posix(relative)
