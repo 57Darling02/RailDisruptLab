@@ -4,14 +4,13 @@ import argparse
 import sys
 from pathlib import Path
 
+from analysis.io import timetable_from_base_context
 from analysis.scenario_report import build_case_scenario_report_data
 from core.builder import build_model
 from core.exporter import export_lp
-from core.loader import load_config, load_mileage_table, load_timetable
+from core.loader import load_config
 from core.postprocess import export_adjusted_timetable
 from core.solver import load_solution_values, solve_lp
-from core.translator import translate
-from core.validator import validate_inputs
 
 
 def _to_hms(seconds: int) -> str:
@@ -36,11 +35,12 @@ def _scenario_config_to_payload(scenarios) -> dict:
             {
                 "start_station": item.start_station,
                 "end_station": item.end_station,
-                "extra_seconds": item.extra_seconds,
+                "limit_speed": item.limit_speed,
                 "start_time": f"{item.start_time // 3600:02d}:{(item.start_time % 3600) // 60:02d}:{item.start_time % 60:02d}",
                 "end_time": f"{item.end_time // 3600:02d}:{(item.end_time % 3600) // 60:02d}:{item.end_time % 60:02d}",
             }
             for item in scenarios.speed_limits
+            if item.limit_speed > 0
         ],
         "interruptions": [
             {
@@ -49,7 +49,8 @@ def _scenario_config_to_payload(scenarios) -> dict:
                 "start_time": f"{item.start_time // 3600:02d}:{(item.start_time % 3600) // 60:02d}:{item.start_time % 60:02d}",
                 "end_time": f"{item.end_time // 3600:02d}:{(item.end_time % 3600) // 60:02d}:{item.end_time % 60:02d}",
             }
-            for item in scenarios.interruptions
+            for item in scenarios.speed_limits
+            if item.limit_speed == 0
         ],
     }
 
@@ -63,14 +64,16 @@ def _build_scenario_note(config) -> str:
         )
 
     for speed_limit in config.scenarios.speed_limits:
+        if speed_limit.limit_speed == 0:
+            continue
         parts.append(
             "speed_limit: "
             f"segment={speed_limit.start_station}->{speed_limit.end_station}, "
-            f"+{speed_limit.extra_seconds}s, "
+            f"limit={speed_limit.limit_speed:g}km/h, "
             f"window={_to_hms(speed_limit.start_time)}-{_to_hms(speed_limit.end_time)}"
         )
 
-    for interruption in config.scenarios.interruptions:
+    for interruption in (item for item in config.scenarios.speed_limits if item.limit_speed == 0):
         parts.append(
             "interruption: "
             f"segment={interruption.start_station}->{interruption.end_station}, "
@@ -90,17 +93,7 @@ def _build_scenario_note(config) -> str:
 
 def _load_translated(config_path: Path):
     config = load_config(config_path)
-    timetable_bundle = load_timetable(
-        config.input.timetable_path,
-        config.input.timetable_sheet_name,
-    )
-    mileage_bundle = load_mileage_table(
-        config.input.mileage_path,
-        config.input.mileage_sheet_name,
-    )
-    validated = validate_inputs(config, timetable_bundle, mileage_bundle)
-    translated = translate(validated, config)
-    return config, translated
+    return config, config.base_context.translated
 
 
 def cmd_build(config_path: Path) -> int:
@@ -147,6 +140,7 @@ def cmd_analyze(config_path: Path) -> int:
             config.analyze.metrics_output_path,
             plan_sheet_name=config.analyze.plan_timetable_sheet_name,
             adjusted_sheet_name=config.analyze.adjusted_timetable_sheet_name,
+            plan_df=timetable_from_base_context(config.base_context),
         )
         print(f"Metrics exported: {metrics_path}")
 
@@ -169,8 +163,7 @@ def cmd_analyze(config_path: Path) -> int:
             subtitle=_build_scenario_note(config),
             sheet_name=config.analyze.adjusted_timetable_sheet_name,
             scenario_overlay=scenario_overlay,
-            mileage_path=config.input.mileage_path,
-            mileage_sheet_name=config.input.mileage_sheet_name,
+            station_order=config.base_context.station_order,
         )
         print(f"Plot exported: {plot_path}")
     return 0

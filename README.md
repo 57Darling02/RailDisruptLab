@@ -1,40 +1,92 @@
 # RailGraph2Gurobi
 
-4-stage pipeline: **build → solve → export-timetable → analyze**
+4-stage pipeline: **build -> solve -> export-timetable -> analyze**.
 
 ## Quick Start
 
-```bash
-# Run all stages at once
-python main.py run --config config/delays_demo.yaml
+Prepare the BaseContext once for the timetable/mileage pair:
 
-# Or run each stage separately
-python main.py build            --config config/delays_demo.yaml
-python main.py solve            --config config/delays_demo.yaml
-python main.py export-timetable --config config/delays_demo.yaml
-python main.py analyze          --config config/delays_demo.yaml
+```bash
+python scripts/prepare_base_context.py \
+  --timetable-path inputs/下行计划时刻表.xlsx \
+  --mileage-path inputs/区间里程.xlsx
 ```
 
+Then run the pipeline with any config that references the generated context:
+
+```bash
+python main.py run --config config/mixed_scenarios_demo.yaml
+```
+
+Or run each stage separately:
+
+```bash
+python main.py build            --config config/mixed_scenarios_demo.yaml
+python main.py solve            --config config/mixed_scenarios_demo.yaml
+python main.py export-timetable --config config/mixed_scenarios_demo.yaml
+python main.py analyze          --config config/mixed_scenarios_demo.yaml
+```
+
+## BaseContext
+
+`scripts/prepare_base_context.py` converts timetable and mileage Excel files into a stable base context JSON:
+
+```text
+inputs/context_<timetable_stem>.json
+```
+
+The context stores validated input rows, translated train/event/section data, mileage mapping, `EventAnchor`, and `SectionAnchor`.
+
+```bash
+python scripts/prepare_base_context.py \
+  --timetable-path inputs/上行计划时刻表.xlsx \
+  --mileage-path inputs/区间里程.xlsx
+
+python scripts/prepare_base_context.py \
+  --timetable-path inputs/下行计划时刻表.xlsx \
+  --mileage-path inputs/区间里程.xlsx
+```
+
+Optional arguments:
+
+| Option | Default |
+|---|---|
+| `--timetable-sheet-name` | `Sheet1` |
+| `--mileage-sheet-name` | `Sheet1` |
+| `--output-path` | `inputs/context_<timetable_stem>.json` |
+
 ## Config
+
+Configs only reference `project.base_context_path`. The timetable and mileage files are no longer read directly during build/solve/export/analyze.
 
 ```yaml
 project:
   name: my_case
   output_dir: outputs/my_case
-  timetable_path: inputs/timetable.xlsx
-  mileage_path: inputs/mileage.xlsx
-  timetable_sheet_name: Sheet1
-  mileage_sheet_name: Sheet1
+  base_context_path: inputs/context_下行计划时刻表.json
 
 build:
   scenarios:
-    delays:       []   # {train_id, station, event_type, seconds}
-    speed_limits: []   # {start_station, end_station, extra_seconds, start_time, end_time}
-    interruptions: []  # {start_station, end_station, start_time, end_time}
+    delays:
+      - train_id: G101
+        station: 济南西
+        event_type: dep
+        seconds: 600
+    speed_limits:
+      - start_station: 济南西
+        end_station: 泰安
+        start_time: "08:00:00"
+        duration: 3600
+        limit_speed: 80
+      - start_station: 泰安
+        end_station: 曲阜东
+        start_time: "09:00:00"
+        duration: 1800
+        limit_speed: 0
 
 solve:
-  lp_path: ""                      # override LP input path (default: {output_dir}/{name}.lp)
-  objective_mode: abs              # abs | delay
+  lp_path: ""
+  objective_mode: abs
   objective_delay_weight: 1.0
   cancellation_enabled: false
   cancellation_penalty_weight: 1000.0
@@ -45,18 +97,28 @@ solve:
   tolerance_delay_seconds: 7200
 
 export-timetable:
-  sol_path: ""                     # override SOL input path (default: {output_dir}/{name}.sol)
+  sol_path: ""
 
 analyze:
   enable_metrics: true
   enable_plot: false
   plot_grid: true
   plot_title: Train Timetable
-  adj_timetable_path: ""           # override adjusted timetable input
+  adj_timetable_path: ""
   adj_timetable_sheet_name: Sheet1
 ```
 
-Stage outputs (convention, no config needed):
+Scenario rules:
+
+| Scenario | Fields | Notes |
+|---|---|---|
+| Delay | `train_id`, `station`, `event_type`, `seconds` | Or use `event_anchor_id` directly |
+| Speed limit | `start_station`, `end_station`, `start_time`, `duration`, `limit_speed` | Or use `section_anchor_id` directly |
+| Interruption | same as speed limit | Use `limit_speed: 0` |
+
+When both anchor id and semantic fields are provided, they must resolve to the same BaseContext anchor.
+
+Stage outputs:
 
 | Stage | Output |
 |---|---|
@@ -65,53 +127,121 @@ Stage outputs (convention, no config needed):
 | export-timetable | `{output_dir}/adjusted_timetable.xlsx` |
 | analyze | `{output_dir}/analysis_metrics.xlsx`, `{output_dir}/timetable_plot.png` |
 
-## Input Format
+## Disturbance Graph JSON
 
-Timetable (first 4 columns): `train_id | station | arrival_time | departure_time`
+Use disturbance graph JSON as the recommended exchange format for generated scenarios. The graph references an existing `BaseContext`; it does not define new anchors.
 
-Mileage (first 2 columns): `station | mileage`
+```bash
+python scripts/export_disturbance_graph.py \
+  --config config/mixed_scenarios_demo.yaml \
+  --output outputs/mixed_scenarios_demo/disturbance_graph.json
 
-**Note:** scenario `start_station → end_station` must match the actual train travel direction in the timetable.
+python scripts/import_disturbance_graph.py \
+  --graph outputs/mixed_scenarios_demo/disturbance_graph.json \
+  --base-config config/base_demo.yaml \
+  --output-config config/generated_from_graph.yaml
+```
+
+Graph fields are intentionally minimal:
+
+| Field | Meaning |
+|---|---|
+| `base_context_path` | Source `BaseContext` for all anchor ids |
+| `disturbances` | `delay` or `speed_limit` facts |
+| `role_edges` | `on_event` or `on_section` anchor links |
+
+`speed_limit: 0` represents an interruption. `end_time` is not stored in the graph; it is always derived as `start_time + duration`.
+
+## Math VAE Graph JSON
+
+`bench_build.py` exports the mathematical model input for the context-conditioned disturbance graph VAE while building the case library. RailGraph2Gurobi owns all railway semantics and compiles them into numeric pools, numeric edges, task rules, and supervision labels. The VAE reads one shared context graph plus per-sample labels; `dataset_profile.json` is a context-bound explanation file for humans and RailGraph2Gurobi checks.
+
+The shared context graph is `outputs/bench_build/case_library/context.json` and contains:
+
+| Field | Meaning |
+|---|---|
+| `rules` | Numeric pool, edge type, task, and parameter-domain rules |
+| `graph.pool_x` | Numeric candidate-pool feature matrices |
+| `graph.edges` | Numeric typed edges between pool indexes |
+| `decode_handle` | Opaque handle copied back for RailGraph2Gurobi decode |
+
+Per-sample labels are written under `outputs/bench_build/case_library/graph_samples/*.json` as `vae_math_learning_sample` files. Each sample keeps `context_ref`, `supervision.targets`, and `supervision.target_relations`; it does not duplicate `rules`, `graph.pool_x`, or `graph.edges`.
+
+`bench_build.py` writes one timestamped run under `outputs/bench_build/<timestamp>/` and updates `outputs/bench_build/case_library` as a symlink to that latest run. The profile is bound to one `base_context_path` and retains feature names, anchor ids, task/edge descriptions, exporter settings, source config paths, and decode contracts. VAE code reads `context.json` and `graph_samples/`; it does not read the profile.
+
+Train and generate from the repository root:
+
+```bash
+python scripts/train_vae.py
+
+python scripts/generate_vae.py \
+  --checkpoint outputs/train/model.pt \
+  --context-graph outputs/bench_build/case_library/context.json \
+  --num-samples 100 \
+  --mode model
+```
+
+Each generate run creates `outputs/generate/YYYY-MM-DD_HH-MM-SS/`; generated math graph JSON files are written under that run's `math_sample/` directory.
+
+Generated math graph decode:
+
+```bash
+python scripts/decode_import_generated_graphs.py \
+  --generated-graphs outputs/generate/<run> \
+  --base-config config/base_demo.yaml
+```
+
+The generated math graph contains only `decode_handle` and numeric `task_outputs`. RailGraph2Gurobi decodes task ids, pool indexes, and parameter vectors back into a standard `disturbance_graph`.
+
+VAE output boundary:
+
+| Direction | Format |
+|---|---|
+| RailGraph2Gurobi -> VAE train | `vae_math_context_graph` + `vae_math_learning_sample` |
+| RailGraph2Gurobi -> VAE generate | `vae_math_context_graph` |
+| VAE -> RailGraph2Gurobi | `vae_math_generated_graph` |
+| RailGraph2Gurobi internal/import | `disturbance_graph` |
 
 ## Batch Pipeline
 
-Generate case configs (70 cases by default):
+Prepare the context first:
+
+```bash
+python scripts/prepare_base_context.py \
+  --timetable-path inputs/下行计划时刻表.xlsx \
+  --mileage-path inputs/区间里程.xlsx
+```
+
+Generate case configs:
 
 ```bash
 python -u scripts/case_library_builder.py \
-  --output-root tests/case_library \
-  --project-output-root outputs/case_library \
+  --output-root config/batch_case_configs_demo \
+  --interruption-count 10 \
   --clean > outputs/case_library_builder.log 2>&1
 ```
 
 Run all 4 batch stages in order:
 
 ```bash
-python -u scripts/bench_build.py           --config-root tests/case_library > outputs/bench_build.log 2>&1
-python -u scripts/bench_solve.py           --config-root tests/case_library > outputs/bench_solve.log 2>&1
-python -u scripts/bench_export_timetable.py --config-root tests/case_library > outputs/bench_export_timetable.log 2>&1
-python -u scripts/bench_analyze.py         --config-root tests/case_library > outputs/bench_analyze.log 2>&1
+python -u scripts/bench_build.py            --config-root config/batch_case_configs_demo
+python -u scripts/bench_solve.py            --config-root outputs/bench_build/case_library/configs > outputs/bench_solve.log 2>&1
+python -u scripts/bench_export_timetable.py --config-root outputs/bench_build/case_library/configs > outputs/bench_export_timetable.log 2>&1
+python -u scripts/bench_analyze.py          --config-root outputs/bench_build/case_library/configs > outputs/bench_analyze.log 2>&1
 ```
 
-Use `tail -f outputs/<script>.log` to monitor progress.
+`bench_build.py` creates `outputs/bench_build/<timestamp>/configs/`, `lp_simples/`, `graph_samples/`, `context.json`, `dataset_profile.json`, `summary.csv`, `summary.json`, and `bench_build.log`. It then points `outputs/bench_build/case_library` at the latest successful run.
 
 ### bench_solve.py Options
 
 | Option | Default | Description |
 |---|---|---|
-| `--start-index` | `1` | 1-based start index (inclusive) |
-| `--end-index` | `0` | 1-based end index (inclusive, 0 = no upper bound) |
+| `--start-index` | `1` | 1-based start index, inclusive |
+| `--end-index` | `0` | 1-based end index, inclusive, `0` means no upper bound |
 | `--workers` | `1` | parallel solver processes |
-| `--threads-per-solve` | `0` | Gurobi threads per solve (0 = `cpu_count // workers`) |
-| `--time-limit` | `0` | seconds per solve (0 = no limit); timeout with feasible sol → `timeout` |
-| `--mip-gap` | `0` | relative MIP gap (0 = Gurobi default ~1e-4); e.g. `0.01` = 1% |
-
-Multi-core example:
-
-```bash
-python -u scripts/bench_solve.py --config-root tests/case_library \
-  --workers 4 --threads-per-solve 32 > outputs/bench_solve.log 2>&1
-```
+| `--threads-per-solve` | `0` | Gurobi threads per solve, `0` means `cpu_count // workers` |
+| `--time-limit` | `0` | seconds per solve, `0` means no limit |
+| `--mip-gap` | `0` | relative MIP gap, `0` uses Gurobi default |
 
 ## Import External Solutions
 
@@ -128,7 +258,9 @@ python -u scripts/bench_export_timetable.py --config-root tests/generated_config
 python -u scripts/bench_analyze.py          --config-root tests/generated_configs > outputs/bench_analyze.log 2>&1
 ```
 
-### Import `.lp` files
+### Legacy import `.lp` files
+
+Prefer disturbance graph JSON for scenario exchange. `import_lp.py` is kept only for external LP compatibility and best-effort scenario inference.
 
 ```bash
 python -u scripts/import_lp.py \
@@ -139,7 +271,7 @@ python -u scripts/import_lp.py \
   --scenario-inference require > outputs/import_lp.log 2>&1
 ```
 
-If the LP uses a different timetable/mileage than the base config, add `--timetable-path` / `--mileage-path` overrides. To skip scenario inference: `--scenario-inference off`.
+If the LP uses a different base context than the base config, pass `--base-context-path inputs/context_下行计划时刻表.json`. To skip scenario inference, use `--scenario-inference off`.
 
 ```bash
 python -u scripts/bench_solve.py            --config-root tests/generated_configs_lp > outputs/bench_solve.log 2>&1
@@ -156,6 +288,7 @@ python -u scripts/bench_analyze.py          --config-root tests/generated_config
 |---|---|
 | `No module named core` | Run from repository root |
 | `Missing dependency` | Install `pyyaml openpyxl pandas matplotlib gurobipy` |
+| `Missing required config field: project.base_context_path` | Run `prepare_base_context.py` and reference the generated JSON |
+| `Unknown event_anchor_id` or `Unknown section_anchor_id` | Use anchors from the referenced BaseContext |
 | `No stations found for plotting` | Set `analyze.enable_plot: false` |
-| `Missing required config field: project.timetable_path` | Fill required `project` fields |
-| `scenario_inference_status=failed` | Verify LP naming convention matches this project; check `--timetable-path` / `--mileage-path` point to the correct inputs |
+| `scenario_inference_status=failed` | Verify LP naming convention and the selected BaseContext |

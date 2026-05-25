@@ -20,10 +20,8 @@ from analysis.scenario_report import (
     generate_batch_scenario_report,
     generate_case_scenario_report,
 )
-from core.loader import load_config, load_mileage_table, load_timetable
-from core.translator import translate
+from core.loader import load_config
 from core.types import AppConfig, ScenarioConfig, TranslatedData
-from core.validator import validate_inputs
 from main import cmd_analyze
 
 
@@ -33,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config-root",
-        default="tests/case_library",
+        default="outputs/bench_build/latest/configs",
         help="Root directory containing case config files.",
     )
     parser.add_argument(
@@ -143,11 +141,12 @@ def _scenario_config_to_payload(scenarios: ScenarioConfig) -> Dict[str, object]:
             {
                 "start_station": item.start_station,
                 "end_station": item.end_station,
-                "extra_seconds": item.extra_seconds,
+                "limit_speed": item.limit_speed,
                 "start_time": _seconds_to_hms(item.start_time),
                 "end_time": _seconds_to_hms(item.end_time),
             }
             for item in scenarios.speed_limits
+            if item.limit_speed > 0
         ],
         "interruptions": [
             {
@@ -156,16 +155,14 @@ def _scenario_config_to_payload(scenarios: ScenarioConfig) -> Dict[str, object]:
                 "start_time": _seconds_to_hms(item.start_time),
                 "end_time": _seconds_to_hms(item.end_time),
             }
-            for item in scenarios.interruptions
+            for item in scenarios.speed_limits
+            if item.limit_speed == 0
         ],
     }
 
 
 def _build_translated_context(config: AppConfig) -> TranslatedData:
-    timetable_table = load_timetable(config.input.timetable_path, sheet_name=config.input.timetable_sheet_name)
-    mileage_table = load_mileage_table(config.input.mileage_path, sheet_name=config.input.mileage_sheet_name)
-    validated = validate_inputs(config, timetable_table, mileage_table)
-    return translate(validated, config)
+    return config.base_context.translated
 
 
 def _finalize_status(analyze_status: str, scenario_status: str) -> Tuple[str, str]:

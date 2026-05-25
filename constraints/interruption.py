@@ -6,7 +6,7 @@ from core.builder import BuildContext
 def apply_interruption_constraints(ctx: BuildContext) -> None:
     big_m = float(ctx.config.solver.big_m)
 
-    for interruption in ctx.config.scenarios.interruptions:
+    for interruption in (item for item in ctx.config.scenarios.speed_limits if item.limit_speed == 0):
         section = (interruption.start_station, interruption.end_station)
 
         for train_id, sections in ctx.translated.train_sections.items():

@@ -1,0 +1,25 @@
+data:
+  graphs_root: outputs/bench_build/latest
+  limit: 0
+
+model:
+  hidden_dim: 64
+  latent_dim: 16
+  message_passing_steps: 2
+
+optimization:
+  epochs: 800
+  batch_size: 8
+  lr: 0.0003
+  seed: 1
+  device: auto
+  log_every: 1
+
+loss_weights:
+  count: 1.0
+  anchor: 1.0
+  param: 2.0
+  kl: 0.0015
+
+output:
+  publish_latest: true

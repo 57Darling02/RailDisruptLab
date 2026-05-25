@@ -19,7 +19,7 @@ def _require_yaml():
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build case library yaml files only, reusing generation core logic."
+        description="Build scenario simulation YAML files for bench_build input."
     )
     parser.add_argument(
         "--base-config",
@@ -28,18 +28,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-root",
-        default="tests/case_library",
-        help="Directory where caseXXXX.yaml files will be written.",
+        default="config/batch_case_configs_demo",
+        help="Directory where scenario simulation YAML files will be written.",
     )
     parser.add_argument(
         "--project-output-root",
-        default="outputs/case_library",
-        help="Prefix used in generated config project.output_dir (e.g. outputs/case_library).",
+        default="outputs/scenario_simulation",
+        help="Placeholder project.output_dir prefix for generated scenario configs.",
     )
     parser.add_argument("--seed", type=int, default=20260320)
     parser.add_argument("--delay-count", type=int, default=10)
     parser.add_argument("--speed-count", type=int, default=10)
-    parser.add_argument("--disruption-count", type=int, default=10)
+    parser.add_argument("--interruption-count", type=int, default=10)
     parser.add_argument("--combo-per-type", type=int, default=10)
     parser.add_argument("--clean", action="store_true")
     return parser.parse_args()
@@ -61,7 +61,7 @@ def _validate_counts(args: argparse.Namespace) -> None:
     gen.validate_case_counts(
         delay_count=args.delay_count,
         speed_count=args.speed_count,
-        disruption_count=args.disruption_count,
+        interruption_count=args.interruption_count,
         combo_per_type=args.combo_per_type,
     )
 
@@ -103,14 +103,14 @@ def main() -> None:
         case_index = 1
         case_index = gen.generate_delay_cases(rng, base, output_root, case_index, args.delay_count)
         case_index = gen.generate_speed_cases(rng, base, output_root, case_index, args.speed_count)
-        case_index = gen.generate_disruption_cases(rng, base, output_root, case_index, args.disruption_count)
+        case_index = gen.generate_interruption_cases(rng, base, output_root, case_index, args.interruption_count)
         case_index = gen.generate_combo_cases(rng, base, output_root, case_index, args.combo_per_type)
     finally:
         gen.write_case = original_write_case
         gen.base_config_payload = original_base_config_payload
 
-    print(f"Generated {case_index - 1} case yaml files under {output_root}")
-    print(f"project.output_dir prefix: {project_output_root}")
+    print(f"Generated {case_index - 1} scenario simulation YAML files under {output_root}")
+    print("These configs are bench_build inputs; bench_build owns the real output paths.")
 
 
 if __name__ == "__main__":

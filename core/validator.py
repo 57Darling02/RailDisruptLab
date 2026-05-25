@@ -192,8 +192,10 @@ def _validate_scenarios(config: AppConfig, timetable_rows: List[TimetableRow], m
             )
 
     for speed_limit in config.scenarios.speed_limits:
-        if speed_limit.extra_seconds < 0:
-            raise ValueError("Speed limit extra_seconds must be >= 0")
+        if speed_limit.duration <= 0:
+            raise ValueError("Speed limit duration must be > 0")
+        if speed_limit.limit_speed < 0:
+            raise ValueError("Speed limit limit_speed must be >= 0")
         if speed_limit.start_time >= speed_limit.end_time:
             raise ValueError("Speed limit start_time must be earlier than end_time")
         if speed_limit.start_station not in station_set or speed_limit.end_station not in station_set:
@@ -204,19 +206,6 @@ def _validate_scenarios(config: AppConfig, timetable_rows: List[TimetableRow], m
             hint = f" (did you mean {reverse[0]}->{reverse[1]}?)" if reverse in actual_sections else ""
             raise ValueError(
                 f"Speed limit section {section[0]}->{section[1]} does not match any train route{hint}"
-            )
-
-    for interruption in config.scenarios.interruptions:
-        if interruption.start_time >= interruption.end_time:
-            raise ValueError("Interruption start_time must be earlier than end_time")
-        if interruption.start_station not in station_set or interruption.end_station not in station_set:
-            raise ValueError("Interruption station not found in mileage table")
-        section = (interruption.start_station, interruption.end_station)
-        if section not in actual_sections:
-            reverse = (interruption.end_station, interruption.start_station)
-            hint = f" (did you mean {reverse[0]}->{reverse[1]}?)" if reverse in actual_sections else ""
-            raise ValueError(
-                f"Interruption section {section[0]}->{section[1]} does not match any train route{hint}"
             )
 
 

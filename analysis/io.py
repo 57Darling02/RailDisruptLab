@@ -5,6 +5,8 @@ from typing import List
 
 import pandas as pd
 
+from core.types import BaseContext
+
 REQUIRED_COLUMNS = ["train_id", "station", "arrival_time", "departure_time"]
 CANCELED_COLUMN = "is_canceled"
 
@@ -67,3 +69,19 @@ def read_timetable(path: Path, sheet_name: str = "Sheet1") -> pd.DataFrame:
     else:
         df[CANCELED_COLUMN] = False
     return df
+
+
+def timetable_from_base_context(context: BaseContext) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "train_id": row.train_id,
+                "station": row.station,
+                "arrival_time": row.arrival_time,
+                "departure_time": row.departure_time,
+                CANCELED_COLUMN: False,
+            }
+            for row in context.validated.timetable_rows
+        ],
+        columns=REQUIRED_COLUMNS + [CANCELED_COLUMN],
+    )

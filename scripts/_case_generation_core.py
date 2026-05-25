@@ -17,10 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from core.loader import load_config, load_mileage_table, load_timetable
-from core.translator import translate
-from core.types import AppConfig, ScenarioConfig, TranslatedData, ValidatedInput
-from core.validator import validate_inputs
+from core.base_context import event_anchor_by_key, section_anchor_by_key
+from core.loader import load_config
+from core.types import AppConfig, EventAnchor, ScenarioConfig, SectionAnchor, TranslatedData, ValidatedInput
 
 def _require_yaml():
     try:
@@ -40,19 +39,19 @@ DELAY_LEVELS = [
 ]
 
 SPEED_LEVELS = [
-    ("L1_40kmh", 1800, 2400, 20),
-    ("L2_80kmh", 900, 1799, 20),
-    ("L3_160kmh", 420, 899, 20),
-    ("L4_200kmh", 180, 419, 20),
-    ("L5_250kmh", 60, 179, 20),
+    ("L1_40kmh", 40, 40, 20),
+    ("L2_80kmh", 80, 80, 20),
+    ("L3_160kmh", 160, 160, 20),
+    ("L4_200kmh", 200, 200, 20),
+    ("L5_250kmh", 250, 250, 20),
 ]
 
 INTERRUPTION_SPAN_WEIGHTS = [(1, 34), (2, 33), (3, 33)]
 COMBO_TYPES = [
     "delay_speedlimit",
-    "speedlimit_disruption",
-    "delay_disruption",
-    "delay_speedlimit_disruption",
+    "speedlimit_interruption",
+    "delay_interruption",
+    "delay_speedlimit_interruption",
 ]
 
 DEFAULT_BASE_CONFIG_CANDIDATES = [
@@ -69,8 +68,10 @@ class BaseData:
     app_config: AppConfig
     validated: ValidatedInput
     translated: TranslatedData
-    event_candidates: List[Tuple[str, str, str, int]]
+    event_candidates: List[Tuple[str, str, str, int, str]]
     section_candidates: List[Tuple[str, str]]
+    event_anchor_by_key: Dict[Tuple[str, str, str], EventAnchor]
+    section_anchor_by_key: Dict[Tuple[str, str], SectionAnchor]
     station_order: List[str]
     station_neighbors: Dict[str, set[str]]
     section_train_count: Dict[Tuple[str, str], int]
@@ -79,11 +80,11 @@ class BaseData:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate case library for converter validation.")
     parser.add_argument("--base-config", default="", help="Base config path. If omitted, auto-select from config/*.yaml.")
-    parser.add_argument("--output-root", default="tests/case_library")
+    parser.add_argument("--output-root", default="config/batch_case_configs_demo")
     parser.add_argument("--seed", type=int, default=20260320)
     parser.add_argument("--delay-count", type=int, default=10)
     parser.add_argument("--speed-count", type=int, default=10)
-    parser.add_argument("--disruption-count", type=int, default=10)
+    parser.add_argument("--interruption-count", type=int, default=10)
     parser.add_argument("--combo-per-type", type=int, default=10)
     parser.add_argument("--clean", action="store_true")
     return parser.parse_args()
@@ -152,20 +153,20 @@ def proportional_counts(total: int, weights: Sequence[int]) -> List[int]:
 def validate_case_counts(
     delay_count: int,
     speed_count: int,
-    disruption_count: int,
+    interruption_count: int,
     combo_per_type: int,
 ) -> None:
     fields = {
         "delay-count": delay_count,
         "speed-count": speed_count,
-        "disruption-count": disruption_count,
+        "interruption-count": interruption_count,
         "combo-per-type": combo_per_type,
     }
     for name, value in fields.items():
         if value < 0:
             raise ValueError(f"{name} must be >= 0.")
 
-    total = delay_count + speed_count + disruption_count + combo_per_type * len(COMBO_TYPES)
+    total = delay_count + speed_count + interruption_count + combo_per_type * len(COMBO_TYPES)
     if total <= 0:
         raise ValueError("At least one case count must be greater than 0.")
 
@@ -273,7 +274,7 @@ def pick_delay_event_by_relation(
     base: BaseData,
     section: Tuple[str, str],
     relation: str,
-) -> Tuple[str, str, str, int]:
+) -> Tuple[str, str, str, int, str]:
     s1, s2 = section
     if relation == "same":
         station_pool = {s1, s2}
@@ -322,18 +323,19 @@ def combo_relation_plan(rng: random.Random, count: int) -> List[Tuple[str, str]]
 
 def load_base_data(base_config_path: Path) -> BaseData:
     app_config = load_config(base_config_path)
-    neutral = replace(app_config, scenarios=ScenarioConfig(delays=[], speed_limits=[], interruptions=[]))
-    timetable = load_timetable(neutral.input.timetable_path, neutral.input.timetable_sheet_name)
-    mileage = load_mileage_table(neutral.input.mileage_path, neutral.input.mileage_sheet_name)
-    validated = validate_inputs(neutral, timetable, mileage)
-    translated = translate(validated, neutral)
+    neutral = replace(app_config, scenarios=ScenarioConfig(delays=[], speed_limits=[]))
+    context = neutral.base_context
+    validated = context.validated
+    translated = context.translated
+    event_anchor_map = event_anchor_by_key(context)
+    section_anchor_map = section_anchor_by_key(context)
 
     event_candidates = [
-        (tid, station, etype, translated.event_time[(tid, station, etype)])
+        (tid, station, etype, translated.event_time[(tid, station, etype)], event_anchor_map[(tid, station, etype)].anchor_id)
         for (tid, station, etype) in translated.event_keys
     ]
     section_candidates = sorted(set(translated.section_min_runtime.keys()))
-    station_order = [row.station for row in sorted(validated.mileage_rows, key=lambda x: x.mileage)]
+    station_order = context.station_order
     station_neighbors = build_station_neighbors(station_order)
 
     section_train_count: Dict[Tuple[str, str], int] = defaultdict(int)
@@ -347,6 +349,8 @@ def load_base_data(base_config_path: Path) -> BaseData:
         translated=translated,
         event_candidates=event_candidates,
         section_candidates=section_candidates,
+        event_anchor_by_key=event_anchor_map,
+        section_anchor_by_key=section_anchor_map,
         station_order=station_order,
         station_neighbors=station_neighbors,
         section_train_count=dict(section_train_count),
@@ -359,16 +363,12 @@ def base_config_payload(case_name: str, output_dir: str, base: BaseData) -> Dict
         "project": {
             "name": case_name,
             "output_dir": output_dir,
-            "timetable_path": str(cfg.input.timetable_path).replace("\\", "/"),
-            "mileage_path": str(cfg.input.mileage_path).replace("\\", "/"),
-            "timetable_sheet_name": cfg.input.timetable_sheet_name,
-            "mileage_sheet_name": cfg.input.mileage_sheet_name,
+            "base_context_path": str(cfg.project.base_context_path).replace("\\", "/"),
         },
         "build": {
             "scenarios": {
                 "delays": [],
                 "speed_limits": [],
-                "interruptions": [],
             }
         },
         "solve": {
@@ -408,15 +408,13 @@ def generate_delay_cases(rng: random.Random, base: BaseData, output_root: Path, 
     seq = weighted_level_sequence(rng, DELAY_LEVELS, count)
 
     for level, low, high in seq:
-        train_id, station, event_type, event_time = rng.choice(base.event_candidates)
+        train_id, station, event_type, event_time, event_anchor_id = rng.choice(base.event_candidates)
         delay_seconds = rng.randint(low, high)
         case_id = f"case{case_index:04d}_delay_{level.lower()}"
         cfg = base_config_payload(case_id, f"outputs/case_library/{case_id}", base)
         cfg["build"]["scenarios"]["delays"] = [
             {
-                "train_id": train_id,
-                "station": station,
-                "event_type": event_type,
+                "event_anchor_id": event_anchor_id,
                 "seconds": delay_seconds,
             }
         ]
@@ -448,16 +446,15 @@ def generate_speed_cases(rng: random.Random, base: BaseData, output_root: Path, 
     for level, low, high in seq:
         section = rng.choice(base.section_candidates)
         window = random_window(rng)
-        extra_seconds = rng.randint(low, high)
+        limit_speed = rng.randint(low, high)
         case_id = f"case{case_index:04d}_speedlimit_{level.lower()}"
         cfg = base_config_payload(case_id, f"outputs/case_library/{case_id}", base)
         cfg["build"]["scenarios"]["speed_limits"] = [
             {
-                "start_station": section[0],
-                "end_station": section[1],
-                "extra_seconds": extra_seconds,
+                "section_anchor_id": base.section_anchor_by_key[section].anchor_id,
                 "start_time": to_hms(window[0]),
-                "end_time": to_hms(window[1]),
+                "duration": window[1] - window[0],
+                "limit_speed": limit_speed,
             }
         ]
         meta = {
@@ -469,7 +466,7 @@ def generate_speed_cases(rng: random.Random, base: BaseData, output_root: Path, 
                     "start_time": to_hms(window[0]),
                     "end_time": to_hms(window[1]),
                     "location": {"segment": [section[0], section[1]]},
-                    "intensity": {"level": level, "extra_seconds": extra_seconds},
+                    "intensity": {"level": level, "limit_speed": limit_speed},
                     "affected_trains_count": base.section_train_count.get(section, 0),
                 }
             ],
@@ -482,7 +479,7 @@ def generate_speed_cases(rng: random.Random, base: BaseData, output_root: Path, 
     return case_index
 
 
-def generate_disruption_cases(rng: random.Random, base: BaseData, output_root: Path, case_index: int, count: int) -> int:
+def generate_interruption_cases(rng: random.Random, base: BaseData, output_root: Path, case_index: int, count: int) -> int:
     seq: List[int] = []
     quotas = proportional_counts(count, [weight for _span, weight in INTERRUPTION_SPAN_WEIGHTS])
     for (span, _weight), quota in zip(INTERRUPTION_SPAN_WEIGHTS, quotas):
@@ -492,20 +489,20 @@ def generate_disruption_cases(rng: random.Random, base: BaseData, output_root: P
     for span in seq:
         sections = pick_contiguous_sections(rng, base.section_candidates, span=span)
         window = random_window(rng, min_len=1200, max_len=4200)
-        case_id = f"case{case_index:04d}_disruption_s{span}"
+        case_id = f"case{case_index:04d}_interruption_s{span}"
         cfg = base_config_payload(case_id, f"outputs/case_library/{case_id}", base)
-        cfg["build"]["scenarios"]["interruptions"] = [
+        cfg["build"]["scenarios"]["speed_limits"] = [
             {
-                "start_station": s1,
-                "end_station": s2,
+                "section_anchor_id": base.section_anchor_by_key[(s1, s2)].anchor_id,
                 "start_time": to_hms(window[0]),
-                "end_time": to_hms(window[1]),
+                "duration": window[1] - window[0],
+                "limit_speed": 0,
             }
             for s1, s2 in sections
         ]
         events = [
             {
-                "type": "disruption",
+                "type": "interruption",
                 "start_time": to_hms(window[0]),
                 "end_time": to_hms(window[1]),
                 "location": {"segment": [s1, s2]},
@@ -516,7 +513,7 @@ def generate_disruption_cases(rng: random.Random, base: BaseData, output_root: P
         ]
         meta = {
             "case_id": case_id,
-            "scenario_type": "disruption",
+            "scenario_type": "interruption",
             "events": events,
             "time_relation": None,
             "space_relation": None,
@@ -542,56 +539,60 @@ def combo_case_payload(
         delay_event = pick_delay_event_by_relation(rng, base, section, relation=space_relation)
         delay_seconds = rng.randint(120, 3600)
         speed_window = window_covering_point(rng, delay_event[3]) if time_relation == "overlap" else window_excluding_point(rng, delay_event[3])
-        extra_seconds = rng.randint(120, 1800)
+        limit_speed = rng.choice([40, 80, 160, 200, 250])
 
-        cfg["build"]["scenarios"]["delays"] = [{"train_id": delay_event[0], "station": delay_event[1], "event_type": delay_event[2], "seconds": delay_seconds}]
-        cfg["build"]["scenarios"]["speed_limits"] = [{"start_station": section[0], "end_station": section[1], "extra_seconds": extra_seconds, "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1])}]
+        cfg["build"]["scenarios"]["delays"] = [{"event_anchor_id": delay_event[4], "seconds": delay_seconds}]
+        cfg["build"]["scenarios"]["speed_limits"] = [{"section_anchor_id": base.section_anchor_by_key[section].anchor_id, "start_time": to_hms(speed_window[0]), "duration": speed_window[1] - speed_window[0], "limit_speed": limit_speed}]
 
         events.append({"type": "delay", "start_time": to_hms(delay_event[3]), "end_time": to_hms(delay_event[3]), "location": {"station": delay_event[1]}, "intensity": {"seconds": delay_seconds}, "affected_trains_count": 1})
-        events.append({"type": "speed_limit", "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1]), "location": {"segment": [section[0], section[1]]}, "intensity": {"extra_seconds": extra_seconds}, "affected_trains_count": base.section_train_count.get(section, 0)})
+        events.append({"type": "speed_limit", "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1]), "location": {"segment": [section[0], section[1]]}, "intensity": {"limit_speed": limit_speed}, "affected_trains_count": base.section_train_count.get(section, 0)})
 
-    elif combo_type == "speedlimit_disruption":
+    elif combo_type == "speedlimit_interruption":
         speed_section = rng.choice(base.section_candidates)
-        disruption_section = pick_section_by_relation(rng, base.section_candidates, speed_section, space_relation)
+        interruption_section = pick_section_by_relation(rng, base.section_candidates, speed_section, space_relation)
         speed_window = random_window(rng)
-        disruption_window = window_related_to_window(rng, speed_window, overlap=(time_relation == "overlap"))
-        extra_seconds = rng.randint(120, 1800)
+        interruption_window = window_related_to_window(rng, speed_window, overlap=(time_relation == "overlap"))
+        limit_speed = rng.choice([40, 80, 160, 200, 250])
 
-        cfg["build"]["scenarios"]["speed_limits"] = [{"start_station": speed_section[0], "end_station": speed_section[1], "extra_seconds": extra_seconds, "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1])}]
-        cfg["build"]["scenarios"]["interruptions"] = [{"start_station": disruption_section[0], "end_station": disruption_section[1], "start_time": to_hms(disruption_window[0]), "end_time": to_hms(disruption_window[1])}]
+        cfg["build"]["scenarios"]["speed_limits"] = [
+            {"section_anchor_id": base.section_anchor_by_key[speed_section].anchor_id, "start_time": to_hms(speed_window[0]), "duration": speed_window[1] - speed_window[0], "limit_speed": limit_speed},
+            {"section_anchor_id": base.section_anchor_by_key[interruption_section].anchor_id, "start_time": to_hms(interruption_window[0]), "duration": interruption_window[1] - interruption_window[0], "limit_speed": 0},
+        ]
 
-        events.append({"type": "speed_limit", "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1]), "location": {"segment": [speed_section[0], speed_section[1]]}, "intensity": {"extra_seconds": extra_seconds}, "affected_trains_count": base.section_train_count.get(speed_section, 0)})
-        events.append({"type": "disruption", "start_time": to_hms(disruption_window[0]), "end_time": to_hms(disruption_window[1]), "location": {"segment": [disruption_section[0], disruption_section[1]]}, "intensity": {"span_sections": 1}, "affected_trains_count": base.section_train_count.get(disruption_section, 0)})
+        events.append({"type": "speed_limit", "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1]), "location": {"segment": [speed_section[0], speed_section[1]]}, "intensity": {"limit_speed": limit_speed}, "affected_trains_count": base.section_train_count.get(speed_section, 0)})
+        events.append({"type": "interruption", "start_time": to_hms(interruption_window[0]), "end_time": to_hms(interruption_window[1]), "location": {"segment": [interruption_section[0], interruption_section[1]]}, "intensity": {"span_sections": 1}, "affected_trains_count": base.section_train_count.get(interruption_section, 0)})
 
-    elif combo_type == "delay_disruption":
-        disruption_section = rng.choice(base.section_candidates)
-        delay_event = pick_delay_event_by_relation(rng, base, disruption_section, relation=space_relation)
+    elif combo_type == "delay_interruption":
+        interruption_section = rng.choice(base.section_candidates)
+        delay_event = pick_delay_event_by_relation(rng, base, interruption_section, relation=space_relation)
         delay_seconds = rng.randint(120, 3600)
-        disruption_window = window_covering_point(rng, delay_event[3]) if time_relation == "overlap" else window_excluding_point(rng, delay_event[3])
+        interruption_window = window_covering_point(rng, delay_event[3]) if time_relation == "overlap" else window_excluding_point(rng, delay_event[3])
 
-        cfg["build"]["scenarios"]["delays"] = [{"train_id": delay_event[0], "station": delay_event[1], "event_type": delay_event[2], "seconds": delay_seconds}]
-        cfg["build"]["scenarios"]["interruptions"] = [{"start_station": disruption_section[0], "end_station": disruption_section[1], "start_time": to_hms(disruption_window[0]), "end_time": to_hms(disruption_window[1])}]
+        cfg["build"]["scenarios"]["delays"] = [{"event_anchor_id": delay_event[4], "seconds": delay_seconds}]
+        cfg["build"]["scenarios"]["speed_limits"] = [{"section_anchor_id": base.section_anchor_by_key[interruption_section].anchor_id, "start_time": to_hms(interruption_window[0]), "duration": interruption_window[1] - interruption_window[0], "limit_speed": 0}]
 
         events.append({"type": "delay", "start_time": to_hms(delay_event[3]), "end_time": to_hms(delay_event[3]), "location": {"station": delay_event[1]}, "intensity": {"seconds": delay_seconds}, "affected_trains_count": 1})
-        events.append({"type": "disruption", "start_time": to_hms(disruption_window[0]), "end_time": to_hms(disruption_window[1]), "location": {"segment": [disruption_section[0], disruption_section[1]]}, "intensity": {"span_sections": 1}, "affected_trains_count": base.section_train_count.get(disruption_section, 0)})
+        events.append({"type": "interruption", "start_time": to_hms(interruption_window[0]), "end_time": to_hms(interruption_window[1]), "location": {"segment": [interruption_section[0], interruption_section[1]]}, "intensity": {"span_sections": 1}, "affected_trains_count": base.section_train_count.get(interruption_section, 0)})
 
-    elif combo_type == "delay_speedlimit_disruption":
+    elif combo_type == "delay_speedlimit_interruption":
         speed_section = rng.choice(base.section_candidates)
-        disruption_section = pick_section_by_relation(rng, base.section_candidates, speed_section, relation=space_relation)
+        interruption_section = pick_section_by_relation(rng, base.section_candidates, speed_section, relation=space_relation)
         delay_event = pick_delay_event_by_relation(rng, base, speed_section, relation=space_relation)
         delay_seconds = rng.randint(120, 3600)
-        extra_seconds = rng.randint(120, 1800)
+        limit_speed = rng.choice([40, 80, 160, 200, 250])
 
         speed_window = window_covering_point(rng, delay_event[3])
-        disruption_window = window_related_to_window(rng, speed_window, overlap=(time_relation == "overlap"))
+        interruption_window = window_related_to_window(rng, speed_window, overlap=(time_relation == "overlap"))
 
-        cfg["build"]["scenarios"]["delays"] = [{"train_id": delay_event[0], "station": delay_event[1], "event_type": delay_event[2], "seconds": delay_seconds}]
-        cfg["build"]["scenarios"]["speed_limits"] = [{"start_station": speed_section[0], "end_station": speed_section[1], "extra_seconds": extra_seconds, "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1])}]
-        cfg["build"]["scenarios"]["interruptions"] = [{"start_station": disruption_section[0], "end_station": disruption_section[1], "start_time": to_hms(disruption_window[0]), "end_time": to_hms(disruption_window[1])}]
+        cfg["build"]["scenarios"]["delays"] = [{"event_anchor_id": delay_event[4], "seconds": delay_seconds}]
+        cfg["build"]["scenarios"]["speed_limits"] = [
+            {"section_anchor_id": base.section_anchor_by_key[speed_section].anchor_id, "start_time": to_hms(speed_window[0]), "duration": speed_window[1] - speed_window[0], "limit_speed": limit_speed},
+            {"section_anchor_id": base.section_anchor_by_key[interruption_section].anchor_id, "start_time": to_hms(interruption_window[0]), "duration": interruption_window[1] - interruption_window[0], "limit_speed": 0},
+        ]
 
         events.append({"type": "delay", "start_time": to_hms(delay_event[3]), "end_time": to_hms(delay_event[3]), "location": {"station": delay_event[1]}, "intensity": {"seconds": delay_seconds}, "affected_trains_count": 1})
-        events.append({"type": "speed_limit", "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1]), "location": {"segment": [speed_section[0], speed_section[1]]}, "intensity": {"extra_seconds": extra_seconds}, "affected_trains_count": base.section_train_count.get(speed_section, 0)})
-        events.append({"type": "disruption", "start_time": to_hms(disruption_window[0]), "end_time": to_hms(disruption_window[1]), "location": {"segment": [disruption_section[0], disruption_section[1]]}, "intensity": {"span_sections": 1}, "affected_trains_count": base.section_train_count.get(disruption_section, 0)})
+        events.append({"type": "speed_limit", "start_time": to_hms(speed_window[0]), "end_time": to_hms(speed_window[1]), "location": {"segment": [speed_section[0], speed_section[1]]}, "intensity": {"limit_speed": limit_speed}, "affected_trains_count": base.section_train_count.get(speed_section, 0)})
+        events.append({"type": "interruption", "start_time": to_hms(interruption_window[0]), "end_time": to_hms(interruption_window[1]), "location": {"segment": [interruption_section[0], interruption_section[1]]}, "intensity": {"span_sections": 1}, "affected_trains_count": base.section_train_count.get(interruption_section, 0)})
 
     else:
         raise ValueError(f"Unsupported combo type: {combo_type}")
@@ -624,7 +625,7 @@ def write_manifest(
     seed: int,
     delay_count: int,
     speed_count: int,
-    disruption_count: int,
+    interruption_count: int,
     combo_per_type: int,
 ) -> None:
     payload = {
@@ -633,15 +634,15 @@ def write_manifest(
         "distribution": {
             "delay": delay_count,
             "speedlimit": speed_count,
-            "disruption": disruption_count,
+            "interruption": interruption_count,
             "combo": {
                 "delay_speedlimit": combo_per_type,
-                "speedlimit_disruption": combo_per_type,
-                "delay_disruption": combo_per_type,
-                "delay_speedlimit_disruption": combo_per_type,
+                "speedlimit_interruption": combo_per_type,
+                "delay_interruption": combo_per_type,
+                "delay_speedlimit_interruption": combo_per_type,
                 "total": combo_per_type * len(COMBO_TYPES),
             },
-            "total": delay_count + speed_count + disruption_count + combo_per_type * len(COMBO_TYPES),
+            "total": delay_count + speed_count + interruption_count + combo_per_type * len(COMBO_TYPES),
         },
     }
     with (output_root / "manifest.json").open("w", encoding="utf-8") as f:
@@ -653,7 +654,7 @@ def main() -> None:
     validate_case_counts(
         delay_count=args.delay_count,
         speed_count=args.speed_count,
-        disruption_count=args.disruption_count,
+        interruption_count=args.interruption_count,
         combo_per_type=args.combo_per_type,
     )
 
@@ -677,7 +678,7 @@ def main() -> None:
     case_index = 1
     case_index = generate_delay_cases(rng, base, output_root, case_index, args.delay_count)
     case_index = generate_speed_cases(rng, base, output_root, case_index, args.speed_count)
-    case_index = generate_disruption_cases(rng, base, output_root, case_index, args.disruption_count)
+    case_index = generate_interruption_cases(rng, base, output_root, case_index, args.interruption_count)
     case_index = generate_combo_cases(rng, base, output_root, case_index, args.combo_per_type)
 
     write_manifest(
@@ -686,7 +687,7 @@ def main() -> None:
         seed=args.seed,
         delay_count=args.delay_count,
         speed_count=args.speed_count,
-        disruption_count=args.disruption_count,
+        interruption_count=args.interruption_count,
         combo_per_type=args.combo_per_type,
     )
 
@@ -695,6 +696,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 

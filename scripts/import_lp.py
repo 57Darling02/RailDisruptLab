@@ -18,10 +18,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from core.loader import load_config, load_mileage_table, load_timetable
-from core.translator import translate
-from core.types import AppConfig, ScenarioConfig, TranslatedData
-from core.validator import validate_inputs
+from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
+from core.loader import load_config
+from core.types import AppConfig, BaseContext, ScenarioConfig, TranslatedData
 
 SECTION_BREAKS = {"bounds", "binary", "general", "generals", "end"}
 LP_SENSES = ("<=", ">=", "=")
@@ -71,12 +70,9 @@ def _parse_args() -> argparse.Namespace:
         "--scenario-inference",
         choices=("auto", "require", "off"),
         default="auto",
-        help="Infer build.scenarios from LP + timetable/mileage. 'auto' tries and falls back to empty, 'require' fails on inference errors.",
+        help="Infer build.scenarios from LP + BaseContext. 'auto' tries and falls back to empty, 'require' fails on inference errors.",
     )
-    parser.add_argument("--timetable-path", default="", help="Override project.timetable_path for imported configs and scenario inference.")
-    parser.add_argument("--mileage-path", default="", help="Override project.mileage_path for imported configs and scenario inference.")
-    parser.add_argument("--timetable-sheet-name", default="", help="Override project.timetable_sheet_name for imported configs and scenario inference.")
-    parser.add_argument("--mileage-sheet-name", default="", help="Override project.mileage_sheet_name for imported configs and scenario inference.")
+    parser.add_argument("--base-context-path", default="", help="Override project.base_context_path for imported configs and scenario inference.")
     return parser.parse_args()
 
 
@@ -126,7 +122,6 @@ def _build_empty_scenarios() -> Dict[str, object]:
     return {
         "delays": [],
         "speed_limits": [],
-        "interruptions": [],
     }
 
 
@@ -135,41 +130,22 @@ def _build_case_config(
     case_name: str,
     output_dir: Path,
     scenarios: Optional[Dict[str, object]] = None,
-    timetable_path_override: str = "",
-    mileage_path_override: str = "",
-    timetable_sheet_override: str = "",
-    mileage_sheet_override: str = "",
+    base_context_path_override: str = "",
 ) -> Dict[str, object]:
     payload = copy.deepcopy(base_payload)
 
     project = dict(payload.get("project", {}))
-    legacy_input = dict(payload.get("input", {}))
-    required_project_defaults = {
-        "timetable_path": "",
-        "mileage_path": "",
-        "timetable_sheet_name": "Sheet1",
-        "mileage_sheet_name": "Sheet1",
-    }
-    for key, default_value in required_project_defaults.items():
-        current_value = project.get(key)
-        current_text = "" if current_value is None else str(current_value).strip()
-        if current_text != "":
-            continue
-        legacy_value = legacy_input.get(key, default_value)
-        project[key] = default_value if legacy_value is None else legacy_value
-
-    if timetable_path_override.strip():
-        project["timetable_path"] = _normalize_path_text(timetable_path_override)
-    if mileage_path_override.strip():
-        project["mileage_path"] = _normalize_path_text(mileage_path_override)
-    if timetable_sheet_override.strip():
-        project["timetable_sheet_name"] = timetable_sheet_override.strip()
-    if mileage_sheet_override.strip():
-        project["mileage_sheet_name"] = mileage_sheet_override.strip()
+    for legacy_key in ("timetable_path", "mileage_path", "timetable_sheet_name", "mileage_sheet_name"):
+        project.pop(legacy_key, None)
+    if base_context_path_override.strip():
+        project["base_context_path"] = _normalize_path_text(base_context_path_override)
+    if not str(project.get("base_context_path", "")).strip():
+        raise ValueError("Base config must define project.base_context_path.")
 
     project["name"] = case_name
     project["output_dir"] = _to_posix(output_dir)
     payload["project"] = project
+    payload.pop("input", None)
 
     build = dict(payload.get("build", {}))
     build["scenarios"] = copy.deepcopy(scenarios or _build_empty_scenarios())
@@ -214,41 +190,36 @@ def _write_json(path: Path, payload: Dict[str, object]) -> None:
 
 def _build_inference_config(
     base_config_path: Path,
-    timetable_path_override: str,
-    mileage_path_override: str,
-    timetable_sheet_override: str,
-    mileage_sheet_override: str,
+    base_context_path_override: str,
 ) -> AppConfig:
     loaded = load_config(base_config_path)
-    input_config = loaded.input
+    if not base_context_path_override.strip():
+        return replace(loaded, scenarios=ScenarioConfig(delays=[], speed_limits=[]))
 
-    if timetable_path_override.strip():
-        input_config = replace(input_config, timetable_path=Path(timetable_path_override.strip()))
-    if mileage_path_override.strip():
-        input_config = replace(input_config, mileage_path=Path(mileage_path_override.strip()))
-    if timetable_sheet_override.strip():
-        input_config = replace(input_config, timetable_sheet_name=timetable_sheet_override.strip())
-    if mileage_sheet_override.strip():
-        input_config = replace(input_config, mileage_sheet_name=mileage_sheet_override.strip())
-
+    base_context_path = Path(base_context_path_override.strip())
+    base_context = load_base_context(base_context_path)
     return replace(
         loaded,
-        input=input_config,
-        scenarios=ScenarioConfig(delays=[], speed_limits=[], interruptions=[]),
+        project=replace(loaded.project, base_context_path=base_context_path),
+        input=replace(
+            loaded.input,
+            timetable_path=base_context.source_timetable_path,
+            mileage_path=base_context.source_mileage_path,
+            timetable_sheet_name=base_context.timetable_sheet_name,
+            mileage_sheet_name=base_context.mileage_sheet_name,
+        ),
+        analyze=replace(
+            loaded.analyze,
+            plan_timetable_path=base_context.source_timetable_path,
+            plan_timetable_sheet_name=base_context.timetable_sheet_name,
+        ),
+        scenarios=ScenarioConfig(delays=[], speed_limits=[]),
+        base_context=base_context,
     )
 
 
 def _load_translated(config: AppConfig) -> TranslatedData:
-    timetable_table = load_timetable(
-        config.input.timetable_path,
-        config.input.timetable_sheet_name,
-    )
-    mileage_table = load_mileage_table(
-        config.input.mileage_path,
-        config.input.mileage_sheet_name,
-    )
-    validated = validate_inputs(config, timetable_table, mileage_table)
-    return translate(validated, config)
+    return config.base_context.translated
 
 
 def _parse_linear_expression(text: str) -> Dict[str, float]:
@@ -447,14 +418,29 @@ def _infer_speed_windows(
     return windows, "cover"
 
 
+def _infer_limit_speed(context: BaseContext, start_station: str, end_station: str, runtime_rhs: int) -> float:
+    if runtime_rhs <= 0:
+        raise ValueError(f"Invalid speed-limit runtime rhs: {runtime_rhs}")
+    distance_km = abs(
+        context.mileage_by_station[end_station] - context.mileage_by_station[start_station]
+    )
+    if distance_km <= 0:
+        raise ValueError(f"Invalid speed-limit section distance: {start_station}->{end_station}")
+    return round(distance_km * 3600.0 / float(runtime_rhs), 3)
+
+
 def _infer_scenarios_from_lp(
     lp_path: Path,
-    translated: TranslatedData,
+    config: AppConfig,
 ) -> Tuple[Dict[str, object], Dict[str, object]]:
+    context = config.base_context
+    translated = context.translated
+    event_anchors = event_anchor_by_key(context)
+    section_anchors = section_anchor_by_key(context)
     event_by_token, section_by_arr_token, section_by_dep_token, section_records_by_section = _build_indexes(translated)
 
-    delay_set: Set[Tuple[str, str, str, int]] = set()
-    speed_groups: Dict[Tuple[str, str, int], Set[str]] = {}
+    delay_set: Set[Tuple[str, int]] = set()
+    speed_groups: Dict[Tuple[str, str, float], Set[str]] = {}
     interrupt_before: Dict[str, Tuple[str, int]] = {}
     interrupt_after: Dict[str, Tuple[str, int]] = {}
 
@@ -472,7 +458,8 @@ def _infer_scenarios_from_lp(
             event_key = event_by_token[event_token]
             planned = translated.event_time[event_key]
             seconds = _to_int(rhs - planned)
-            delay_set.add((event_key[0], event_key[1], event_key[2], seconds))
+            if seconds > 0:
+                delay_set.add((event_anchors[event_key].anchor_id, seconds))
             continue
 
         speed_match = speed_pattern.match(name)
@@ -488,8 +475,9 @@ def _infer_scenarios_from_lp(
                 raise ValueError(
                     f"Speed-limit constraint token mismatch: expected dep {record.dep_token}, got {dep_token}"
                 )
-            extra_seconds = _to_int(rhs - record.planned_runtime)
-            group_key = (record.start_station, record.end_station, extra_seconds)
+            runtime_rhs = _to_int(rhs)
+            limit_speed = _infer_limit_speed(context, record.start_station, record.end_station, runtime_rhs)
+            group_key = (record.start_station, record.end_station, limit_speed)
             speed_groups.setdefault(group_key, set()).add(arr_token)
             continue
 
@@ -540,57 +528,55 @@ def _infer_scenarios_from_lp(
 
     speed_limits: List[Dict[str, object]] = []
     speed_group_notes: List[str] = []
-    for (start_station, end_station, extra_seconds), affected_tokens in sorted(speed_groups.items()):
+    for (start_station, end_station, limit_speed), affected_tokens in sorted(speed_groups.items()):
         section_key = (start_station, end_station)
         windows, mode = _infer_speed_windows(section_records_by_section[section_key], affected_tokens)
         speed_group_notes.append(
-            f"{start_station}->{end_station} +{extra_seconds}s [{mode}] x{len(windows)}"
+            f"{start_station}->{end_station} <= {limit_speed:g}km/h [{mode}] x{len(windows)}"
         )
         for start_time, end_time in windows:
             speed_limits.append(
                 {
-                    "start_station": start_station,
-                    "end_station": end_station,
-                    "extra_seconds": extra_seconds,
+                    "section_anchor_id": section_anchors[(start_station, end_station)].anchor_id,
                     "start_time": _to_hms(start_time),
-                    "end_time": _to_hms(end_time),
+                    "duration": end_time - start_time,
+                    "limit_speed": limit_speed,
                 }
             )
 
     scenarios = {
         "delays": [
             {
-                "train_id": train_id,
-                "station": station,
-                "event_type": event_type,
+                "event_anchor_id": event_anchor_id,
                 "seconds": seconds,
             }
-            for train_id, station, event_type, seconds in sorted(delay_set)
+            for event_anchor_id, seconds in sorted(delay_set)
         ],
         "speed_limits": sorted(
-            speed_limits,
+            [
+                *speed_limits,
+                *[
+                    {
+                        "section_anchor_id": section_anchors[(start_station, end_station)].anchor_id,
+                        "start_time": _to_hms(start_time),
+                        "duration": end_time - start_time,
+                        "limit_speed": 0,
+                    }
+                    for start_station, end_station, start_time, end_time in sorted(interruption_set)
+                ],
+            ],
             key=lambda item: (
-                str(item["start_station"]),
-                str(item["end_station"]),
-                int(item["extra_seconds"]),
+                str(item["section_anchor_id"]),
                 str(item["start_time"]),
-                str(item["end_time"]),
+                int(item["duration"]),
+                float(item["limit_speed"]),
             ),
         ),
-        "interruptions": [
-            {
-                "start_station": start_station,
-                "end_station": end_station,
-                "start_time": _to_hms(start_time),
-                "end_time": _to_hms(end_time),
-            }
-            for start_station, end_station, start_time, end_time in sorted(interruption_set)
-        ],
     }
     diagnostics = {
         "delay_count": len(scenarios["delays"]),
-        "speed_limit_count": len(scenarios["speed_limits"]),
-        "interruption_count": len(scenarios["interruptions"]),
+        "speed_limit_count": len(speed_limits),
+        "interruption_count": len(interruption_set),
         "speed_limit_groups": "; ".join(speed_group_notes),
     }
     return scenarios, diagnostics
@@ -631,10 +617,7 @@ def main() -> None:
         try:
             inference_app_config = _build_inference_config(
                 base_config_path=base_config_path,
-                timetable_path_override=args.timetable_path,
-                mileage_path_override=args.mileage_path,
-                timetable_sheet_override=args.timetable_sheet_name,
-                mileage_sheet_override=args.mileage_sheet_name,
+                base_context_path_override=args.base_context_path,
             )
             inference_context = _load_translated(inference_app_config)
         except Exception as exc:
@@ -685,7 +668,7 @@ def main() -> None:
                     if args.scenario_inference == "require":
                         raise RuntimeError(inference_error or "Scenario inference context unavailable.")
                 else:
-                    scenarios, diagnostics = _infer_scenarios_from_lp(lp_path, inference_context)
+                    scenarios, diagnostics = _infer_scenarios_from_lp(lp_path, inference_app_config)
                     record["scenario_inference_status"] = "ok"
                     record["inferred_delay_count"] = diagnostics["delay_count"]
                     record["inferred_speed_limit_count"] = diagnostics["speed_limit_count"]
@@ -697,10 +680,7 @@ def main() -> None:
                 case_name=case_id,
                 output_dir=case_output_dir,
                 scenarios=scenarios,
-                timetable_path_override=args.timetable_path,
-                mileage_path_override=args.mileage_path,
-                timetable_sheet_override=args.timetable_sheet_name,
-                mileage_sheet_override=args.mileage_sheet_name,
+                base_context_path_override=args.base_context_path,
             )
             with case_config_path.open("w", encoding="utf-8") as file:
                 yaml.safe_dump(case_payload, file, allow_unicode=True, sort_keys=False)
@@ -737,10 +717,7 @@ def main() -> None:
         "generated_config_root": _to_posix(generated_config_root),
         "output_root": _to_posix(output_root),
         "scenario_inference_mode": args.scenario_inference,
-        "timetable_path_override": _normalize_path_text(args.timetable_path) if args.timetable_path.strip() else "",
-        "mileage_path_override": _normalize_path_text(args.mileage_path) if args.mileage_path.strip() else "",
-        "timetable_sheet_name_override": args.timetable_sheet_name.strip(),
-        "mileage_sheet_name_override": args.mileage_sheet_name.strip(),
+        "base_context_path_override": _normalize_path_text(args.base_context_path) if args.base_context_path.strip() else "",
         "total_lp": len(records),
         "status_counts": status_counts,
         "scenario_inference_status_counts": inference_status_counts,

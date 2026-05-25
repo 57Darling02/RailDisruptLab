@@ -97,7 +97,17 @@ def _seconds_to_timestamp(seconds: int) -> pd.Timestamp:
     return pd.to_datetime(_seconds_to_hms(seconds), format="%H:%M:%S")
 
 
-def _build_station_order(df: pd.DataFrame, mileage_path: Path | None, mileage_sheet_name: str) -> list[str]:
+def _build_station_order(
+    df: pd.DataFrame,
+    mileage_path: Path | None,
+    mileage_sheet_name: str,
+    station_order: list[str] | None,
+) -> list[str]:
+    plotted_stations = set(df["station"].dropna().astype(str).tolist())
+    if station_order:
+        ordered = [station for station in station_order if station in plotted_stations]
+        if ordered:
+            return ordered
     if mileage_path is not None and mileage_path.exists():
         raw = load_mileage_table(mileage_path, mileage_sheet_name)
         records: list[tuple[str, float]] = []
@@ -112,7 +122,6 @@ def _build_station_order(df: pd.DataFrame, mileage_path: Path | None, mileage_sh
                 continue
             records.append((station, mileage))
         mileage_order = [station for station, _ in sorted(records, key=lambda item: item[1])]
-        plotted_stations = set(df["station"].dropna().astype(str).tolist())
         ordered = [station for station in mileage_order if station in plotted_stations]
         if ordered:
             return ordered
@@ -203,13 +212,14 @@ def plot_timetable(
     scenario_overlay: Optional[pd.DataFrame] = None,
     mileage_path: Path | None = None,
     mileage_sheet_name: str = "Sheet1",
+    station_order: list[str] | None = None,
 ) -> Path:
     plt.rcParams["axes.unicode_minus"] = False
 
     df = _read_and_format(file_path, sheet_name=sheet_name)
     df = df.sort_values(["train_ID", "arrival_time", "departure_time", "station"])
 
-    stations = _build_station_order(df, mileage_path, mileage_sheet_name)
+    stations = _build_station_order(df, mileage_path, mileage_sheet_name, station_order)
     if not stations:
         raise ValueError("No stations found for plotting.")
     station_to_y = {station: idx for idx, station in enumerate(stations)}
