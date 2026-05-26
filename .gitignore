@@ -42,6 +42,24 @@ Thumbs.db
 
 # Project runtime outputs
 outputs/
+/projects/*
+!/projects/demo/
+!/projects/demo/conf/
+!/projects/demo/conf/**
+!/projects/demo/scenario_sets/
+/projects/demo/scenario_sets/*
+!/projects/demo/scenario_sets/default/
+!/projects/demo/scenario_sets/default/**
+!/projects/demo/source/
+!/projects/demo/source/.gitkeep
+/projects/demo/source/*
+!/projects/demo/source/.gitkeep
+/projects/demo/context.json
+/projects/demo/datasets/
+/projects/demo/model/
+/projects/demo/logs/
+/projects/demo/imports/
+/projects/demo/cases/
 
 # Optional local data dumps/logs
 *.log

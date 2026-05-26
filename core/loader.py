@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
-from core.scenario_config import load_scenarios_for_config
+from core.project_layout import PROJECTS_ROOT, REPO_ROOT
+from core.scenario_config import config_reference_base, load_scenarios_for_config, resolve_config_reference
 from core.types import (
     AnalyzeConfig,
     AppConfig,
@@ -129,13 +130,13 @@ def _parse_time_to_seconds(value: Any) -> int:
     return hour * 3600 + minute * 60 + second
 
 
-def _path_or_default(value: Any, default: Path) -> Path:
+def _path_or_default(value: Any, default: Path, owner_path: Path) -> Path:
     if value is None:
         return default
     text = str(value).strip()
     if text == "":
         return default
-    return Path(text)
+    return resolve_config_reference(Path(text), owner_path)
 
 
 def _str_or_default(value: Any, default: str) -> str:
@@ -246,8 +247,18 @@ def _resolve_section_anchor(item: Dict[str, Any], base_context: BaseContext) -> 
 
 def load_config(path: Path) -> AppConfig:
     yaml = _require_yaml()
-    with path.open("r", encoding="utf-8") as file:
+    config_path = path if path.is_absolute() else (REPO_ROOT / path).resolve()
+    with config_path.open("r", encoding="utf-8") as file:
         payload = yaml.safe_load(file) or {}
+    return load_config_payload(payload, config_path, yaml=yaml)
+
+
+def load_config_payload(payload: Dict[str, object], owner_path: Path, yaml: Any | None = None) -> AppConfig:
+    if not isinstance(payload, dict):
+        raise ValueError(f"Config payload must be a YAML object: {owner_path}")
+    yaml = yaml or _require_yaml()
+    config_path = owner_path if owner_path.is_absolute() else (REPO_ROOT / owner_path).resolve()
+    config_base = config_reference_base(config_path)
 
     project_cfg = payload.get("project", {}) or {}
     build_cfg = payload.get("build", {}) or {}
@@ -264,12 +275,20 @@ def load_config(path: Path) -> AppConfig:
         if legacy_key in project_cfg:
             raise ValueError(f"Legacy project.{legacy_key} is no longer supported; use project.base_context_path.")
 
-    case_name = _str_or_default(project_cfg.get("name"), path.stem)
+    case_name = _str_or_default(project_cfg.get("name"), config_path.stem)
+    if config_base != REPO_ROOT:
+        default_output_dir = config_base / "cases" / case_name
+    else:
+        default_output_dir = PROJECTS_ROOT / "main" / "datasets" / case_name / "cases" / case_name
     output_dir = _path_or_default(
         project_cfg.get("output_dir"),
-        Path("outputs") / "main" / "datasets" / case_name / "cases" / case_name,
+        default_output_dir,
+        config_path,
     )
-    base_context_path = _required_path(project_cfg.get("base_context_path"), "project.base_context_path")
+    base_context_path = resolve_config_reference(
+        _required_path(project_cfg.get("base_context_path"), "project.base_context_path"),
+        config_path,
+    )
     base_context = load_base_context(base_context_path)
 
     # Convention-first artifact paths.
@@ -282,7 +301,7 @@ def load_config(path: Path) -> AppConfig:
     metrics_default_path = output_dir / "analysis_metrics.xlsx"
     plot_default_path = output_dir / "timetable_plot.png"
 
-    scenarios_cfg = load_scenarios_for_config(build_cfg.get("scenarios", {}) or {}, path, yaml)
+    scenarios_cfg = load_scenarios_for_config(build_cfg.get("scenarios", {}) or {}, config_path, yaml)
     if "interruptions" in scenarios_cfg:
         raise ValueError("Legacy build.scenarios.interruptions is no longer supported; use speed_limits with limit_speed=0.")
 
@@ -295,22 +314,24 @@ def load_config(path: Path) -> AppConfig:
             return solve_solver_cfg[key]
         return root_solver_cfg.get(key, default)
 
-    solve_lp_path = _path_or_default(solve_cfg.get("lp_path"), lp_default_path)
+    solve_lp_path = _path_or_default(solve_cfg.get("lp_path"), lp_default_path, config_path)
     export_solution_path = _path_or_default(
         export_cfg.get("sol_path", export_cfg.get("solution_path")),
         solution_default_path,
+        config_path,
     )
 
     adjusted_timetable_path = _path_or_default(
         analyze_cfg.get("adj_timetable_path", analyze_cfg.get("adjusted_timetable_path")),
         adjusted_default_path,
+        config_path,
     )
     adjusted_timetable_sheet_name = _str_or_default(
         analyze_cfg.get("adj_timetable_sheet_name", analyze_cfg.get("adjusted_timetable_sheet_name")),
         "Sheet1",
     )
-    metrics_output_path = _path_or_default(analyze_cfg.get("metrics_output_path"), metrics_default_path)
-    plot_output_path = _path_or_default(analyze_cfg.get("plot_output_path"), plot_default_path)
+    metrics_output_path = _path_or_default(analyze_cfg.get("metrics_output_path"), metrics_default_path, config_path)
+    plot_output_path = _path_or_default(analyze_cfg.get("plot_output_path"), plot_default_path, config_path)
 
     delays = []
     for item in scenarios_cfg.get("delays", []):

@@ -20,8 +20,8 @@ VAE:
 当前已完成的主线：
 
 - `core/vae_learning_graph.py` 已能从 scenario config 导出共享 `vae_math_context_graph`、逐样本 `vae_math_learning_sample` 和 `vae_math_dataset_profile`。
-- `core/project_layout.py` 已定义统一项目目录：dataset、model、generation、comparison。
-- `scripts/project.py` 已作为推荐入口，把单个 config、批量 config、训练、生成、解码和评估统一写到 `outputs/<project>/`。
+- `core/project_layout.py` 已收敛为新 project 沙箱目录：source、context、scenario_sets、datasets、conf、model。
+- `scripts/project.py` 已作为推荐入口，提供 `newproject`、`prepare`、`normal_generate`、`build`、`solve`、`analyze`、`model train` 和合并 decode 的 `generation`。
 - `scripts/decode_typed_generated_graph.py` 已能解码单个 `vae_math_generated_graph`。
 - `scripts/decode_import_generated_graphs.py` 已能批量完成 generated graph -> disturbance graph -> config。
 - `VAE/src` 已扁平化为 reader、model、train、generate、evaluate。
@@ -34,42 +34,40 @@ VAE:
 
 ## 2. 导出目录
 
-主流程使用显式工程名，不再创建或读取 `latest`。推荐的项目目录是：
+主流程使用显式 project id 和场景/数据/模型 id，不再创建或读取 `latest`。推荐的项目目录是：
 
 ```text
-outputs/<project>/
-outputs/<project>/project.json
-outputs/<project>/datasets/<dataset>/
-outputs/<project>/models/<model>/
-outputs/<project>/generations/<generation>/
-outputs/<project>/comparisons/<comparison>/
+projects/<project>/
+projects/<project>/source/
+projects/<project>/context.json
+projects/<project>/scenario_sets/<scenario_set>/
+projects/<project>/datasets/<dataset>/
+projects/<project>/conf/
+projects/<project>/model/<model>/
 ```
 
-dataset 同时支持单个 config 和批量 config。输出结构是：
+dataset 输出结构是：
 
 ```text
-outputs/<project>/datasets/<dataset>/manifest.json
-outputs/<project>/datasets/<dataset>/configs/*.yaml
-outputs/<project>/datasets/<dataset>/cases/<case>/<case>.lp
-outputs/<project>/datasets/<dataset>/graph/context.json
-outputs/<project>/datasets/<dataset>/graph/samples/*.json
-outputs/<project>/datasets/<dataset>/graph/dataset_profile.json
-outputs/<project>/datasets/<dataset>/benchmark/build_summary.csv
-outputs/<project>/datasets/<dataset>/benchmark/solve_summary.csv
-outputs/<project>/datasets/<dataset>/benchmark/export_timetable_summary.csv
-outputs/<project>/datasets/<dataset>/benchmark/analyze_summary.csv
-outputs/<project>/datasets/<dataset>/logs/*.log
+projects/<project>/datasets/<dataset>/dataset.json
+projects/<project>/datasets/<dataset>/build.csv
+projects/<project>/datasets/<dataset>/solve.csv
+projects/<project>/datasets/<dataset>/analyze.csv
+projects/<project>/datasets/<dataset>/cases/<case>/<case>.lp
+projects/<project>/datasets/<dataset>/cases/<case>/<case>.sol
+projects/<project>/datasets/<dataset>/cases/<case>/adjusted_timetable.xlsx
 ```
 
-model 和 generation 输出结构是：
+训练输出结构是：
 
 ```text
-outputs/<project>/models/<model>/best_model.pt
-outputs/<project>/models/<model>/training_summary.json
-outputs/<project>/generations/<generation>/math_graphs/*.json
-outputs/<project>/generations/<generation>/disturbance_graphs/*.json
-outputs/<project>/generations/<generation>/configs/*.yaml
+projects/<project>/model/<model>/graph/context.json
+projects/<project>/model/<model>/graph/samples/*.json
+projects/<project>/model/<model>/best_model.pt
+projects/<project>/model/<model>/training_summary.json
 ```
+
+git 只保留 `projects/demo/conf/`、`projects/demo/scenario_sets/default/` 和 `projects/demo/source/.gitkeep`。context、非 default 场景集、dataset 和 model 均为本地运行产物。
 
 ## 3. JSON 接口
 
@@ -357,82 +355,45 @@ loss =
 
 ## 6. 脚本入口
 
+初始化项目：
+
+```bash
+python scripts/project.py newproject demo
+```
+
+准备共享 context：
+
+```bash
+python scripts/project.py demo prepare
+```
+
 生成场景模拟输入：
 
 ```bash
-python -u scripts/case_library_builder.py \
-  --output-root outputs/main/scenarios/generated_reference \
-  --clean
+python scripts/project.py demo normal_generate
+python scripts/project.py demo normal_generate test
 ```
 
 构建 reference dataset：
 
 ```bash
-python scripts/project.py dataset build \
-  --config config/demo.yml \
-  --dataset reference \
-  --scenarios outputs/main/scenarios/generated_reference
+python scripts/project.py demo build reference reference
 
-python scripts/project.py dataset benchmark \
-  --config config/demo.yml \
-  --dataset reference \
-  --time-limit 120
+python scripts/project.py demo solve reference
+python scripts/project.py demo analyze reference
 ```
 
 训练：
 
 ```bash
-python scripts/project.py model train \
-  --config config/demo.yml \
-  --model vae_reference \
-  --dataset reference
+python scripts/project.py demo model train
+python scripts/project.py demo model train test
 ```
-
-也可以显式指定配置：
-
-```bash
-python scripts/project.py model train --config config/demo.yml --model <model> --dataset <dataset>
-```
-
-`config/demo.yml` 的 `train` 段保存模型维度、优化参数和 loss 权重。训练脚本不再接受零散训练参数，避免同一套实验参数散落在命令行里。
 
 模型生成：
 
 ```bash
-python scripts/project.py generation create \
-  --config config/demo.yml \
-  --generation gen_reference \
-  --dataset reference \
-  --model vae_reference \
-  --num-samples 100
-```
-
-target-copy 调试生成：
-
-```bash
-python scripts/project.py generation create \
-  --project main \
-  --generation target_copy_reference \
-  --dataset reference \
-  --num-samples 10 \
-  --mode target-copy
-```
-
-评估：
-
-```bash
-python scripts/project.py generation evaluate-graphs \
-  --project main \
-  --generation gen_reference \
-  --dataset reference
-```
-
-解码并回灌配置：
-
-```bash
-python scripts/project.py generation decode \
-  --config config/demo.yml \
-  --generation gen_reference
+python scripts/project.py demo generation vae_reference generated_reference
 ```
 
 ## 7. 生成实例相似性评估计划
@@ -451,7 +412,7 @@ python scripts/project.py generation decode \
 - 晚点时长不是 context graph 的拓扑结构。它是 task output 的扰动参数，训练样本中对应 delay task 的参数，解码后对应 `DelayScenario.seconds`。因此晚点时长应作为扰动场景参数分布评估，而不是归入节点/边拓扑指标。
 - 限速中断可从 speed limit 任务中单独拆出：当解码后的 `limit_speed == 0` 时，将其视为中断；当 `limit_speed > 0` 时，将其视为普通限速。
 - “发生时间点 JS 散度”是合理指标，适合比较晚点、限速和中断在一天内不同时间段的概率分布。但时间、站点顺序和区间顺序都是有序变量，单独使用 JS 散度会丢失相邻 bin 的距离信息，所以应同时报告 Wasserstein/EMD 或 KS statistic。
-- `scripts/bench_solve.py` 已在 `solve_summary.csv` 中记录 Gurobi `NodeCount`，字段名为 `num_nodes`；历史报告里没有该字段的 run 仍会跳过分支节点数。
+- 新入口 `scripts/project.py <project> solve <dataset>` 已在 `solve.csv` 中记录 Gurobi `NodeCount`，字段名为 `num_nodes`；time limit 且无可行解的记录也会尽量保留节点数。历史报告里没有该字段的 run 仍会跳过分支节点数。
 
 建议指标口径如下：
 
@@ -473,25 +434,29 @@ python scripts/project.py generation decode \
 - 状态余弦距离用于比较求解状态分布，例如 optimal、feasible、timeout、infeasible 的比例是否接近。
 - 相对误差用于比较均值类指标，例如平均变量数、平均约束数、平均求解时间和平均目标值。
 
-`message_passing_steps = 2/3/4` 的生成、build、solve 和相似性评估结果已经回填到 `docs/消融实验/报告.md`。当前报告显示 `steps=2` 的综合误差最低、相似度最高；原始 run 产物不随当前仓库保留，复现实验仍按 `docs/exp.md` 重新生成 `outputs/`。
+`message_passing_steps = 2/3/4` 的生成、build、solve 和相似性评估结果已经回填到 `docs/消融实验/报告.md`。当前报告显示 `steps=2` 的综合误差最低、相似度最高；原始 run 产物不随当前仓库保留，复现实验仍按 `docs/exp.md` 重新生成 `projects/<project>/` 产物。
 
 ## 8. 当前状态
 
 已完成：
 
-- project layout 的 `graph/context.json`、`graph/samples/*.json` 和 `graph/dataset_profile.json` 导出。
-- `context.json` 的 `rules.tasks` 会由本次 build 的 learning samples 推断 `max_slots`、`count_bounds` 和 `param_bounds`。
-- 显式 dataset 工程目录：`outputs/<project>/datasets/<dataset>`。
-- 显式训练工程目录：`outputs/<project>/models/<model>`。
-- 显式生成工程目录：`outputs/<project>/generations/<generation>`。
+- project layout 已切换到 `source/`、共享 `context.json`、`scenario_sets/`、`datasets/`、`conf/`、`model/`。
+- `model train` 会在模型目录内生成 `graph/context.json`、`graph/samples/*.json` 和 `graph/dataset_profile.json`。
+- `context.json` 的 `rules.tasks` 会由训练 scenario set 的 learning samples 推断 `max_slots`、`count_bounds` 和 `param_bounds`。
+- 显式共享 context：`projects/<project>/context.json`。
+- 显式 scenario set 工程目录：`projects/<project>/scenario_sets/<scenario_set>`。
+- 显式 dataset 工程目录：`projects/<project>/datasets/<dataset>`。
+- 显式训练工程目录：`projects/<project>/model/<model>`。
+- `generation` 已合并 model generate 和 decode，直接输出 scenario set。
 - VAE 训练同时写出 `best_model.pt` 和 `last_model.pt`，生成默认使用 best checkpoint。
-- `config/demo.yml` 统一管理 BaseContext、solver/analyze 和 train 参数，`config/scenario/` 单独管理场景输入。
-- `prepare_base_context.py` 默认把 BaseContext 写入 `outputs/base_context/`，生成场景库默认写入 `outputs/main/scenarios/`，流程产物不再写入 `inputs/` 或 `config/`。
+- `projects/demo/conf/` 管理 prepare、solve、analyze、normal_generate 和 train 参数。
+- `projects/demo/scenario_sets/default/` 管理手写 demo 场景输入。
+- `project.py demo prepare` 生成共享 context，`project.py demo normal_generate` 生成命名 scenario set，流程产物不再写入 `inputs/` 或 `config/`。
 - speed 维度按 `speed_limit / 350` 归一化后进入训练样本。
 - VAE reader 支持共享 context + 多 learning sample。
 - VAE generation reader 支持只读 context graph。
 - VAE typed message passing 已接入 `edge_index + edge_attr`。
-- model generate 输出 `outputs/<project>/generations/<generation>/math_graphs/*.json`。
+- model generate 的中间 math graph 保留在 `projects/<project>/model/<model>/generated/`，最终输出为 `scenario_sets/<scenario_set>/*.yml`。
 - target-copy 作为管道连通性检查保留。
 - generated graph 可解码为 disturbance graph，并批量回灌为 config。
 - evaluate 支持 graph/task output 相似性和 solver CSV 难度对比入口。
@@ -504,22 +469,22 @@ python scripts/project.py generation decode \
   - model generate
   - target-copy
   - graph/task output evaluation
-  - `project.py dataset build --config ...`
+  - `project.py demo build default smoke_dataset`
 - 2026-05-26 本地非破坏性检查已通过：
   - 54 个 Python 文件语法检查通过。
   - `main.py --help` 和 `scripts/project.py --help` 可正常启动。
-  - `config/demo.yml` 的 BaseContext 可加载，当前下行 BaseContext 含 1560 个 event anchor 和 5 个 section anchor。
-  - `config/scenario/demo/` 可展开为 5 个 demo 场景：base、delay、interruptions、mixed、speed_limits。
-  - `scripts/bench_solve.py` 输出字段包含 `num_nodes`，用于记录 Gurobi 分支节点数。
+  - `projects/demo/context.json` 的 BaseContext 可加载，当前下行 BaseContext 含 1560 个 event anchor 和 5 个 section anchor。
+  - `projects/demo/scenario_sets/default/` 可展开为 5 个 demo 场景：base、delay、interruptions、mixed、speed_limits。
+  - `project.py demo solve smoke_dataset --limit 1 --time-limit 1` 输出字段包含 `num_nodes`，用于记录 Gurobi 分支节点数。
 
 待完整批量验收：
 
-- 当前本地仓库没有保留 `outputs/` 原始运行产物，完整复现需要重新生成。
-- 全量 `scripts/project.py dataset build/benchmark --project main --dataset reference`。
+- 当前本地仓库没有保留历史运行产物，完整复现需要重新生成 `projects/<project>/` 下的命名产物。
+- 全量 `scripts/project.py demo build reference reference`。
+- 全量 `scripts/project.py demo solve reference`。
+- 全量 `scripts/project.py demo analyze reference`。
 - 全量 VAE 训练。
-- 全量 model generate。
-- generated graph 批量 decode/import。
-- 生成配置的 `scripts/project.py dataset build --project-config config/demo.yml --config-root outputs/<project>/generations/<generation>/configs`。
+- 全量 `scripts/project.py demo generation <model_id> <scenario_set_id>`。
 - reference 和 generated solver CSV 对比。
 
 验收步骤以 `docs/exp.md` 为准。

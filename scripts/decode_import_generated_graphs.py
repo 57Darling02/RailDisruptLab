@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--generated-graphs", required=True, help="Generated graph JSON file or directory.")
     parser.add_argument("--glob", default="*.json", help="Glob used when --generated-graphs is a directory.")
-    parser.add_argument("--base-config", default="config/demo.yml", help="Config that provides solver/analyze defaults.")
+    parser.add_argument("--base-config", required=True, help="Config that provides solver/analyze defaults.")
     parser.add_argument("--base-context-path", default="", help="Optional BaseContext path override.")
     parser.add_argument("--output-disturbance-root", default="", help="Defaults to <generation>/disturbance_graphs.")
     parser.add_argument("--output-config-root", default="", help="Defaults to <generation>/configs.")

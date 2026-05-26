@@ -25,10 +25,6 @@ SCHEMA_VERSION = 1
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def default_base_context_path(timetable_path: Path) -> Path:
-    return REPO_ROOT / "outputs" / "base_context" / f"context_{timetable_path.stem}.json"
-
-
 def build_base_context(
     timetable_path: Path,
     mileage_path: Path,
@@ -77,10 +73,17 @@ def section_anchor_by_key(context: BaseContext) -> Dict[SectionKey, SectionAncho
     return {section_anchor_key(anchor): anchor for anchor in context.section_anchors.values()}
 
 
-def write_base_context(context: BaseContext, output_path: Path) -> None:
+def write_base_context(context: BaseContext, output_path: Path, metadata: Dict[str, Any] | None = None) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _base_context_to_payload(context)
+    if metadata:
+        payload = {
+            "schema_version": payload["schema_version"],
+            "project": dict(metadata),
+            **{key: value for key, value in payload.items() if key != "schema_version"},
+        }
     output_path.write_text(
-        json.dumps(_base_context_to_payload(context), ensure_ascii=False, indent=2),
+        json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

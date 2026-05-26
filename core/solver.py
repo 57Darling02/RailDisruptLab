@@ -1,7 +1,24 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional
+
+
+class GurobiSolveError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int,
+        sol_count: int,
+        node_count: Optional[float],
+        timed_out: bool,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.sol_count = sol_count
+        self.node_count = node_count
+        self.timed_out = timed_out
 
 
 class SolveResult:
@@ -48,22 +65,35 @@ def solve_lp(
     model.optimize()
 
     timed_out = model.status == GRB.TIME_LIMIT
+    node_count = _safe_float_attr(model, "NodeCount")
     if model.status not in (GRB.OPTIMAL, GRB.TIME_LIMIT) or model.SolCount == 0:
-        raise RuntimeError(f"Gurobi optimize failed, status={model.status}, SolCount={model.SolCount}")
+        raise GurobiSolveError(
+            f"Gurobi optimize failed, status={model.status}, SolCount={model.SolCount}",
+            status=int(model.status),
+            sol_count=int(model.SolCount),
+            node_count=node_count,
+            timed_out=timed_out,
+        )
 
     solution_path.parent.mkdir(parents=True, exist_ok=True)
     model.write(str(solution_path))
 
     values = {var.VarName: float(var.X) for var in model.getVars()}
     achieved_gap = float(model.MIPGap) if model.SolCount > 0 else float("inf")
-    node_count = float(model.NodeCount)
     return SolveResult(
         objective=float(model.objVal),
         values=values,
         mip_gap=achieved_gap,
-        node_count=node_count,
+        node_count=node_count or 0.0,
         timed_out=timed_out,
     )
+
+
+def _safe_float_attr(model: object, attr_name: str) -> Optional[float]:
+    try:
+        return float(getattr(model, attr_name))
+    except Exception:
+        return None
 
 
 def load_solution_values(solution_path: Path) -> Dict[str, float]:

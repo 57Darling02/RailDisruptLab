@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUTS_ROOT = REPO_ROOT / "outputs"
+PROJECTS_ROOT = REPO_ROOT / "projects"
 
 
 def sanitize_id(value: str) -> str:
@@ -23,7 +23,7 @@ def to_posix(path: Path) -> str:
     return str(path).replace("\\", "/")
 
 
-def reset_dir(path: Path, *, allowed_root: Path = OUTPUTS_ROOT) -> None:
+def reset_dir(path: Path, *, allowed_root: Path = PROJECTS_ROOT) -> None:
     resolved = path.resolve()
     root = allowed_root.resolve()
     if resolved == root or root not in resolved.parents:
@@ -35,81 +35,50 @@ def reset_dir(path: Path, *, allowed_root: Path = OUTPUTS_ROOT) -> None:
 
 
 @dataclass(frozen=True)
+class ScenarioSetLayout:
+    root: Path
+
+
+@dataclass(frozen=True)
 class DatasetLayout:
     root: Path
 
     @property
-    def manifest(self) -> Path:
-        return self.root / "manifest.json"
-
-    @property
-    def configs_dir(self) -> Path:
-        return self.root / "configs"
+    def dataset_json(self) -> Path:
+        return self.root / "dataset.json"
 
     @property
     def cases_dir(self) -> Path:
         return self.root / "cases"
 
     @property
-    def graph_dir(self) -> Path:
-        return self.root / "graph"
+    def build_csv(self) -> Path:
+        return self.root / "build.csv"
 
     @property
-    def context_graph(self) -> Path:
-        return self.graph_dir / "context.json"
+    def solve_csv(self) -> Path:
+        return self.root / "solve.csv"
+
+    @property
+    def analyze_csv(self) -> Path:
+        return self.root / "analyze.csv"
+
+
+@dataclass(frozen=True)
+class ModelLayout:
+    root: Path
+
+    @property
+    def graph_dir(self) -> Path:
+        return self.root / "graph"
 
     @property
     def sample_dir(self) -> Path:
         return self.graph_dir / "samples"
 
     @property
-    def dataset_profile(self) -> Path:
-        return self.graph_dir / "dataset_profile.json"
-
-    @property
-    def benchmark_dir(self) -> Path:
-        return self.root / "benchmark"
-
-    @property
-    def logs_dir(self) -> Path:
-        return self.root / "logs"
-
-    @property
-    def build_summary_csv(self) -> Path:
-        return self.benchmark_dir / "build_summary.csv"
-
-    @property
-    def build_summary_json(self) -> Path:
-        return self.benchmark_dir / "build_summary.json"
-
-    @property
-    def solve_summary_csv(self) -> Path:
-        return self.benchmark_dir / "solve_summary.csv"
-
-    @property
-    def solve_summary_json(self) -> Path:
-        return self.benchmark_dir / "solve_summary.json"
-
-    @property
-    def export_summary_csv(self) -> Path:
-        return self.benchmark_dir / "export_timetable_summary.csv"
-
-    @property
-    def export_summary_json(self) -> Path:
-        return self.benchmark_dir / "export_timetable_summary.json"
-
-    @property
-    def analyze_summary_csv(self) -> Path:
-        return self.benchmark_dir / "analyze_summary.csv"
-
-    @property
-    def analyze_summary_json(self) -> Path:
-        return self.benchmark_dir / "analyze_summary.json"
-
-
-@dataclass(frozen=True)
-class ModelLayout:
-    root: Path
+    def context_graph(self) -> Path:
+        return self.graph_dir / "context.json"
 
     @property
     def train_config(self) -> Path:
@@ -119,59 +88,9 @@ class ModelLayout:
     def best_model(self) -> Path:
         return self.root / "best_model.pt"
 
-
-@dataclass(frozen=True)
-class GenerationLayout:
-    root: Path
-
     @property
-    def manifest(self) -> Path:
-        return self.root / "manifest.json"
-
-    @property
-    def math_graphs_dir(self) -> Path:
-        return self.root / "math_graphs"
-
-    @property
-    def disturbance_graphs_dir(self) -> Path:
-        return self.root / "disturbance_graphs"
-
-    @property
-    def configs_dir(self) -> Path:
-        return self.root / "configs"
-
-    @property
-    def case_outputs_dir(self) -> Path:
-        return self.root / "case_outputs"
-
-    @property
-    def logs_dir(self) -> Path:
-        return self.root / "logs"
-
-    @property
-    def decode_summary_csv(self) -> Path:
-        return self.root / "decode_summary.csv"
-
-    @property
-    def decode_summary_json(self) -> Path:
-        return self.root / "decode_summary.json"
-
-    @property
-    def graph_evaluation(self) -> Path:
-        return self.root / "graph_evaluation.json"
-
-    @property
-    def solver_difficulty(self) -> Path:
-        return self.root / "solver_difficulty.json"
-
-
-@dataclass(frozen=True)
-class ComparisonLayout:
-    root: Path
-
-    @property
-    def metrics_summary(self) -> Path:
-        return self.root / "metrics_summary.json"
+    def generation_dir(self) -> Path:
+        return self.root / "generated"
 
 
 @dataclass(frozen=True)
@@ -181,20 +100,60 @@ class ProjectLayout:
 
     @classmethod
     def from_name(cls, name: str) -> "ProjectLayout":
-        return cls(name=sanitize_id(name), root=OUTPUTS_ROOT / sanitize_id(name))
+        project_id = sanitize_id(name)
+        return cls(name=project_id, root=PROJECTS_ROOT / project_id)
 
     @property
-    def manifest(self) -> Path:
-        return self.root / "project.json"
+    def source_dir(self) -> Path:
+        return self.root / "source"
+
+    @property
+    def scenario_sets_dir(self) -> Path:
+        return self.root / "scenario_sets"
+
+    @property
+    def default_scenario_set(self) -> Path:
+        return self.scenario_sets_dir / "default"
+
+    @property
+    def datasets_dir(self) -> Path:
+        return self.root / "datasets"
+
+    @property
+    def model_dir(self) -> Path:
+        return self.root / "model"
+
+    @property
+    def conf_dir(self) -> Path:
+        return self.root / "conf"
+
+    @property
+    def context_json(self) -> Path:
+        return self.root / "context.json"
+
+    @property
+    def prepare_config(self) -> Path:
+        return self.conf_dir / "prepare.yml"
+
+    @property
+    def solve_config(self) -> Path:
+        return self.conf_dir / "solve.yml"
+
+    @property
+    def analyze_config(self) -> Path:
+        return self.conf_dir / "analyze.yml"
+
+    def normal_generate_config(self, config_id: str) -> Path:
+        return self.conf_dir / "normal_generate" / f"{sanitize_id(config_id)}.yml"
+
+    def train_config(self, config_id: str) -> Path:
+        return self.conf_dir / "train" / f"{sanitize_id(config_id)}.yml"
+
+    def scenario_set(self, scenario_set_id: str) -> ScenarioSetLayout:
+        return ScenarioSetLayout(self.scenario_sets_dir / sanitize_id(scenario_set_id))
 
     def dataset(self, dataset_id: str) -> DatasetLayout:
-        return DatasetLayout(self.root / "datasets" / sanitize_id(dataset_id))
+        return DatasetLayout(self.datasets_dir / sanitize_id(dataset_id))
 
     def model(self, model_id: str) -> ModelLayout:
-        return ModelLayout(self.root / "models" / sanitize_id(model_id))
-
-    def generation(self, generation_id: str) -> GenerationLayout:
-        return GenerationLayout(self.root / "generations" / sanitize_id(generation_id))
-
-    def comparison(self, comparison_id: str) -> ComparisonLayout:
-        return ComparisonLayout(self.root / "comparisons" / sanitize_id(comparison_id))
+        return ModelLayout(self.model_dir / sanitize_id(model_id))

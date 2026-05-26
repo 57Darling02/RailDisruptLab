@@ -1,361 +1,833 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import random
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from core.project_layout import ProjectLayout, repo_path, reset_dir, to_posix
-
-DEFAULT_PROJECT_CONFIG = "config/demo.yml"
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Project-oriented RailGraph2Gurobi workflow.")
-    sub = parser.add_subparsers(dest="domain", required=True)
-
-    dataset = sub.add_parser("dataset", help="Build and benchmark datasets.")
-    dataset_sub = dataset.add_subparsers(dest="action", required=True)
-    d_build = dataset_sub.add_parser("build", help="Build a dataset from case configs.")
-    add_project_args(d_build)
-    source = d_build.add_mutually_exclusive_group(required=True)
-    source.add_argument("--config-root")
-    source.add_argument("--config")
-    d_build.add_argument("--project-config", default=DEFAULT_PROJECT_CONFIG, help="Project config used when --project is omitted with --config-root.")
-    d_build.add_argument("--scenarios", default="", help="Override build.scenarios with a scenario file or directory.")
-    d_build.add_argument("--glob", default="**/*.yaml")
-    d_build.add_argument("--limit", type=int, default=0)
-    d_build.add_argument("--stop-on-error", action="store_true")
-
-    d_benchmark = dataset_sub.add_parser("benchmark", help="Solve/export/analyze a dataset.")
-    add_project_args(d_benchmark)
-    d_benchmark.add_argument("--config", default=DEFAULT_PROJECT_CONFIG, help="Project config used when --project is omitted.")
-    d_benchmark.add_argument("--glob", default="**/*.yaml")
-    d_benchmark.add_argument("--limit", type=int, default=0)
-    d_benchmark.add_argument("--workers", type=int, default=1)
-    d_benchmark.add_argument("--threads-per-solve", type=int, default=0)
-    d_benchmark.add_argument("--time-limit", type=float, default=120.0)
-    d_benchmark.add_argument("--mip-gap", type=float, default=0.0)
-    d_benchmark.add_argument("--skip-solve", action="store_true")
-    d_benchmark.add_argument("--skip-export", action="store_true")
-    d_benchmark.add_argument("--skip-analyze", action="store_true")
-    d_benchmark.add_argument("--scenario-report", choices=("on", "off"), default="on")
-    d_benchmark.add_argument("--scenario-report-scope", choices=("batch", "per_case", "both"), default="batch")
-
-    model = sub.add_parser("model", help="Train models.")
-    model_sub = model.add_subparsers(dest="action", required=True)
-    m_train = model_sub.add_parser("train", help="Train VAE from a dataset graph library.")
-    add_project_args(m_train, dataset_required=True, model_required=True)
-    m_train.add_argument("--config", default=DEFAULT_PROJECT_CONFIG)
-
-    generation = sub.add_parser("generation", help="Create, decode, and evaluate generated graphs.")
-    generation_sub = generation.add_subparsers(dest="action", required=True)
-    g_create = generation_sub.add_parser("create", help="Generate math graphs.")
-    add_project_args(g_create, dataset_required=True, model_required=False, generation_required=True)
-    g_create.add_argument("--config", default=DEFAULT_PROJECT_CONFIG, help="Project config used when --project is omitted.")
-    g_create.add_argument("--model", default="", help="Model id used in --mode model.")
-    g_create.add_argument("--num-samples", type=int, default=100)
-    g_create.add_argument("--mode", choices=("model", "target-copy"), default="model")
-    g_create.add_argument("--seed", type=int, default=1)
-    g_create.add_argument("--device", default="auto")
-
-    g_decode = generation_sub.add_parser("decode", help="Decode generated graphs into case configs.")
-    add_project_args(g_decode, dataset_required=False, generation_required=True)
-    g_decode.add_argument("--config", default=DEFAULT_PROJECT_CONFIG, help="Project config used when --project is omitted.")
-    g_decode.add_argument("--base-config", default=DEFAULT_PROJECT_CONFIG)
-
-    g_eval = generation_sub.add_parser("evaluate-graphs", help="Compare generated graph outputs with a reference dataset.")
-    add_project_args(g_eval, dataset_required=True, generation_required=True)
-    g_eval.add_argument("--config", default=DEFAULT_PROJECT_CONFIG, help="Project config used when --project is omitted.")
-
-    compare = sub.add_parser("compare", help="Compare benchmarked datasets.")
-    compare_sub = compare.add_subparsers(dest="action", required=True)
-    c_solver = compare_sub.add_parser("solver", help="Compare solver difficulty between two datasets.")
-    c_solver.add_argument("--project", default="")
-    c_solver.add_argument("--config", default=DEFAULT_PROJECT_CONFIG, help="Project config used when --project is omitted.")
-    c_solver.add_argument("--reference", required=True)
-    c_solver.add_argument("--candidate", required=True)
-    c_solver.add_argument("--generation", default="", help="Optional generation id where solver_difficulty.json is written.")
-
-    return parser.parse_args()
+from analysis.io import timetable_from_base_context
+from analysis.scenario_report import build_case_scenario_report_data
+from core.base_context import build_base_context, load_base_context, write_base_context
+from core.builder import build_model
+from core.disturbance_graph import disturbance_graph_to_scenario
+from core.exporter import export_lp
+from core.loader import load_config_payload, load_mileage_table, load_timetable
+from core.postprocess import export_adjusted_timetable
+from core.project_layout import ProjectLayout, reset_dir, sanitize_id, to_posix
+from core.scenario_config import ScenarioDocument, load_scenario_document, scenario_files
+from core.solver import GurobiSolveError, load_solution_values, solve_lp
+from core.types import AppConfig, ScenarioConfig
+from core.vae_learning_graph import (
+    DEFAULT_EVENT_TIME_WINDOW,
+    DEFAULT_EVENT_TOP_K,
+    DEFAULT_MAX_SLOTS,
+    DEFAULT_SECTION_ORDER_WINDOW,
+    DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
+    infer_math_dataset_schema,
+    scenario_to_typed_vae_learning_graph,
+    typed_generated_graph_to_disturbance_graph,
+    typed_learning_graph_to_dataset_profile,
+    typed_learning_graph_to_math_context_graph,
+    typed_learning_graph_to_math_learning_sample,
+)
 
 
-def add_project_args(
-    parser: argparse.ArgumentParser,
-    *,
-    dataset_required: bool = True,
-    model_required: bool = False,
-    generation_required: bool = False,
-) -> None:
-    parser.add_argument("--project", default="")
-    if dataset_required:
-        parser.add_argument("--dataset", required=True)
-    if model_required:
-        parser.add_argument("--model", required=True)
-    if generation_required:
-        parser.add_argument("--generation", required=True)
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    if len(argv) >= 1 and argv[0] == "newproject":
+        parser = argparse.ArgumentParser(description="Create a RailGraph2Gurobi project sandbox.")
+        parser.add_argument("command", choices=["newproject"])
+        parser.add_argument("projectid")
+        return parser.parse_args(argv)
+
+    parser = argparse.ArgumentParser(description="Project sandbox workflow.")
+    parser.add_argument("projectid")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("prepare", help="Build project context.json from conf/prepare.yml.")
+
+    normal = sub.add_parser("normal_generate", help="Generate a normal random scenario set.")
+    normal.add_argument("config_id", nargs="?", default="default")
+
+    build = sub.add_parser("build", help="Build LP instances from a scenario set.")
+    build.add_argument("scenario_set_id")
+    build.add_argument("dataset_id")
+
+    solve = sub.add_parser("solve", help="Solve all LPs in a dataset.")
+    solve.add_argument("dataset_id")
+    solve.add_argument("--limit", type=int, default=0)
+    solve.add_argument("--time-limit", type=float, default=None)
+
+    analyze = sub.add_parser("analyze", help="Export adjusted timetables and analyze a dataset.")
+    analyze.add_argument("dataset_id")
+    analyze.add_argument("--limit", type=int, default=0)
+
+    model = sub.add_parser("model", help="Model commands.")
+    model_sub = model.add_subparsers(dest="model_command", required=True)
+    train = model_sub.add_parser("train", help="Train VAE from a scenario set.")
+    train.add_argument("config_id", nargs="?", default="default")
+
+    generation = sub.add_parser("generation", help="Generate and decode scenarios with a trained model.")
+    generation.add_argument("model_id")
+    generation.add_argument("scenario_set_id")
+    generation.add_argument("--num-samples", type=int, default=100)
+    generation.add_argument("--seed", type=int, default=1)
+    generation.add_argument("--device", default="auto")
+    generation.add_argument("--overwrite", action="store_true")
+
+    return parser.parse_args(argv)
 
 
 def main() -> None:
-    args = parse_args()
-    project_name = resolve_project_name(args)
-    layout = ProjectLayout.from_name(project_name)
-    layout.root.mkdir(parents=True, exist_ok=True)
-    write_json(layout.manifest, {"project": layout.name, "root": to_posix(layout.root), "updated_at": now()})
+    args = parse_args(sys.argv[1:])
+    if args.command == "newproject":
+        new_project(ProjectLayout.from_name(args.projectid))
+        return
 
-    if args.domain == "dataset" and args.action == "build":
-        dataset_build(args, layout)
-    elif args.domain == "dataset" and args.action == "benchmark":
-        dataset_benchmark(args, layout)
-    elif args.domain == "model" and args.action == "train":
-        model_train(args, layout)
-    elif args.domain == "generation" and args.action == "create":
-        generation_create(args, layout)
-    elif args.domain == "generation" and args.action == "decode":
-        generation_decode(args, layout)
-    elif args.domain == "generation" and args.action == "evaluate-graphs":
-        generation_evaluate_graphs(args, layout)
-    elif args.domain == "compare" and args.action == "solver":
-        compare_solver(args, layout)
+    layout = ProjectLayout.from_name(args.projectid)
+    if args.command == "prepare":
+        prepare(layout)
+    elif args.command == "normal_generate":
+        normal_generate(layout, args.config_id)
+    elif args.command == "build":
+        build_dataset(layout, args.scenario_set_id, args.dataset_id)
+    elif args.command == "solve":
+        solve_dataset(layout, args.dataset_id, limit=args.limit, time_limit=args.time_limit)
+    elif args.command == "analyze":
+        analyze_dataset(layout, args.dataset_id, limit=args.limit)
+    elif args.command == "model" and args.model_command == "train":
+        train_model(layout, args.config_id)
+    elif args.command == "generation":
+        generate_scenarios(
+            layout,
+            model_id=args.model_id,
+            scenario_set_id=args.scenario_set_id,
+            num_samples=args.num_samples,
+            seed=args.seed,
+            device=args.device,
+            overwrite=args.overwrite,
+        )
     else:  # pragma: no cover
-        raise ValueError(f"Unsupported command: {args.domain} {args.action}")
+        raise ValueError(f"Unsupported command: {args.command}")
 
 
-def dataset_build(args: argparse.Namespace, layout: ProjectLayout) -> None:
-    dataset = layout.dataset(args.dataset)
-    config_root = args.config_root
-    glob_pattern = args.glob
-    if args.config:
-        config_path = repo_path(args.config)
-        config_root = to_posix(config_path.parent)
-        glob_pattern = config_path.name
-    cmd = [
-        sys.executable,
-        "scripts/bench_build.py",
-        "--config-root",
-        config_root,
-        "--glob",
-        glob_pattern,
-        "--output-dir",
-        to_posix(dataset.root),
-    ]
-    if args.limit > 0:
-        cmd.extend(["--limit", str(args.limit)])
-    if args.scenarios:
-        cmd.extend(["--scenarios", args.scenarios])
-    if args.stop_on_error:
-        cmd.append("--stop-on-error")
-    run_logged(cmd, layout.root / "logs" / f"dataset_{args.dataset}_build.wrapper.log")
+def new_project(layout: ProjectLayout) -> None:
+    for directory in (
+        layout.source_dir,
+        layout.default_scenario_set,
+        layout.datasets_dir,
+        layout.conf_dir / "normal_generate",
+        layout.conf_dir / "train",
+        layout.model_dir,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
 
-
-def dataset_benchmark(args: argparse.Namespace, layout: ProjectLayout) -> None:
-    dataset = layout.dataset(args.dataset)
-    if not dataset.configs_dir.is_dir():
-        raise FileNotFoundError(f"Dataset configs not found: {dataset.configs_dir}")
-    if not args.skip_solve:
-        end_index = args.limit if args.limit > 0 else 0
-        cmd = [
-            sys.executable,
-            "scripts/bench_solve.py",
-            "--config-root",
-            to_posix(dataset.configs_dir),
-            "--glob",
-            args.glob,
-            "--end-index",
-            str(end_index),
-            "--workers",
-            str(args.workers),
-            "--threads-per-solve",
-            str(args.threads_per_solve),
-            "--time-limit",
-            str(args.time_limit),
-            "--mip-gap",
-            str(args.mip_gap),
-            "--summary-csv",
-            to_posix(dataset.solve_summary_csv),
-            "--summary-json",
-            to_posix(dataset.solve_summary_json),
-        ]
-        run_logged(cmd, dataset.logs_dir / "solve.log")
-    if not args.skip_export:
-        cmd = [
-            sys.executable,
-            "scripts/bench_export_timetable.py",
-            "--config-root",
-            to_posix(dataset.configs_dir),
-            "--glob",
-            args.glob,
-            "--limit",
-            str(args.limit),
-            "--summary-csv",
-            to_posix(dataset.export_summary_csv),
-            "--summary-json",
-            to_posix(dataset.export_summary_json),
-        ]
-        run_logged(cmd, dataset.logs_dir / "export_timetable.log")
-    if not args.skip_analyze:
-        cmd = [
-            sys.executable,
-            "scripts/bench_analyze.py",
-            "--config-root",
-            to_posix(dataset.configs_dir),
-            "--glob",
-            args.glob,
-            "--limit",
-            str(args.limit),
-            "--summary-csv",
-            to_posix(dataset.analyze_summary_csv),
-            "--summary-json",
-            to_posix(dataset.analyze_summary_json),
-            "--scenario-report",
-            args.scenario_report,
-            "--scenario-report-scope",
-            args.scenario_report_scope,
-            "--scenario-report-output-root",
-            to_posix(dataset.benchmark_dir / "scenario_report"),
-        ]
-        run_logged(cmd, dataset.logs_dir / "analyze.log")
-    write_json(
-        dataset.benchmark_dir / "benchmark_manifest.json",
-        {"dataset": args.dataset, "updated_at": now(), "dataset_dir": to_posix(dataset.root)},
-    )
-
-
-def model_train(args: argparse.Namespace, layout: ProjectLayout) -> None:
-    dataset = layout.dataset(args.dataset)
-    model = layout.model(args.model)
-    cmd = [
-        sys.executable,
-        "scripts/train_vae.py",
-        args.config,
-        "--graphs-root",
-        to_posix(dataset.graph_dir),
-        "--output-dir",
-        to_posix(model.root),
-    ]
-    run_logged(cmd, layout.root / "logs" / f"model_{args.model}_train.wrapper.log")
-    write_json(model.root / "manifest.json", {"model": args.model, "dataset": args.dataset, "updated_at": now()})
-
-
-def generation_create(args: argparse.Namespace, layout: ProjectLayout) -> None:
-    dataset = layout.dataset(args.dataset)
-    generation = layout.generation(args.generation)
-    cmd = [
-        sys.executable,
-        "scripts/generate_vae.py",
-        "--context-graphs" if args.mode == "target-copy" else "--context-graph",
-        to_posix(dataset.graph_dir if args.mode == "target-copy" else dataset.context_graph),
-        "--num-samples",
-        str(args.num_samples),
-        "--mode",
-        args.mode,
-        "--seed",
-        str(args.seed),
-        "--device",
-        args.device,
-        "--output-dir",
-        to_posix(generation.root),
-    ]
-    if args.mode == "model":
-        if not args.model:
-            raise ValueError("--model is required when --mode model.")
-        cmd.extend(["--checkpoint", to_posix(layout.model(args.model).best_model)])
-    run_logged(cmd, layout.root / "logs" / f"generation_{args.generation}_create.wrapper.log")
-    write_json(
-        generation.manifest,
+    write_yaml_if_missing(
+        layout.prepare_config,
         {
-            "generation": args.generation,
-            "dataset": args.dataset,
-            "model": args.model,
-            "mode": args.mode,
-            "updated_at": now(),
+            "timetable_filename": "",
+            "mileage_filename": "",
+            "timetable_sheet_name": "Sheet1",
+            "mileage_sheet_name": "Sheet1",
         },
     )
-
-
-def generation_decode(args: argparse.Namespace, layout: ProjectLayout) -> None:
-    generation = layout.generation(args.generation)
-    reset_dir(generation.disturbance_graphs_dir)
-    reset_dir(generation.configs_dir)
-    reset_dir(generation.case_outputs_dir)
-    cmd = [
-        sys.executable,
-        "scripts/decode_import_generated_graphs.py",
-        "--generated-graphs",
-        to_posix(generation.root),
-        "--base-config",
-        args.base_config,
-        "--output-disturbance-root",
-        to_posix(generation.disturbance_graphs_dir),
-        "--output-config-root",
-        to_posix(generation.configs_dir),
-        "--project-output-root",
-        to_posix(generation.case_outputs_dir),
-        "--summary-csv",
-        to_posix(generation.decode_summary_csv),
-        "--summary-json",
-        to_posix(generation.decode_summary_json),
-    ]
-    run_logged(cmd, generation.logs_dir / "decode.log")
-
-
-def generation_evaluate_graphs(args: argparse.Namespace, layout: ProjectLayout) -> None:
-    dataset = layout.dataset(args.dataset)
-    generation = layout.generation(args.generation)
-    cmd = [
-        sys.executable,
-        "scripts/evaluate_vae.py",
-        "--reference-graphs",
-        to_posix(dataset.graph_dir),
-        "--generated-graphs",
-        to_posix(generation.root),
-        "--output",
-        to_posix(generation.graph_evaluation),
-    ]
-    run_logged(cmd, generation.logs_dir / "evaluate_graphs.log")
-
-
-def compare_solver(args: argparse.Namespace, layout: ProjectLayout) -> None:
-    reference = layout.dataset(args.reference)
-    candidate = layout.dataset(args.candidate)
-    output = (
-        layout.generation(args.generation).solver_difficulty
-        if args.generation
-        else layout.comparison(f"{args.reference}_vs_{args.candidate}").root / "solver_difficulty.json"
+    write_yaml_if_missing(
+        layout.normal_generate_config("default"),
+        {
+            "scenario_set_id": "",
+            "overwrite": False,
+            "seed": 20260320,
+            "delay_count": 10,
+            "speed_count": 10,
+            "interruption_count": 10,
+            "combo_per_type": 10,
+        },
     )
-    cmd = [
-        sys.executable,
-        "scripts/evaluate_vae.py",
-        "--reference-solve-csv",
-        to_posix(reference.solve_summary_csv),
-        "--generated-solve-csv",
-        to_posix(candidate.solve_summary_csv),
-        "--output",
-        to_posix(output),
-    ]
-    run_logged(cmd, output.parent / "solver_compare.log")
+    write_yaml_if_missing(layout.solve_config, default_solve_config())
+    write_yaml_if_missing(
+        layout.analyze_config,
+        {
+            "enable_metrics": True,
+            "enable_plot": True,
+            "plot_grid": True,
+            "adj_timetable_sheet_name": "Sheet1",
+        },
+    )
+    write_yaml_if_missing(
+        layout.train_config("default"),
+        {
+            "scenario_set_id": "",
+            "model_id": "",
+            "data": {
+                "limit": 0,
+                "max_slots": DEFAULT_MAX_SLOTS,
+                "event_time_window": DEFAULT_EVENT_TIME_WINDOW,
+                "event_top_k": DEFAULT_EVENT_TOP_K,
+                "section_order_window": DEFAULT_SECTION_ORDER_WINDOW,
+                "speed_interruption_threshold": DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
+            },
+            "model": {
+                "hidden_dim": 64,
+                "latent_dim": 16,
+                "message_passing_steps": 2,
+            },
+            "optimization": {
+                "epochs": 800,
+                "batch_size": 8,
+                "lr": 0.0003,
+                "seed": 1,
+                "device": "auto",
+                "log_every": 1,
+            },
+            "loss_weights": {
+                "count": 1.0,
+                "anchor": 1.0,
+                "param": 2.0,
+                "kl": 0.0015,
+            },
+        },
+    )
+    (layout.source_dir / ".gitkeep").touch(exist_ok=True)
+    print(f"Project initialized: {layout.root}")
 
 
-def run_logged(cmd: List[str], log_path: Path) -> None:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    print(" ".join(cmd))
-    with log_path.open("w", encoding="utf-8") as handle:
-        completed = subprocess.run(
-            cmd,
-            cwd=REPO_ROOT,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            check=False,
+def prepare(layout: ProjectLayout) -> None:
+    config = read_yaml(layout.prepare_config)
+    timetable_filename = required_filename(config, "timetable_filename")
+    mileage_filename = required_filename(config, "mileage_filename")
+    timetable_path = layout.source_dir / timetable_filename
+    mileage_path = layout.source_dir / mileage_filename
+    if not timetable_path.is_file():
+        raise FileNotFoundError(f"Timetable not found in project source: {timetable_path}")
+    if not mileage_path.is_file():
+        raise FileNotFoundError(f"Mileage table not found in project source: {mileage_path}")
+
+    timetable_sheet = str(config.get("timetable_sheet_name", "Sheet1") or "Sheet1")
+    mileage_sheet = str(config.get("mileage_sheet_name", "Sheet1") or "Sheet1")
+    context = build_base_context(
+        timetable_path=timetable_path,
+        mileage_path=mileage_path,
+        timetable_sheet_name=timetable_sheet,
+        mileage_sheet_name=mileage_sheet,
+        timetable_table=load_timetable(timetable_path, timetable_sheet),
+        mileage_table=load_mileage_table(mileage_path, mileage_sheet),
+    )
+    write_base_context(
+        context,
+        layout.context_json,
+        metadata={
+            "id": layout.name,
+            "prepared_at": now(),
+            "prepare_config": to_posix(layout.prepare_config),
+        },
+    )
+    print(f"Context exported: {layout.context_json}")
+
+
+def normal_generate(layout: ProjectLayout, config_id: str) -> None:
+    config = read_yaml(layout.normal_generate_config(config_id))
+    scenario_set_id = required_id(config, "scenario_set_id")
+    output_root = layout.scenario_set(scenario_set_id).root
+    prepare_output_dir(output_root, overwrite=bool(config.get("overwrite", False)))
+
+    import scripts._case_generation_core as gen
+
+    rng = random.Random(int(config.get("seed", 20260320)))
+    base = gen.load_base_data_from_context(load_project_context(layout))
+    gen.validate_case_counts(
+        delay_count=int(config.get("delay_count", 10)),
+        speed_count=int(config.get("speed_count", 10)),
+        interruption_count=int(config.get("interruption_count", 10)),
+        combo_per_type=int(config.get("combo_per_type", 10)),
+    )
+
+    original_write_case = gen.write_case
+    try:
+        gen.write_case = write_scenario_case
+        case_index = 1
+        case_index = gen.generate_delay_cases(rng, base, output_root, case_index, int(config.get("delay_count", 10)))
+        case_index = gen.generate_speed_cases(rng, base, output_root, case_index, int(config.get("speed_count", 10)))
+        case_index = gen.generate_interruption_cases(rng, base, output_root, case_index, int(config.get("interruption_count", 10)))
+        case_index = gen.generate_combo_cases(rng, base, output_root, case_index, int(config.get("combo_per_type", 10)))
+    finally:
+        gen.write_case = original_write_case
+
+    print(f"Generated {len(scenario_files(output_root))} scenarios: {output_root}")
+
+
+def build_dataset(layout: ProjectLayout, scenario_set_id: str, dataset_id: str) -> None:
+    dataset = layout.dataset(dataset_id)
+    prepare_output_dir(dataset.root, overwrite=True)
+    solve_config = read_yaml(layout.solve_config)
+    records: List[Dict[str, object]] = []
+    docs = load_scenario_set(layout, scenario_set_id)
+
+    for index, doc in enumerate(docs, start=1):
+        started = datetime.now()
+        case_id = sanitize_id(doc.name)
+        case_dir = dataset.cases_dir / case_id
+        record = base_record(index, case_id, doc.path)
+        try:
+            config = case_app_config(layout, doc, case_dir, solve_config, analyze_config={})
+            model = build_model(config.base_context.translated, config)
+            export_lp(model, config.build.lp_path)
+            record.update(
+                {
+                    "status": "ok",
+                    "lp_path": to_posix(config.build.lp_path),
+                    "lp_exists": config.build.lp_path.exists(),
+                    "constraints": len(model.constraints),
+                }
+            )
+        except Exception as exc:
+            record.update({"status": "failed", "error": str(exc)})
+        record["duration_sec"] = elapsed_seconds(started)
+        records.append(record)
+        print(f"[{index}/{len(docs)}] {record['status']} | {case_id}")
+
+    write_csv(dataset.build_csv, records, build_headers())
+    write_json(
+        dataset.dataset_json,
+        {
+            "project": layout.name,
+            "dataset_id": sanitize_id(dataset_id),
+            "scenario_set_id": sanitize_id(scenario_set_id),
+            "created_at": now(),
+            "case_count": len(records),
+        },
+    )
+    fail_if_records_failed(records, "build")
+    print(f"Dataset built: {dataset.root}")
+
+
+def solve_dataset(layout: ProjectLayout, dataset_id: str, *, limit: int = 0, time_limit: float | None = None) -> None:
+    dataset = layout.dataset(dataset_id)
+    metadata = read_json(dataset.dataset_json)
+    solve_config = read_yaml(layout.solve_config)
+    if time_limit is not None:
+        solve_config["time_limit"] = time_limit
+    records: List[Dict[str, object]] = []
+    docs = load_scenario_set(layout, str(metadata["scenario_set_id"]))
+    docs = limit_items(docs, limit)
+
+    for index, doc in enumerate(docs, start=1):
+        started = datetime.now()
+        case_id = sanitize_id(doc.name)
+        case_dir = dataset.cases_dir / case_id
+        record = base_record(index, case_id, doc.path)
+        try:
+            config = case_app_config(layout, doc, case_dir, solve_config, analyze_config={})
+            record["sol_path"] = to_posix(config.solve.solution_path)
+            record["sol_exists"] = config.solve.solution_path.exists()
+            if not config.solve.lp_path.is_file():
+                raise FileNotFoundError(f"LP not found: {config.solve.lp_path}")
+            result = solve_lp(
+                config.solve.lp_path,
+                config.solve.solution_path,
+                quiet=True,
+                threads=int(solve_config.get("threads_per_solve", 0) or 0),
+                time_limit=float(solve_config.get("time_limit", 0.0) or 0.0),
+                mip_gap=float(solve_config.get("mip_gap", 0.0) or 0.0),
+            )
+            record.update(
+                {
+                    "status": "timeout" if result.timed_out else "ok",
+                    "sol_exists": config.solve.solution_path.exists(),
+                    "objective": round(result.objective, 4),
+                    "mip_gap": round(result.mip_gap, 6),
+                    "num_nodes": int(round(result.node_count)),
+                }
+            )
+        except GurobiSolveError as exc:
+            record["sol_exists"] = Path(str(record.get("sol_path", ""))).exists() if record.get("sol_path") else False
+            record.update(
+                {
+                    "status": "timeout" if exc.timed_out else "failed",
+                    "error": str(exc),
+                    "num_nodes": int(round(exc.node_count)) if exc.node_count is not None else None,
+                }
+            )
+        except Exception as exc:
+            record.update({"status": "failed", "error": str(exc)})
+        record["duration_sec"] = elapsed_seconds(started)
+        records.append(record)
+        print(f"[{index}/{len(docs)}] {record['status']} | {case_id}")
+
+    write_csv(dataset.solve_csv, records, solve_headers())
+    fail_if_records_failed(records, "solve")
+    print(f"Solve summary: {dataset.solve_csv}")
+
+
+def analyze_dataset(layout: ProjectLayout, dataset_id: str, *, limit: int = 0) -> None:
+    dataset = layout.dataset(dataset_id)
+    metadata = read_json(dataset.dataset_json)
+    solve_config = read_yaml(layout.solve_config)
+    analyze_config = read_yaml(layout.analyze_config)
+    records: List[Dict[str, object]] = []
+    docs = limit_items(load_scenario_set(layout, str(metadata["scenario_set_id"])), limit)
+
+    for index, doc in enumerate(docs, start=1):
+        started = datetime.now()
+        case_id = sanitize_id(doc.name)
+        case_dir = dataset.cases_dir / case_id
+        record = base_record(index, case_id, doc.path)
+        try:
+            config = case_app_config(layout, doc, case_dir, solve_config, analyze_config=analyze_config)
+            if not config.solve.solution_path.is_file():
+                raise FileNotFoundError(f"Solution not found: {config.solve.solution_path}")
+            values = load_solution_values(config.solve.solution_path)
+            export_adjusted_timetable(
+                config.base_context.translated,
+                values,
+                config.export_timetable.timetable_path,
+            )
+            metrics_exists = False
+            plot_exists = False
+            if bool(analyze_config.get("enable_metrics", True)):
+                from analysis.metrics import analyze_timetable
+
+                analyze_timetable(
+                    config.analyze.plan_timetable_path,
+                    config.analyze.adjusted_timetable_path,
+                    config.analyze.metrics_output_path,
+                    plan_sheet_name=config.analyze.plan_timetable_sheet_name,
+                    adjusted_sheet_name=config.analyze.adjusted_timetable_sheet_name,
+                    plan_df=timetable_from_base_context(config.base_context),
+                )
+                metrics_exists = config.analyze.metrics_output_path.exists()
+            if bool(analyze_config.get("enable_plot", True)):
+                from analysis.plot import plot_timetable
+
+                scenario_rows = build_case_scenario_report_data(
+                    case_id=case_id,
+                    scenarios=scenario_config_to_report_payload(config.scenarios),
+                    config=config,
+                    translated=config.base_context.translated,
+                )["scenario_rows"]
+                plot_timetable(
+                    config.analyze.plot_timetable_path,
+                    config.analyze.plot_output_path,
+                    show_grid=bool(analyze_config.get("plot_grid", True)),
+                    title=config.solve.solution_path.name,
+                    subtitle=scenario_note(config),
+                    sheet_name=config.analyze.adjusted_timetable_sheet_name,
+                    scenario_overlay=scenario_rows,
+                    station_order=config.base_context.station_order,
+                )
+                plot_exists = config.analyze.plot_output_path.exists()
+            record.update(
+                {
+                    "status": "ok",
+                    "adjusted_timetable_path": to_posix(config.export_timetable.timetable_path),
+                    "metrics_path": to_posix(config.analyze.metrics_output_path),
+                    "metrics_exists": metrics_exists,
+                    "plot_path": to_posix(config.analyze.plot_output_path),
+                    "plot_exists": plot_exists,
+                }
+            )
+        except Exception as exc:
+            record.update({"status": "failed", "error": str(exc)})
+        record["duration_sec"] = elapsed_seconds(started)
+        records.append(record)
+        print(f"[{index}/{len(docs)}] {record['status']} | {case_id}")
+
+    write_csv(dataset.analyze_csv, records, analyze_headers())
+    fail_if_records_failed(records, "analyze")
+    print(f"Analyze summary: {dataset.analyze_csv}")
+
+
+def train_model(layout: ProjectLayout, config_id: str) -> None:
+    config = read_yaml(layout.train_config(config_id))
+    scenario_set_id = required_id(config, "scenario_set_id")
+    model_id = required_id(config, "model_id")
+    model = layout.model(model_id)
+    model.root.mkdir(parents=True, exist_ok=True)
+    export_training_graphs(layout, model, scenario_set_id, config)
+
+    train_config = {
+        "train": {
+            "data": {
+                "graphs_root": to_posix(model.graph_dir),
+                "limit": int(section(config, "data").get("limit", 0) or 0),
+            },
+            "model": section(config, "model"),
+            "optimization": section(config, "optimization"),
+            "loss_weights": section(config, "loss_weights"),
+            "output": {"dir": to_posix(model.root)},
+        }
+    }
+    write_yaml(model.train_config, train_config)
+    run([sys.executable, "scripts/train_vae.py", to_posix(model.train_config)])
+    print(f"Model trained: {model.root}")
+
+
+def generate_scenarios(
+    layout: ProjectLayout,
+    *,
+    model_id: str,
+    scenario_set_id: str,
+    num_samples: int,
+    seed: int,
+    device: str,
+    overwrite: bool,
+) -> None:
+    model = layout.model(model_id)
+    output_root = layout.scenario_set(scenario_set_id).root
+    prepare_output_dir(output_root, overwrite=overwrite)
+    generation_run = model.generation_dir / sanitize_id(scenario_set_id)
+    run(
+        [
+            sys.executable,
+            "scripts/generate_vae.py",
+            "--context-graph",
+            to_posix(model.context_graph),
+            "--checkpoint",
+            to_posix(model.best_model),
+            "--num-samples",
+            str(num_samples),
+            "--seed",
+            str(seed),
+            "--device",
+            device,
+            "--output-dir",
+            to_posix(generation_run),
+        ]
+    )
+    context = load_project_context(layout)
+    graph_paths = sorted((generation_run / "math_graphs").glob("*.json"))
+    for index, graph_path in enumerate(graph_paths, start=1):
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        disturbance_graph = typed_generated_graph_to_disturbance_graph(graph, context)
+        scenarios = disturbance_graph_to_scenario(disturbance_graph, context)
+        scenario_path = output_root / f"sample_{index:06d}.yml"
+        write_yaml(scenario_path, scenario_config_to_yaml(f"sample_{index:06d}", scenarios))
+    print(f"Generated and decoded {len(graph_paths)} scenarios: {output_root}")
+
+
+def export_training_graphs(
+    layout: ProjectLayout,
+    model: Any,
+    scenario_set_id: str,
+    train_config: Dict[str, object],
+) -> None:
+    graph_settings = section(train_config, "data")
+    reset_dir(model.graph_dir)
+    model.sample_dir.mkdir(parents=True, exist_ok=True)
+    solve_config = read_yaml(layout.solve_config)
+    docs = limit_items(load_scenario_set(layout, scenario_set_id), int(graph_settings.get("limit", 0) or 0))
+
+    context_graph: Dict[str, object] | None = None
+    profile_source: Dict[str, object] | None = None
+    samples: List[Dict[str, object]] = []
+    sample_records: List[Dict[str, object]] = []
+
+    for doc in docs:
+        config = case_app_config(layout, doc, model.root / "_graph_cases" / sanitize_id(doc.name), solve_config, analyze_config={})
+        typed = scenario_to_typed_vae_learning_graph(
+            config,
+            source_config_path=to_posix(doc.path or Path(doc.name)),
+            max_slots=int(graph_settings.get("max_slots", DEFAULT_MAX_SLOTS)),
+            event_time_window=int(graph_settings.get("event_time_window", DEFAULT_EVENT_TIME_WINDOW)),
+            event_top_k=int(graph_settings.get("event_top_k", DEFAULT_EVENT_TOP_K)),
+            section_order_window=int(graph_settings.get("section_order_window", DEFAULT_SECTION_ORDER_WINDOW)),
+            speed_interruption_threshold=float(
+                graph_settings.get("speed_interruption_threshold", DEFAULT_SPEED_INTERRUPTION_THRESHOLD)
+            ),
         )
-    if completed.returncode != 0:
-        raise RuntimeError(f"Command failed with exit code {completed.returncode}. See {log_path}")
+        context = typed_learning_graph_to_math_context_graph(typed)
+        if context_graph is None:
+            context_graph = context
+            profile_source = typed
+        elif context != context_graph:
+            raise ValueError("All training samples must share the same context graph.")
+        sample = typed_learning_graph_to_math_learning_sample(typed, context_ref="context.json", sample_id=doc.name)
+        sample_path = model.sample_dir / f"{sanitize_id(doc.name)}.json"
+        write_json(sample_path, sample)
+        samples.append(sample)
+        sample_records.append(
+            {
+                "learning_sample_path": to_posix(sample_path),
+                "context_graph_path": to_posix(model.context_graph),
+                "source_scenario_path": to_posix(doc.path or Path(doc.name)),
+            }
+        )
+
+    if context_graph is None or profile_source is None:
+        raise ValueError(f"No scenarios found for training: {scenario_set_id}")
+    inferred_context, inferred_schema = infer_math_dataset_schema(context_graph, samples)
+    write_json(model.context_graph, inferred_context)
+    write_json(
+        model.graph_dir / "dataset_profile.json",
+        typed_learning_graph_to_dataset_profile(
+            profile_source,
+            samples=sample_records,
+            inferred_schema=inferred_schema,
+            export_profile=dict(graph_settings),
+        ),
+    )
+
+
+def case_app_config(
+    layout: ProjectLayout,
+    scenario_doc: ScenarioDocument,
+    case_dir: Path,
+    solve_config: Dict[str, object],
+    analyze_config: Dict[str, object],
+) -> AppConfig:
+    case_id = sanitize_id(scenario_doc.name)
+    payload = {
+        "project": {
+            "name": case_id,
+            "output_dir": to_posix(case_dir),
+            "base_context_path": to_posix(layout.context_json),
+        },
+        "build": {"scenarios": scenario_doc.scenarios},
+        "solve": {key: value for key, value in solve_config.items() if key not in {"time_limit", "mip_gap", "threads_per_solve"}},
+        "export-timetable": {"sol_path": ""},
+        "analyze": {
+            "enable_metrics": bool(analyze_config.get("enable_metrics", False)),
+            "enable_plot": bool(analyze_config.get("enable_plot", False)),
+            "plot_grid": bool(analyze_config.get("plot_grid", True)),
+            "plot_title": "",
+            "adj_timetable_path": "",
+            "adj_timetable_sheet_name": str(analyze_config.get("adj_timetable_sheet_name", "Sheet1") or "Sheet1"),
+        },
+    }
+    return load_config_payload(payload, case_dir / "case.yml")
+
+
+def load_project_context(layout: ProjectLayout):
+    if not layout.context_json.is_file():
+        raise FileNotFoundError(f"Missing project context. Run: python scripts/project.py {layout.name} prepare")
+    return load_base_context(layout.context_json)
+
+
+def load_scenario_set(layout: ProjectLayout, scenario_set_id: str) -> List[ScenarioDocument]:
+    root = layout.scenario_set(scenario_set_id).root
+    if not root.is_dir():
+        raise FileNotFoundError(f"Scenario set not found: {root}")
+    yaml = require_yaml()
+    docs = [load_scenario_document(path, yaml) for path in scenario_files(root)]
+    if not docs:
+        raise FileNotFoundError(f"No scenario YAML files found: {root}")
+    return docs
+
+
+def write_scenario_case(case_path: Path, config_payload: Dict[str, object], _meta_payload: Dict[str, object]) -> None:
+    project = config_payload.get("project", {})
+    build = config_payload.get("build", {})
+    scenarios = build.get("scenarios", {}) if isinstance(build, dict) else {}
+    payload = {
+        "name": project.get("name", case_path.name) if isinstance(project, dict) else case_path.name,
+        "delays": scenarios.get("delays", []) if isinstance(scenarios, dict) else [],
+        "speed_limits": scenarios.get("speed_limits", []) if isinstance(scenarios, dict) else [],
+    }
+    write_yaml(case_path.with_suffix(".yml"), payload)
+
+
+def scenario_config_to_yaml(name: str, scenarios: ScenarioConfig) -> Dict[str, object]:
+    return {
+        "name": name,
+        "delays": [
+            {
+                "event_anchor_id": item.event_anchor_id,
+                "seconds": int(item.seconds),
+            }
+            for item in scenarios.delays
+        ],
+        "speed_limits": [
+            {
+                "section_anchor_id": item.section_anchor_id,
+                "start_time": seconds_to_hms(item.start_time),
+                "duration": int(item.duration),
+                "limit_speed": clean_number(item.limit_speed),
+            }
+            for item in scenarios.speed_limits
+        ],
+    }
+
+
+def scenario_config_to_report_payload(scenarios: ScenarioConfig) -> Dict[str, object]:
+    return {
+        "delays": [
+            {
+                "train_id": item.train_id,
+                "station": item.station,
+                "event_type": item.event_type,
+                "seconds": item.seconds,
+            }
+            for item in scenarios.delays
+        ],
+        "speed_limits": [
+            {
+                "start_station": item.start_station,
+                "end_station": item.end_station,
+                "limit_speed": item.limit_speed,
+                "start_time": seconds_to_hms(item.start_time),
+                "end_time": seconds_to_hms(item.end_time),
+            }
+            for item in scenarios.speed_limits
+            if item.limit_speed > 0
+        ],
+        "interruptions": [
+            {
+                "start_station": item.start_station,
+                "end_station": item.end_station,
+                "start_time": seconds_to_hms(item.start_time),
+                "end_time": seconds_to_hms(item.end_time),
+            }
+            for item in scenarios.speed_limits
+            if item.limit_speed == 0
+        ],
+    }
+
+
+def scenario_note(config: AppConfig) -> str:
+    count = len(config.scenarios.delays) + len(config.scenarios.speed_limits)
+    return f"Scenarios: {count}" if count else "Scenarios: none"
+
+
+def required_filename(config: Dict[str, object], key: str) -> str:
+    value = str(config.get(key, "") or "").strip()
+    if not value:
+        raise ValueError(f"Missing required {key}")
+    if Path(value).name != value:
+        raise ValueError(f"{key} must be a filename under project source/: {value}")
+    return value
+
+
+def required_id(config: Dict[str, object], key: str) -> str:
+    value = str(config.get(key, "") or "").strip()
+    if not value:
+        raise ValueError(f"Missing required {key}")
+    return sanitize_id(value)
+
+
+def default_solve_config() -> Dict[str, object]:
+    return {
+        "objective_delay_weight": 1.0,
+        "objective_mode": "abs",
+        "cancellation_enabled": False,
+        "cancellation_penalty_weight": 1000.0,
+        "arr_arr_headway_seconds": 180,
+        "dep_dep_headway_seconds": 180,
+        "dwell_seconds_at_stops": 120,
+        "big_m": 100000,
+        "tolerance_delay_seconds": 7200,
+        "threads_per_solve": 0,
+        "time_limit": 120.0,
+        "mip_gap": 0.0,
+    }
+
+
+def prepare_output_dir(path: Path, *, overwrite: bool) -> None:
+    if path.exists():
+        if not overwrite:
+            raise FileExistsError(f"Output already exists, set overwrite: true or pass --overwrite: {path}")
+        reset_dir(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def limit_items(items: List[Any], limit: int) -> List[Any]:
+    return items[:limit] if limit and limit > 0 else items
+
+
+def base_record(index: int, case_id: str, scenario_path: Path | None) -> Dict[str, object]:
+    return {
+        "index": index,
+        "case_id": case_id,
+        "scenario_path": to_posix(scenario_path) if scenario_path else "",
+        "status": "pending",
+        "error": "",
+        "duration_sec": 0.0,
+    }
+
+
+def build_headers() -> List[str]:
+    return ["index", "case_id", "scenario_path", "status", "error", "lp_path", "lp_exists", "constraints", "duration_sec"]
+
+
+def solve_headers() -> List[str]:
+    return [
+        "index",
+        "case_id",
+        "scenario_path",
+        "status",
+        "error",
+        "sol_path",
+        "sol_exists",
+        "objective",
+        "mip_gap",
+        "num_nodes",
+        "duration_sec",
+    ]
+
+
+def analyze_headers() -> List[str]:
+    return [
+        "index",
+        "case_id",
+        "scenario_path",
+        "status",
+        "error",
+        "adjusted_timetable_path",
+        "metrics_path",
+        "metrics_exists",
+        "plot_path",
+        "plot_exists",
+        "duration_sec",
+    ]
+
+
+def fail_if_records_failed(records: Iterable[Dict[str, object]], stage: str) -> None:
+    failed = [record for record in records if record.get("status") == "failed"]
+    if failed:
+        raise RuntimeError(f"{stage} failed for {len(failed)} case(s).")
+
+
+def section(payload: Dict[str, object], name: str) -> Dict[str, object]:
+    value = payload.get(name, {})
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be a YAML object.")
+    return value
+
+
+def read_yaml(path: Path) -> Dict[str, object]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Config not found: {path}")
+    payload = require_yaml().safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"YAML must contain an object: {path}")
+    return payload
+
+
+def write_yaml(path: Path, payload: Dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def write_yaml_if_missing(path: Path, payload: Dict[str, object]) -> None:
+    if not path.exists():
+        write_yaml(path, payload)
+
+
+def read_json(path: Path) -> Dict[str, object]:
+    if not path.is_file():
+        raise FileNotFoundError(f"JSON not found: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON must contain an object: {path}")
+    return payload
 
 
 def write_json(path: Path, payload: Dict[str, object]) -> None:
@@ -363,37 +835,39 @@ def write_json(path: Path, payload: Dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def write_csv(path: Path, records: List[Dict[str, object]], headers: List[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=headers)
+        writer.writeheader()
+        for record in records:
+            writer.writerow({key: record.get(key, "") for key in headers})
+
+
+def run(cmd: List[str]) -> None:
+    print(" ".join(cmd))
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+
+
+def seconds_to_hms(seconds: int) -> str:
+    total = max(0, min(24 * 3600 - 1, int(seconds)))
+    return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+
+
+def clean_number(value: float) -> object:
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
+def elapsed_seconds(started: datetime) -> float:
+    return round((datetime.now() - started).total_seconds(), 3)
+
+
 def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def resolve_project_name(args: argparse.Namespace) -> str:
-    value = str(getattr(args, "project", "") or "").strip()
-    if value:
-        return value
-    for attr in ("config", "project_config"):
-        config = str(getattr(args, attr, "") or "").strip()
-        if not config:
-            continue
-        project_name = read_project_name(repo_path(config))
-        if project_name:
-            return project_name
-    raise ValueError("--project is required unless --config or --project-config points to a project config with project.name.")
-
-
-def read_project_name(path: Path) -> str:
-    if not path.is_file():
-        return ""
-    payload = _require_yaml().safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(payload, dict):
-        return ""
-    project = payload.get("project")
-    if not isinstance(project, dict):
-        return ""
-    return str(project.get("name", "") or "").strip()
-
-
-def _require_yaml() -> Any:
+def require_yaml() -> Any:
     try:
         import yaml
     except ImportError as exc:  # pragma: no cover
@@ -402,4 +876,8 @@ def _require_yaml() -> Any:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:  # pragma: no cover
+        print(f"project.py failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)

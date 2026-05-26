@@ -1,0 +1,7 @@
+scenario_set_id: ''
+overwrite: false
+seed: 20260320
+delay_count: 10
+speed_count: 10
+interruption_count: 10
+combo_per_type: 10

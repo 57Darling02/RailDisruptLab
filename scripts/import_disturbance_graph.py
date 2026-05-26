@@ -27,7 +27,7 @@ def _require_yaml() -> Any:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Import a disturbance graph JSON as a RailGraph2Gurobi config.")
     parser.add_argument("--graph", required=True, help="Source disturbance graph JSON.")
-    parser.add_argument("--base-config", default="config/demo.yml", help="Config that provides solver/analyze defaults.")
+    parser.add_argument("--base-config", required=True, help="Config that provides solver/analyze defaults.")
     parser.add_argument("--output-config", required=True, help="Output YAML config.")
     return parser.parse_args()
 
@@ -76,7 +76,7 @@ def _config_payload(
     return {
         "project": {
             "name": name,
-            "output_dir": f"outputs/main/datasets/{name}/cases/{name}",
+            "output_dir": f"projects/demo/datasets/{name}/cases/{name}",
             "base_context_path": base_context_path.replace("\\", "/"),
         },
         "build": {

@@ -3,15 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import shutil
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-DEFAULT_OUTPUT_DIR = Path("outputs/main/models/default")
-DEFAULT_CONFIG_PATH = "config/demo.yml"
+DEFAULT_OUTPUT_DIR = Path("projects/demo/model/default")
+DEFAULT_CONFIG_PATH = "projects/demo/conf/train/default.yml"
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,8 +51,7 @@ def main() -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     output_dir = Path(args.output_dir)
-    _reset_path(output_dir, allowed_root=Path("outputs"))
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _prepare_output_dir(output_dir, allowed_root=Path("projects"))
     logger = _TrainingLogger(output_dir / "training.log")
     config_payload = vars(args).copy()
     config_payload["created_at"] = datetime.now().isoformat(timespec="seconds")
@@ -239,15 +237,26 @@ def _require_yaml() -> Any:
     return yaml
 
 
-def _reset_path(path: Path, *, allowed_root: Path) -> None:
+def _prepare_output_dir(path: Path, *, allowed_root: Path) -> None:
     resolved = path.resolve()
     root = allowed_root.resolve()
     if resolved == root or root not in resolved.parents:
         raise ValueError(f"Refusing to clear path outside allowed root: {path}")
     if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.exists():
-        shutil.rmtree(path)
+        raise ValueError(f"Output dir must be a directory: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    for filename in (
+        "training.log",
+        "training_config.json",
+        "schema_summary.json",
+        "history.json",
+        "training_summary.json",
+        "best_model.pt",
+        "last_model.pt",
+    ):
+        target = path / filename
+        if target.exists():
+            target.unlink()
 
 
 def _schema_summary(sample) -> Dict[str, object]:

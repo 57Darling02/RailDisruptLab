@@ -179,7 +179,7 @@ def cmd_run(config_path: Path) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="RailGraph2Gurobi command line.")
-    parser.add_argument("--config", default="config/demo.yml", help="Path to YAML configuration file.")
+    parser.add_argument("--config", default="", help="Path to a case YAML configuration file.")
     sub = parser.add_subparsers(dest="command")
 
     def _add_config_arg(p: argparse.ArgumentParser) -> None:
@@ -206,7 +206,10 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    config_value = getattr(args, "config", "config/demo.yml")
+    config_value = getattr(args, "config", "")
+    if not config_value:
+        print("Pipeline failed: --config is required for the low-level main.py entry.", file=sys.stderr)
+        raise SystemExit(1)
     config_path = Path(config_value)
     try:
         if args.command == "build":

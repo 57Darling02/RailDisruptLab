@@ -150,7 +150,7 @@ def main() -> None:
     args = parse_args()
     config_root = _resolve_path(args.config_root)
     run_dir = _resolve_path(args.output_dir)
-    reset_dir(run_dir, allowed_root=REPO_ROOT / "outputs")
+    reset_dir(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     log_file = run_dir / "logs" / "build.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)

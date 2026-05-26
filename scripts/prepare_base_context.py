@@ -8,8 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from core.base_context import build_base_context, default_base_context_path, write_base_context
+from core.base_context import build_base_context, write_base_context
 from core.loader import load_mileage_table, load_timetable
+from core.project_layout import ProjectLayout
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,7 +19,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mileage-path", required=True, help="Path to mileage .xlsx.")
     parser.add_argument("--timetable-sheet-name", default="Sheet1")
     parser.add_argument("--mileage-sheet-name", default="Sheet1")
-    parser.add_argument("--output-path", default="", help="Defaults to outputs/base_context/context_<timetable stem>.json.")
+    parser.add_argument("--project", default="demo", help="Project id used when --output-path is omitted.")
+    parser.add_argument("--context", required=True, help="Named context artifact id.")
+    parser.add_argument("--output-path", default="", help="Optional explicit output path.")
     return parser.parse_args()
 
 
@@ -33,7 +36,11 @@ def main() -> None:
     args = parse_args()
     timetable_path = _resolve(args.timetable_path)
     mileage_path = _resolve(args.mileage_path)
-    output_path = _resolve(args.output_path) if args.output_path.strip() else default_base_context_path(timetable_path)
+    output_path = (
+        _resolve(args.output_path)
+        if args.output_path.strip()
+        else ProjectLayout.from_name(args.project).context_json
+    )
 
     timetable = load_timetable(timetable_path, args.timetable_sheet_name)
     mileage = load_mileage_table(mileage_path, args.mileage_sheet_name)
@@ -45,7 +52,7 @@ def main() -> None:
         timetable_table=timetable,
         mileage_table=mileage,
     )
-    write_base_context(context, output_path)
+    write_base_context(context, output_path, metadata={"id": args.project, "context": args.context})
 
     print(f"BaseContext exported: {output_path}")
     print(f"Trains: {len(context.translated.train_ids)}")

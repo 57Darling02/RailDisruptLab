@@ -59,11 +59,11 @@ def _parse_args() -> argparse.Namespace:
         description="Import external .lp files into standardized case yaml + output layout."
     )
     parser.add_argument("--lp-root", default="tests/lp", help="Root folder containing *.lp files.")
-    parser.add_argument("--base-config", default="config/demo.yml", help="Template config used as base.")
+    parser.add_argument("--base-config", required=True, help="Template config used as base.")
     parser.add_argument("--generated-config-root", default="tests/generated_configs_lp", help="Generated yaml root.")
-    parser.add_argument("--output-root", default="outputs/main/imports/lp/cases", help="Per-case output root.")
-    parser.add_argument("--summary-csv", default="outputs/main/imports/lp/import_lp_summary.csv", help="Import summary CSV.")
-    parser.add_argument("--summary-json", default="outputs/main/imports/lp/import_lp_summary.json", help="Import summary JSON.")
+    parser.add_argument("--output-root", default="projects/demo/imports/lp/cases", help="Per-case output root.")
+    parser.add_argument("--summary-csv", default="projects/demo/imports/lp/import_lp_summary.csv", help="Import summary CSV.")
+    parser.add_argument("--summary-json", default="projects/demo/imports/lp/import_lp_summary.json", help="Import summary JSON.")
     parser.add_argument("--limit", type=int, default=0, help="Only process first N lp files (0 = all).")
     parser.add_argument("--clean", action="store_true", help="Clean generated config/output roots before importing.")
     parser.add_argument(
@@ -734,6 +734,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
 

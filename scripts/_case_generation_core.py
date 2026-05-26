@@ -8,7 +8,7 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 # Ensure `core` package is importable when running:
@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from core.base_context import event_anchor_by_key, section_anchor_by_key
 from core.loader import load_config
-from core.types import AppConfig, EventAnchor, ScenarioConfig, SectionAnchor, TranslatedData, ValidatedInput
+from core.types import AppConfig, BaseContext, EventAnchor, ScenarioConfig, SectionAnchor, TranslatedData, ValidatedInput
 
 def _require_yaml():
     try:
@@ -54,14 +54,12 @@ COMBO_TYPES = [
     "delay_speedlimit_interruption",
 ]
 
-DEFAULT_BASE_CONFIG_CANDIDATES = [
-    Path("config/demo.yml"),
-]
+DEFAULT_BASE_CONFIG_CANDIDATES: List[Path] = []
 
 
 @dataclass(frozen=True)
 class BaseData:
-    app_config: AppConfig
+    app_config: Optional[AppConfig]
     validated: ValidatedInput
     translated: TranslatedData
     event_candidates: List[Tuple[str, str, str, int, str]]
@@ -75,8 +73,12 @@ class BaseData:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate case library for converter validation.")
-    parser.add_argument("--base-config", default="", help="Base config path. If omitted, auto-select from config/*.yaml.")
-    parser.add_argument("--output-root", default="outputs/main/scenarios/generated_demo")
+    parser.add_argument(
+        "--base-config",
+        default="",
+        help="Base config path. Standalone generation requires an explicit case config.",
+    )
+    parser.add_argument("--output-root", required=True)
     parser.add_argument("--seed", type=int, default=20260320)
     parser.add_argument("--delay-count", type=int, default=10)
     parser.add_argument("--speed-count", type=int, default=10)
@@ -101,14 +103,8 @@ def resolve_base_config(arg_value: str) -> Path:
         if candidate.exists() and candidate.is_file():
             return candidate
 
-    config_dir = REPO_ROOT / "config"
-    if config_dir.exists():
-        yaml_files = sorted(config_dir.glob("*.yaml"))
-        if yaml_files:
-            return yaml_files[0]
-
     raise FileNotFoundError(
-        "No base config found. Please pass --base-config <path> or add a yaml file under config/."
+        "No base config found. Please pass --base-config <path>."
     )
 
 
@@ -320,7 +316,10 @@ def combo_relation_plan(rng: random.Random, count: int) -> List[Tuple[str, str]]
 def load_base_data(base_config_path: Path) -> BaseData:
     app_config = load_config(base_config_path)
     neutral = replace(app_config, scenarios=ScenarioConfig(delays=[], speed_limits=[]))
-    context = neutral.base_context
+    return load_base_data_from_context(neutral.base_context, app_config=neutral)
+
+
+def load_base_data_from_context(context: BaseContext, app_config: Optional[AppConfig] = None) -> BaseData:
     validated = context.validated
     translated = context.translated
     event_anchor_map = event_anchor_by_key(context)
@@ -340,7 +339,7 @@ def load_base_data(base_config_path: Path) -> BaseData:
             section_train_count[section] += 1
 
     return BaseData(
-        app_config=neutral,
+        app_config=app_config,
         validated=validated,
         translated=translated,
         event_candidates=event_candidates,
@@ -354,6 +353,20 @@ def load_base_data(base_config_path: Path) -> BaseData:
 
 
 def base_config_payload(case_name: str, output_dir: str, base: BaseData) -> Dict[str, object]:
+    if base.app_config is None:
+        return {
+            "project": {
+                "name": case_name,
+                "output_dir": output_dir,
+                "base_context_path": "",
+            },
+            "build": {
+                "scenarios": {
+                    "delays": [],
+                    "speed_limits": [],
+                }
+            },
+        }
     cfg = base.app_config
     return {
         "project": {
@@ -394,7 +407,7 @@ def base_config_payload(case_name: str, output_dir: str, base: BaseData) -> Dict
 
 
 def case_output_dir(case_id: str) -> str:
-    return f"outputs/main/datasets/case_library/cases/{case_id}"
+    return f"projects/demo/datasets/case_library/cases/{case_id}"
 
 
 def write_case(case_dir: Path, config_payload: Dict[str, object], meta_payload: Dict[str, object]) -> None:

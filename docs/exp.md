@@ -1,263 +1,194 @@
 # RailGraph2Gurobi 项目流程
 
-## 0. 环境与入口边界
-
-本项目当前验收默认使用本地 conda 环境：
+## 0. 环境
 
 ```bash
 conda activate acmmilp
 ```
 
-推荐入口是 `scripts/project.py`。它负责把 project、dataset、model、generation 和 comparison 的产物统一写入 `outputs/<project>/`。
+主入口是 `scripts/project.py`。新流程以 project 为沙箱单位，所有运行产物写入 `projects/<project>/`，不再写入 `config/`、`inputs/` 或仓库根目录。
 
-`main.py` 只适合已经展开成单个 case 的配置文件。`config/demo.yml` 的 `build.scenarios` 指向场景目录，批量展开由 `scripts/project.py dataset build` / `scripts/bench_build.py` 完成；不要把 `python main.py --config config/demo.yml run` 当作 demo 批量验收入口。
-
-当前推荐配置模型：
-
-- `config/demo.yml` 是 project config，包含 BaseContext、solver/export/analyze 和 train 配置。
-- `config/scenario/...` 是 scenario config，只包含单个 case 的扰动。
-- `build.scenarios` 可以引用单个 scenario YAML，也可以引用 scenario 目录。
-- 配置中的相对路径统一按项目根目录解析。
-- 流程产物统一写入 `outputs/`，不写入 `inputs/` 或 `config/`。
-- 不使用 `latest`。
-- 同名 project/dataset/model/generation 重跑时覆盖原目录。
-
-输出统一放在：
-
-```text
-outputs/<project>/
-  datasets/<dataset>/
-  models/<model>/
-  generations/<generation>/
-  comparisons/<comparison>/
-```
-
-## 1. Prepare BaseContext
+## 1. 初始化项目
 
 ```bash
-python scripts/prepare_base_context.py \
-  --timetable-path inputs/下行计划时刻表.xlsx \
-  --mileage-path inputs/区间里程.xlsx
+python scripts/project.py newproject <projectid>
+```
+
+初始化后目录为：
+
+```text
+projects/<projectid>/
+  source/
+  scenario_sets/default/
+  datasets/
+  conf/
+    prepare.yml
+    solve.yml
+    analyze.yml
+    normal_generate/default.yml
+    train/default.yml
+  model/
+```
+
+`projects/*` 被 git 忽略。仓库只保留 `projects/demo/conf/`、`projects/demo/scenario_sets/default/` 和 `projects/demo/source/.gitkeep`。
+
+## 2. Prepare
+
+把时刻表和里程表放入：
+
+```text
+projects/<projectid>/source/
+```
+
+填写：
+
+```yaml
+timetable_filename:
+mileage_filename:
+timetable_sheet_name: Sheet1
+mileage_sheet_name: Sheet1
+```
+
+只允许写文件名，文件必须来自本 project 的 `source/`。
+
+执行：
+
+```bash
+python scripts/project.py <projectid> prepare
 ```
 
 产物：
 
 ```text
-outputs/base_context/context_下行计划时刻表.json
+projects/<projectid>/context.json
 ```
 
-## 2. Scenario Inputs
+`context.json` 开头包含 project 元信息，不再单独写 manifest。
+
+## 3. Scenario Sets
 
 手写场景放在：
 
 ```text
-config/scenario/demo/*.yml
+projects/<projectid>/scenario_sets/default/*.yml
 ```
 
-批量生成场景：
+普通批量模拟使用：
 
 ```bash
-python -u scripts/case_library_builder.py \
-  --output-root outputs/main/scenarios/generated_reference \
-  --clean
+python scripts/project.py <projectid> normal_generate
+python scripts/project.py <projectid> normal_generate test
 ```
 
-场景文件只保存扰动：
-
-```yaml
-name: mixed
-delays:
-  - train_id: G1
-    station: jinanxi
-    event_type: dep
-    seconds: 600
-speed_limits:
-  - start_station: taian
-    end_station: qufudong
-    start_time: "09:00:00"
-    duration: 2400
-    limit_speed: 0
-```
-
-## 3. Build Dataset
-
-使用 `config/demo.yml` 默认引用的场景目录：
-
-```bash
-python scripts/project.py dataset build \
-  --config config/demo.yml \
-  --dataset demo
-```
-
-用同一个 project config 临时切换 scenario 目录：
-
-```bash
-python scripts/project.py dataset build \
-  --config config/demo.yml \
-  --dataset reference \
-  --scenarios outputs/main/scenarios/generated_reference
-```
-
-dataset 结构：
+对应读取：
 
 ```text
-outputs/main/datasets/reference/
-  manifest.json
-  configs/*.yaml
-  cases/<case_id>/<case_id>.lp
+projects/<projectid>/conf/normal_generate/default.yml
+projects/<projectid>/conf/normal_generate/test.yml
+```
+
+配置里的 `scenario_set_id` 决定输出目录，例如 `reference` 会写入：
+
+```text
+projects/<projectid>/scenario_sets/reference/*.yml
+```
+
+## 4. Build
+
+```bash
+python scripts/project.py <projectid> build <scenario_set_id> <dataset_id>
+```
+
+产物：
+
+```text
+projects/<projectid>/datasets/<dataset_id>/dataset.json
+projects/<projectid>/datasets/<dataset_id>/build.csv
+projects/<projectid>/datasets/<dataset_id>/cases/<case_id>/<case_id>.lp
+```
+
+`build` 不再生成中间 configs 和 graph。训练直接读取 scenario set。
+
+## 5. Solve
+
+默认参数来自：
+
+```text
+projects/<projectid>/conf/solve.yml
+```
+
+执行：
+
+```bash
+python scripts/project.py <projectid> solve <dataset_id>
+```
+
+产物：
+
+```text
+projects/<projectid>/datasets/<dataset_id>/cases/<case_id>/<case_id>.sol
+projects/<projectid>/datasets/<dataset_id>/solve.csv
+```
+
+`solve.csv` 包含 `num_nodes`，记录 Gurobi `NodeCount`。
+
+## 6. Analyze
+
+`export-timetable` 已并入 analyze。
+
+```bash
+python scripts/project.py <projectid> analyze <dataset_id>
+```
+
+产物：
+
+```text
+projects/<projectid>/datasets/<dataset_id>/cases/<case_id>/adjusted_timetable.xlsx
+projects/<projectid>/datasets/<dataset_id>/cases/<case_id>/analysis_metrics.xlsx
+projects/<projectid>/datasets/<dataset_id>/cases/<case_id>/timetable_plot.png
+projects/<projectid>/datasets/<dataset_id>/analyze.csv
+```
+
+plot title 使用当前 `.sol` 文件名。
+
+## 7. Train
+
+默认读取：
+
+```text
+projects/<projectid>/conf/train/default.yml
+```
+
+执行：
+
+```bash
+python scripts/project.py <projectid> model train
+python scripts/project.py <projectid> model train test
+```
+
+训练配置必须包含 `scenario_set_id` 和 `model_id`。训练阶段会把指定 scenario set 转成 math graph，并结合 project 共享 `context.json` 训练。
+
+产物：
+
+```text
+projects/<projectid>/model/<model_id>/
   graph/context.json
   graph/samples/*.json
-  graph/dataset_profile.json
-  benchmark/build_summary.csv
-  benchmark/build_summary.json
-  logs/build.log
-```
-
-通过标准：
-
-- `benchmark/build_summary.csv` 中没有 failed。
-- `graph/context.json` 的 `graph_type` 是 `vae_math_context_graph`。
-- `graph/samples/*.json` 的 `graph_type` 是 `vae_math_learning_sample`。
-
-## 4. Benchmark Dataset
-
-```bash
-python scripts/project.py dataset benchmark \
-  --config config/demo.yml \
-  --dataset reference \
-  --time-limit 120
-```
-
-并行求解：
-
-```bash
-python scripts/project.py dataset benchmark \
-  --config config/demo.yml \
-  --dataset reference \
-  --time-limit 120 \
-  --workers 4 \
-  --threads-per-solve 8
-```
-
-产物：
-
-```text
-outputs/main/datasets/reference/benchmark/solve_summary.csv
-outputs/main/datasets/reference/benchmark/export_timetable_summary.csv
-outputs/main/datasets/reference/benchmark/analyze_summary.csv
-outputs/main/datasets/reference/benchmark/scenario_report/
-outputs/main/datasets/reference/logs/solve.log
-outputs/main/datasets/reference/logs/export_timetable.log
-outputs/main/datasets/reference/logs/analyze.log
-```
-
-`--time-limit 120` 是当前对比口径。reference 和 generated datasets 必须使用同一限制。
-
-## 5. Train VAE
-
-训练是可选分支。训练参数保存在 `config/demo.yml` 的 `train` 段，dataset graph 路径和 model 输出路径由 `project.py` 注入。
-
-```bash
-python scripts/project.py model train \
-  --config config/demo.yml \
-  --model vae_reference \
-  --dataset reference
-```
-
-产物：
-
-```text
-outputs/main/models/vae_reference/
-  manifest.json
   best_model.pt
   last_model.pt
-  training_config.json
   training_summary.json
-  schema_summary.json
-  history.json
-  training.log
 ```
 
-## 6. Generate Graphs
-
-模型生成：
+## 8. Generation
 
 ```bash
-python scripts/project.py generation create \
-  --config config/demo.yml \
-  --generation gen_reference \
-  --dataset reference \
-  --model vae_reference \
-  --num-samples 100
+python scripts/project.py <projectid> generation <model_id> <scenario_set_id>
 ```
 
-target-copy 只用于管道检查：
-
-```bash
-python scripts/project.py generation create \
-  --config config/demo.yml \
-  --generation target_copy_reference \
-  --dataset reference \
-  --num-samples 10 \
-  --mode target-copy
-```
-
-产物：
+该命令合并 model generate 和 decode，直接写入：
 
 ```text
-outputs/main/generations/gen_reference/
-  manifest.json
-  math_graphs/*.json
-  generation_config.json
-  generation_summary.json
+projects/<projectid>/scenario_sets/<scenario_set_id>/*.yml
 ```
 
-## 7. Decode Generated Graphs
-
-```bash
-python scripts/project.py generation decode \
-  --config config/demo.yml \
-  --generation gen_reference
-```
-
-产物：
-
-```text
-outputs/main/generations/gen_reference/disturbance_graphs/*.json
-outputs/main/generations/gen_reference/configs/*.yaml
-outputs/main/generations/gen_reference/case_outputs/<case_id>/
-outputs/main/generations/gen_reference/decode_summary.csv
-outputs/main/generations/gen_reference/decode_summary.json
-```
-
-## 8. Build And Benchmark Generated Dataset
-
-生成配置进入新的 dataset，不把指标写回 generation 目录。
-
-```bash
-python scripts/project.py dataset build \
-  --project-config config/demo.yml \
-  --dataset generated_reference \
-  --config-root outputs/main/generations/gen_reference/configs
-
-python scripts/project.py dataset benchmark \
-  --config config/demo.yml \
-  --dataset generated_reference \
-  --time-limit 120
-```
-
-## 9. Compare Solver Difficulty
-
-```bash
-python scripts/project.py compare solver \
-  --config config/demo.yml \
-  --reference reference \
-  --candidate generated_reference \
-  --generation gen_reference
-```
-
-产物：
-
-```text
-outputs/main/generations/gen_reference/solver_difficulty.json
-```
+对比功能暂不放入新入口。

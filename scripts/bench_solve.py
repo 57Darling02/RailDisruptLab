@@ -16,7 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.loader import load_config
-from core.solver import solve_lp
+from core.solver import GurobiSolveError, solve_lp
 
 
 def parse_args() -> argparse.Namespace:
@@ -138,6 +138,11 @@ def _solve_one_case(
         record["sol_exists"] = loaded.solve.solution_path.exists()
         if not loaded.solve.solution_path.exists():
             raise FileNotFoundError(f"Solution file not found after solve: {loaded.solve.solution_path}")
+    except GurobiSolveError as exc:
+        record["status"] = "timeout" if exc.timed_out else "failed"
+        if exc.node_count is not None:
+            record["num_nodes"] = int(round(exc.node_count))
+        record["error"] = str(exc)
     except Exception as exc:
         record["status"] = "failed"
         record["error"] = str(exc)

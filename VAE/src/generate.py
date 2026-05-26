@@ -82,7 +82,7 @@ def _generate_model(args: argparse.Namespace, math_graphs_dir: Path) -> None:
 
 
 def _prepare_run_dirs(output_dir: Path) -> Tuple[Path, Path]:
-    _reset_path(output_dir, allowed_root=Path("outputs"))
+    _reset_path(output_dir, allowed_root=Path("projects"))
     output_dir.mkdir(parents=True, exist_ok=True)
     math_graphs_dir = output_dir / "math_graphs"
     math_graphs_dir.mkdir(parents=True, exist_ok=False)

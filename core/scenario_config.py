@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 SCENARIO_EXTENSIONS = {".yaml", ".yml"}
 REPO_ROOT = Path(__file__).resolve().parents[1]
+PROJECTS_ROOT = REPO_ROOT / "projects"
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,26 @@ def scenario_reference_path(value: object, owner_path: Path) -> Optional[Path]:
     path = Path(path_text.strip())
     if path.is_absolute():
         return path
-    return (REPO_ROOT / path).resolve()
+    return resolve_config_reference(path, owner_path)
+
+
+def config_reference_base(owner_path: Path) -> Path:
+    resolved = (owner_path if owner_path.is_absolute() else REPO_ROOT / owner_path).resolve()
+    try:
+        relative = resolved.relative_to(PROJECTS_ROOT)
+    except ValueError:
+        return REPO_ROOT
+    if len(relative.parts) < 2:
+        return REPO_ROOT
+    return PROJECTS_ROOT / relative.parts[0]
+
+
+def resolve_config_reference(path: Path, owner_path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    if path.parts and path.parts[0] in {"config", "docs", "inputs", "outputs", "projects"}:
+        return (REPO_ROOT / path).resolve()
+    return (config_reference_base(owner_path) / path).resolve()
 
 
 def _extract_scenarios(payload: Dict[str, object]) -> Dict[str, object]:
