@@ -28,6 +28,7 @@ VAE:
 - 原 ACM-MILP 的 MILP 二分图转换、MIS/CA/SetCover 配置、Hydra 训练入口和旧 benchmark 流程已移除。
 - VAE 模型已加入 typed message passing，使用 `source_h + target_h + edge_h` 更新节点表示，edge feature 已精简到少数必要关系强度。
 - 本地 `acmmilp` 环境已验证 compact graph library reader、单样本短训练、checkpoint 写出、model generate、target-copy 和 evaluate。
+- 服务器端 `message_passing_steps = 2/3/4` 消融结果已同步到 `docs/消融实验/报告.md`，当前综合结果以 `steps=2` 最优为准。
 
 完整批量验收仍以 `docs/exp.md` 为准。
 
@@ -360,7 +361,7 @@ loss =
 
 ```bash
 python -u scripts/case_library_builder.py \
-  --output-root config/scenario/generated_reference \
+  --output-root outputs/main/scenarios/generated_reference \
   --clean
 ```
 
@@ -370,7 +371,7 @@ python -u scripts/case_library_builder.py \
 python scripts/project.py dataset build \
   --config config/demo.yml \
   --dataset reference \
-  --scenarios config/scenario/generated_reference
+  --scenarios outputs/main/scenarios/generated_reference
 
 python scripts/project.py dataset benchmark \
   --config config/demo.yml \
@@ -450,7 +451,7 @@ python scripts/project.py generation decode \
 - 晚点时长不是 context graph 的拓扑结构。它是 task output 的扰动参数，训练样本中对应 delay task 的参数，解码后对应 `DelayScenario.seconds`。因此晚点时长应作为扰动场景参数分布评估，而不是归入节点/边拓扑指标。
 - 限速中断可从 speed limit 任务中单独拆出：当解码后的 `limit_speed == 0` 时，将其视为中断；当 `limit_speed > 0` 时，将其视为普通限速。
 - “发生时间点 JS 散度”是合理指标，适合比较晚点、限速和中断在一天内不同时间段的概率分布。但时间、站点顺序和区间顺序都是有序变量，单独使用 JS 散度会丢失相邻 bin 的距离信息，所以应同时报告 Wasserstein/EMD 或 KS statistic。
-- 分支节点数目前先列为待补充指标。等 solver 输出稳定记录 Gurobi `NodeCount` 后，再把它纳入求解行为相似性对比。
+- `scripts/bench_solve.py` 已在 `solve_summary.csv` 中记录 Gurobi `NodeCount`，字段名为 `num_nodes`；历史报告里没有该字段的 run 仍会跳过分支节点数。
 
 建议指标口径如下：
 
@@ -472,7 +473,7 @@ python scripts/project.py generation decode \
 - 状态余弦距离用于比较求解状态分布，例如 optimal、feasible、timeout、infeasible 的比例是否接近。
 - 相对误差用于比较均值类指标，例如平均变量数、平均约束数、平均求解时间和平均目标值。
 
-当前实验数据在服务器上。本地文档只记录评估设计和指标口径；实际数值结果应由服务器端完成 `message_passing_steps = 2/3/4` 的生成、build、solve 后，再回填到 `docs/消融实验/报告.md`。
+`message_passing_steps = 2/3/4` 的生成、build、solve 和相似性评估结果已经回填到 `docs/消融实验/报告.md`。当前报告显示 `steps=2` 的综合误差最低、相似度最高；原始 run 产物不随当前仓库保留，复现实验仍按 `docs/exp.md` 重新生成 `outputs/`。
 
 ## 8. 当前状态
 
@@ -485,6 +486,7 @@ python scripts/project.py generation decode \
 - 显式生成工程目录：`outputs/<project>/generations/<generation>`。
 - VAE 训练同时写出 `best_model.pt` 和 `last_model.pt`，生成默认使用 best checkpoint。
 - `config/demo.yml` 统一管理 BaseContext、solver/analyze 和 train 参数，`config/scenario/` 单独管理场景输入。
+- `prepare_base_context.py` 默认把 BaseContext 写入 `outputs/base_context/`，生成场景库默认写入 `outputs/main/scenarios/`，流程产物不再写入 `inputs/` 或 `config/`。
 - speed 维度按 `speed_limit / 350` 归一化后进入训练样本。
 - VAE reader 支持共享 context + 多 learning sample。
 - VAE generation reader 支持只读 context graph。
@@ -493,6 +495,7 @@ python scripts/project.py generation decode \
 - target-copy 作为管道连通性检查保留。
 - generated graph 可解码为 disturbance graph，并批量回灌为 config。
 - evaluate 支持 graph/task output 相似性和 solver CSV 难度对比入口。
+- 消融实验报告已回填到 `docs/消融实验/报告.md`，当前结论是 `message_passing_steps = 2` 综合相似度最高。
 - 本地 `acmmilp` 环境已跑通过：
   - compact graph library reader
   - VAE dataset load
@@ -502,9 +505,16 @@ python scripts/project.py generation decode \
   - target-copy
   - graph/task output evaluation
   - `project.py dataset build --config ...`
+- 2026-05-26 本地非破坏性检查已通过：
+  - 54 个 Python 文件语法检查通过。
+  - `main.py --help` 和 `scripts/project.py --help` 可正常启动。
+  - `config/demo.yml` 的 BaseContext 可加载，当前下行 BaseContext 含 1560 个 event anchor 和 5 个 section anchor。
+  - `config/scenario/demo/` 可展开为 5 个 demo 场景：base、delay、interruptions、mixed、speed_limits。
+  - `scripts/bench_solve.py` 输出字段包含 `num_nodes`，用于记录 Gurobi 分支节点数。
 
 待完整批量验收：
 
+- 当前本地仓库没有保留 `outputs/` 原始运行产物，完整复现需要重新生成。
 - 全量 `scripts/project.py dataset build/benchmark --project main --dataset reference`。
 - 全量 VAE 训练。
 - 全量 model generate。

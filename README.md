@@ -14,6 +14,8 @@ python scripts/prepare_base_context.py \
   --mileage-path inputs/区间里程.xlsx
 ```
 
+This writes `outputs/base_context/context_<timetable stem>.json` by default.
+
 Build and benchmark the scenarios referenced by `config/demo.yml`:
 
 ```bash
@@ -31,13 +33,13 @@ Generate a larger scenario library and benchmark it with the same project config
 
 ```bash
 python -u scripts/case_library_builder.py \
-  --output-root config/scenario/generated_reference \
+  --output-root outputs/main/scenarios/generated_reference \
   --clean
 
 python scripts/project.py dataset build \
   --config config/demo.yml \
   --dataset reference \
-  --scenarios config/scenario/generated_reference
+  --scenarios outputs/main/scenarios/generated_reference
 
 python scripts/project.py dataset benchmark \
   --config config/demo.yml \
@@ -59,6 +61,8 @@ python scripts/project.py dataset benchmark \
 | `train` | VAE training defaults |
 
 Scenario files live under `config/scenario/` and contain only case-level disturbances:
+
+Relative paths in project/scenario configs are resolved from the repository root.
 
 ```yaml
 name: mixed
@@ -117,7 +121,7 @@ Override the scenario source without creating another project config:
 python scripts/project.py dataset build \
   --config config/demo.yml \
   --dataset reference \
-  --scenarios config/scenario/generated_reference
+  --scenarios outputs/main/scenarios/generated_reference
 ```
 
 Benchmark:

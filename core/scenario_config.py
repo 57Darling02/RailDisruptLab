@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 
 SCENARIO_EXTENSIONS = {".yaml", ".yml"}
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass(frozen=True)
@@ -103,14 +104,7 @@ def scenario_reference_path(value: object, owner_path: Path) -> Optional[Path]:
     path = Path(path_text.strip())
     if path.is_absolute():
         return path
-    candidates = [
-        (owner_path.parent / path).resolve(),
-        (Path.cwd() / path).resolve(),
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
+    return (REPO_ROOT / path).resolve()
 
 
 def _extract_scenarios(payload: Dict[str, object]) -> Dict[str, object]:

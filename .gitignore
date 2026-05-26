@@ -47,8 +47,6 @@ outputs/
 *.log
 *.tmp
 
-
 test_*.py
 *_test.py
 *.test.py
-config/batch_case_configs_demo

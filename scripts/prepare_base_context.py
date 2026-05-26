@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mileage-path", required=True, help="Path to mileage .xlsx.")
     parser.add_argument("--timetable-sheet-name", default="Sheet1")
     parser.add_argument("--mileage-sheet-name", default="Sheet1")
-    parser.add_argument("--output-path", default="", help="Defaults to inputs/context_<timetable stem>.json.")
+    parser.add_argument("--output-path", default="", help="Defaults to outputs/base_context/context_<timetable stem>.json.")
     return parser.parse_args()
 
 

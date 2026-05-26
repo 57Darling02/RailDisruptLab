@@ -1,9 +1,9 @@
 project:
   name: main
-  base_context_path: inputs/context_下行计划时刻表.json
+  base_context_path: outputs/base_context/context_下行计划时刻表.json
 
 build:
-  scenarios: scenario/demo
+  scenarios: config/scenario/demo
 
 solve:
   lp_path: ""

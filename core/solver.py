@@ -10,11 +10,13 @@ class SolveResult:
         objective: float,
         values: Dict[str, float],
         mip_gap: float,
+        node_count: float,
         timed_out: bool,
     ) -> None:
         self.objective = objective
         self.values = values
         self.mip_gap = mip_gap
+        self.node_count = node_count
         self.timed_out = timed_out
 
 
@@ -54,10 +56,12 @@ def solve_lp(
 
     values = {var.VarName: float(var.X) for var in model.getVars()}
     achieved_gap = float(model.MIPGap) if model.SolCount > 0 else float("inf")
+    node_count = float(model.NodeCount)
     return SolveResult(
         objective=float(model.objVal),
         values=values,
         mip_gap=achieved_gap,
+        node_count=node_count,
         timed_out=timed_out,
     )
 

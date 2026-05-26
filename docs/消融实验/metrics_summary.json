@@ -4740,6 +4740,6 @@
   "notes": {
     "js_divergence": "JSD is computed on fixed bins with log2 normalization, lower is better.",
     "joint_structure": "Joint histograms compare co-occurrence patterns rather than marginal distributions only.",
-    "unavailable_solver_metrics": "num_nodes and t_first_feas are reported only if future solver CSVs contain them."
+    "unavailable_solver_metrics": "Solver metrics such as num_nodes and t_first_feas are used when present in solver CSVs."
   }
 }

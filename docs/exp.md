@@ -1,10 +1,24 @@
 # RailGraph2Gurobi 项目流程
 
+## 0. 环境与入口边界
+
+本项目当前验收默认使用本地 conda 环境：
+
+```bash
+conda activate acmmilp
+```
+
+推荐入口是 `scripts/project.py`。它负责把 project、dataset、model、generation 和 comparison 的产物统一写入 `outputs/<project>/`。
+
+`main.py` 只适合已经展开成单个 case 的配置文件。`config/demo.yml` 的 `build.scenarios` 指向场景目录，批量展开由 `scripts/project.py dataset build` / `scripts/bench_build.py` 完成；不要把 `python main.py --config config/demo.yml run` 当作 demo 批量验收入口。
+
 当前推荐配置模型：
 
 - `config/demo.yml` 是 project config，包含 BaseContext、solver/export/analyze 和 train 配置。
 - `config/scenario/...` 是 scenario config，只包含单个 case 的扰动。
 - `build.scenarios` 可以引用单个 scenario YAML，也可以引用 scenario 目录。
+- 配置中的相对路径统一按项目根目录解析。
+- 流程产物统一写入 `outputs/`，不写入 `inputs/` 或 `config/`。
 - 不使用 `latest`。
 - 同名 project/dataset/model/generation 重跑时覆盖原目录。
 
@@ -29,7 +43,7 @@ python scripts/prepare_base_context.py \
 产物：
 
 ```text
-inputs/context_下行计划时刻表.json
+outputs/base_context/context_下行计划时刻表.json
 ```
 
 ## 2. Scenario Inputs
@@ -44,7 +58,7 @@ config/scenario/demo/*.yml
 
 ```bash
 python -u scripts/case_library_builder.py \
-  --output-root config/scenario/generated_reference \
+  --output-root outputs/main/scenarios/generated_reference \
   --clean
 ```
 
@@ -81,7 +95,7 @@ python scripts/project.py dataset build \
 python scripts/project.py dataset build \
   --config config/demo.yml \
   --dataset reference \
-  --scenarios config/scenario/generated_reference
+  --scenarios outputs/main/scenarios/generated_reference
 ```
 
 dataset 结构：

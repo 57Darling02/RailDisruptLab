@@ -61,7 +61,21 @@ def _collect_configs(config_root: Path, pattern: str, start_index: int, end_inde
 
 def _write_csv(path: Path, records: List[Dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    headers = list(records[0].keys()) if records else ["index", "config_file", "status", "error"]
+    headers = list(records[0].keys()) if records else [
+        "index",
+        "config_file",
+        "case_id",
+        "status",
+        "error",
+        "lp_path",
+        "lp_exists",
+        "sol_path",
+        "sol_exists",
+        "objective",
+        "mip_gap",
+        "num_nodes",
+        "duration_sec",
+    ]
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=headers)
         writer.writeheader()
@@ -95,6 +109,7 @@ def _solve_one_case(
         "sol_exists": False,
         "objective": None,
         "mip_gap": None,
+        "num_nodes": None,
         "duration_sec": 0.0,
     }
     try:
@@ -116,6 +131,7 @@ def _solve_one_case(
         )
         record["objective"] = round(result.objective, 4)
         record["mip_gap"] = round(result.mip_gap, 6)
+        record["num_nodes"] = int(round(result.node_count))
         if result.timed_out:
             record["status"] = "timeout"
 
@@ -134,8 +150,10 @@ def _print_record(record: Dict[str, object], completed: int, total: int) -> None
     obj_str = f"obj={record['objective']}" if record["objective"] is not None else "obj=N/A"
     gap = record.get("mip_gap")
     gap_str = f" gap={gap:.2%}" if gap is not None else ""
+    nodes = record.get("num_nodes")
+    nodes_str = f" nodes={nodes}" if nodes is not None else ""
     sol_str = " sol=yes" if record.get("sol_exists") else " sol=no"
-    print(f"[{completed}/{total}] {record['status']} | {record['case_id']} | {obj_str}{gap_str}{sol_str} | {record['duration_sec']}s")
+    print(f"[{completed}/{total}] {record['status']} | {record['case_id']} | {obj_str}{gap_str}{nodes_str}{sol_str} | {record['duration_sec']}s")
     if record["status"] == "failed":
         print(f"  ! {record['error']}", file=sys.stderr)
 
@@ -197,9 +215,13 @@ def main() -> None:
         status_counts[s] = status_counts.get(s, 0) + 1
 
     ok_objectives = [float(r["objective"]) for r in records if r.get("objective") is not None and r.get("status") != "failed"]
+    ok_nodes = [int(r["num_nodes"]) for r in records if r.get("num_nodes") is not None and r.get("status") != "failed"]
     obj_stats = ""
     if ok_objectives:
         obj_stats = f" | obj min={min(ok_objectives):.4g} avg={sum(ok_objectives)/len(ok_objectives):.4g} max={max(ok_objectives):.4g}"
+    node_stats = ""
+    if ok_nodes:
+        node_stats = f" | nodes min={min(ok_nodes)} avg={sum(ok_nodes)/len(ok_nodes):.1f} max={max(ok_nodes)}"
 
     _write_csv(summary_csv, records)
     _write_json(summary_json, {
@@ -213,7 +235,7 @@ def main() -> None:
         "summary_csv": _to_posix(summary_csv),
     })
 
-    print(f"\nDone: {' '.join(f'{k}={v}' for k, v in status_counts.items())}{obj_stats}")
+    print(f"\nDone: {' '.join(f'{k}={v}' for k, v in status_counts.items())}{obj_stats}{node_stats}")
 
     failed_records = [r for r in records if str(r.get("status")) == "failed"]
     if failed_records:

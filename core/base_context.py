@@ -22,10 +22,11 @@ from core.types import (
 from core.validator import _validate_mileage_rows, _validate_station_coverage, _validate_timetable_rows
 
 SCHEMA_VERSION = 1
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def default_base_context_path(timetable_path: Path) -> Path:
-    return timetable_path.parent / f"context_{timetable_path.stem}.json"
+    return REPO_ROOT / "outputs" / "base_context" / f"context_{timetable_path.stem}.json"
 
 
 def build_base_context(
@@ -85,7 +86,8 @@ def write_base_context(context: BaseContext, output_path: Path) -> None:
 
 
 def load_base_context(path: Path) -> BaseContext:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    resolved_path = path if path.is_absolute() else (REPO_ROOT / path).resolve()
+    payload = json.loads(resolved_path.read_text(encoding="utf-8"))
     version = int(payload.get("schema_version", 0))
     if version != SCHEMA_VERSION:
         raise ValueError(f"Unsupported base context schema_version: {version}")

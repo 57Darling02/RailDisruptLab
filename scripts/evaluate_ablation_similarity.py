@@ -179,7 +179,7 @@ def main() -> None:
         "notes": {
             "js_divergence": "JSD is computed on fixed bins with log2 normalization, lower is better.",
             "joint_structure": "Joint histograms compare co-occurrence patterns rather than marginal distributions only.",
-            "unavailable_solver_metrics": "num_nodes and t_first_feas are reported only if future solver CSVs contain them.",
+            "unavailable_solver_metrics": "Solver metrics such as num_nodes and t_first_feas are used when present in solver CSVs.",
         },
     }
 
@@ -1264,7 +1264,7 @@ def write_report(metrics: Mapping[str, object], figures: Mapping[str, Path], doc
     lines.append(f"- 本报告由 `scripts/evaluate_ablation_similarity.py` 可重复生成；完整 JSON/CSV 输出位于 `{output_dir}`。")
     lines.append("- 评估不重跑训练、generate、build 或 solve，只读取既有 run 产物。")
     lines.append("- `limit_speed == 0` 计为中断，`limit_speed > 0` 计为普通限速；晚点时长、限速持续时长、限速值等扰动程度指标均使用分箱 JSD。")
-    lines.append("- 当前 solve CSV 没有 `num_nodes` 和 `t_first_feas`，分支节点数与首个可行解时间暂不纳入；字段出现后会自动纳入。")
+    lines.append("- 如果 solve CSV 缺少 `num_nodes` 或 `t_first_feas`，对应的分支节点数或首个可行解时间指标会自动跳过。")
     lines.append("")
     lines.append("## 指标解释")
     lines.append("")

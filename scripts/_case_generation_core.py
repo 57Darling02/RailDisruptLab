@@ -76,7 +76,7 @@ class BaseData:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate case library for converter validation.")
     parser.add_argument("--base-config", default="", help="Base config path. If omitted, auto-select from config/*.yaml.")
-    parser.add_argument("--output-root", default="config/scenario/generated_demo")
+    parser.add_argument("--output-root", default="outputs/main/scenarios/generated_demo")
     parser.add_argument("--seed", type=int, default=20260320)
     parser.add_argument("--delay-count", type=int, default=10)
     parser.add_argument("--speed-count", type=int, default=10)

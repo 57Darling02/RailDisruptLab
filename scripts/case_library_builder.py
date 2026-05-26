@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-root",
-        default="config/scenario/generated_demo",
+        default="outputs/main/scenarios/generated_demo",
         help="Directory where scenario YAML files will be written.",
     )
     parser.add_argument("--seed", type=int, default=20260320)
