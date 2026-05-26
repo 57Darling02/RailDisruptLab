@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config-root",
-        default="outputs/bench_build/latest/configs",
+        required=True,
         help="Root directory containing case config files.",
     )
     parser.add_argument(
@@ -46,12 +46,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--summary-csv",
-        default="outputs/bench_export_timetable/summary.csv",
+        required=True,
         help="Summary CSV output path.",
     )
     parser.add_argument(
         "--summary-json",
-        default="outputs/bench_export_timetable/summary.json",
+        required=True,
         help="Summary JSON output path.",
     )
     return parser.parse_args()

@@ -138,7 +138,7 @@ def list_learning_sample_files(root: Union[str, Path]) -> List[Path]:
     if root_path.is_file():
         candidates = [root_path]
     else:
-        graph_sample_root = root_path / "graph_samples"
+        graph_sample_root = root_path / "samples"
         if not graph_sample_root.is_dir():
             return []
         candidates = sorted(graph_sample_root.rglob("*.json"))

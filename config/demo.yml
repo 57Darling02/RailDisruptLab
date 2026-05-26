@@ -1,22 +1,9 @@
 project:
-  name: speed_limits_demo
-  output_dir: outputs/speed_limits_demo
+  name: main
   base_context_path: inputs/context_下行计划时刻表.json
 
 build:
-  scenarios:
-    delays: []
-    speed_limits:
-      - start_station: jinanxi
-        end_station: taian
-        start_time: "08:00:00"
-        duration: 7200
-        limit_speed: 80
-      - start_station: qufudong
-        end_station: tengzhoudong
-        start_time: "09:30:00"
-        duration: 7200
-        limit_speed: 120
+  scenarios: scenario/demo
 
 solve:
   lp_path: ""
@@ -37,6 +24,28 @@ analyze:
   enable_metrics: true
   enable_plot: true
   plot_grid: true
-  plot_title: Train Timetable - Speed Limits Demo
+  plot_title: Train Timetable
   adj_timetable_path: ""
   adj_timetable_sheet_name: Sheet1
+
+train:
+  data:
+    limit: 0
+  model:
+    hidden_dim: 64
+    latent_dim: 16
+    message_passing_steps: 2
+  optimization:
+    epochs: 800
+    batch_size: 8
+    lr: 0.0003
+    seed: 1
+    device: auto
+    log_every: 1
+  loss_weights:
+    count: 1.0
+    anchor: 1.0
+    param: 2.0
+    kl: 0.0015
+  output:
+    dir: outputs/main/models/vae_reference

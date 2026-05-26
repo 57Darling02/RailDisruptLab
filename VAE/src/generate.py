@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -9,8 +10,6 @@ from typing import Dict, List, Tuple
 MATH_CONTEXT_GRAPH_TYPE = "vae_math_context_graph"
 MATH_LEARNING_SAMPLE_TYPE = "vae_math_learning_sample"
 MATH_GENERATED_GRAPH_TYPE = "vae_math_generated_graph"
-GENERATE_ROOT = Path("outputs/generate")
-LATEST_PATH = GENERATE_ROOT / "latest"
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,37 +25,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["target-copy", "model"], default="model")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda, or cuda:<index>.")
+    parser.add_argument("--output-dir", required=True, help="Generation output directory.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     args.context_graphs = _context_input(args)
-    run_dir, math_sample_dir = _prepare_run_dirs()
-    _write_generation_config(args, run_dir, math_sample_dir)
+    run_dir, math_graphs_dir = _prepare_run_dirs(Path(args.output_dir))
+    _write_generation_config(args, run_dir, math_graphs_dir)
     if args.mode == "target-copy":
-        _generate_target_copy(args, math_sample_dir)
+        _generate_target_copy(args, math_graphs_dir)
     else:
-        _generate_model(args, math_sample_dir)
-    _write_generation_summary(args, run_dir, math_sample_dir)
-    _publish_latest(run_dir)
+        _generate_model(args, math_graphs_dir)
+    _write_generation_summary(args, run_dir, math_graphs_dir)
     print(f"Generation run: {run_dir}")
-    print(f"Math samples: {math_sample_dir}")
-    print(f"Latest generation run: {LATEST_PATH}")
+    print(f"Math graphs: {math_graphs_dir}")
 
 
-def _generate_target_copy(args: argparse.Namespace, math_sample_dir: Path) -> None:
+def _generate_target_copy(args: argparse.Namespace, math_graphs_dir: Path) -> None:
     generated_sources = _target_copy_sources(Path(args.context_graphs))
     if not generated_sources:
         raise FileNotFoundError(f"No VAE learning samples found: {args.context_graphs}")
     for index in range(args.num_samples):
         generated = generated_sources[index % len(generated_sources)]
-        path = math_sample_dir / f"sample_{index + 1:06d}.json"
+        path = math_graphs_dir / f"sample_{index + 1:06d}.json"
         path.write_text(json.dumps(generated, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Generated target-copy math graphs: {math_sample_dir}")
+    print(f"Generated target-copy math graphs: {math_graphs_dir}")
 
 
-def _generate_model(args: argparse.Namespace, math_sample_dir: Path) -> None:
+def _generate_model(args: argparse.Namespace, math_graphs_dir: Path) -> None:
     if not args.checkpoint:
         raise ValueError("--checkpoint is required when --mode model.")
 
@@ -78,47 +76,38 @@ def _generate_model(args: argparse.Namespace, math_sample_dir: Path) -> None:
             sample = dataset[index % len(dataset)].to(device)
             task_outputs = model.decode_from_prior(sample)
             generated = generated_outputs_to_json(sample, task_outputs)
-            path = math_sample_dir / f"sample_{index + 1:06d}.json"
+            path = math_graphs_dir / f"sample_{index + 1:06d}.json"
             path.write_text(json.dumps(generated, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Generated model math graphs: {math_sample_dir}")
+    print(f"Generated model math graphs: {math_graphs_dir}")
 
 
-def _prepare_run_dirs() -> Tuple[Path, Path]:
-    GENERATE_ROOT.mkdir(parents=True, exist_ok=True)
-    base_path = GENERATE_ROOT / _timestamp_for_path()
-    run_dir = base_path
-    suffix = 2
-    while run_dir.exists():
-        run_dir = base_path.with_name(f"{base_path.name}_{suffix}")
-        suffix += 1
-    math_sample_dir = run_dir / "math_sample"
-    math_sample_dir.mkdir(parents=True, exist_ok=False)
-    return run_dir, math_sample_dir
+def _prepare_run_dirs(output_dir: Path) -> Tuple[Path, Path]:
+    _reset_path(output_dir, allowed_root=Path("outputs"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    math_graphs_dir = output_dir / "math_graphs"
+    math_graphs_dir.mkdir(parents=True, exist_ok=False)
+    return output_dir, math_graphs_dir
 
 
-def _timestamp_for_path() -> str:
-    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-
-def _write_generation_config(args: argparse.Namespace, run_dir: Path, math_sample_dir: Path) -> None:
+def _write_generation_config(args: argparse.Namespace, run_dir: Path, math_graphs_dir: Path) -> None:
     payload = vars(args).copy()
     payload["created_at"] = datetime.now().isoformat(timespec="seconds")
     payload["run_dir"] = _to_posix(run_dir)
-    payload["math_sample_dir"] = _to_posix(math_sample_dir)
+    payload["math_graphs_dir"] = _to_posix(math_graphs_dir)
     (run_dir / "generation_config.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
 
-def _write_generation_summary(args: argparse.Namespace, run_dir: Path, math_sample_dir: Path) -> None:
+def _write_generation_summary(args: argparse.Namespace, run_dir: Path, math_graphs_dir: Path) -> None:
     payload = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "run_dir": _to_posix(run_dir),
-        "math_sample_dir": _to_posix(math_sample_dir),
+        "math_graphs_dir": _to_posix(math_graphs_dir),
         "mode": args.mode,
         "num_samples": args.num_samples,
-        "sample_count": len(list(math_sample_dir.glob("*.json"))),
+        "sample_count": len(list(math_graphs_dir.glob("*.json"))),
     }
     (run_dir / "generation_summary.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
@@ -126,16 +115,15 @@ def _write_generation_summary(args: argparse.Namespace, run_dir: Path, math_samp
     )
 
 
-def _publish_latest(run_dir: Path) -> None:
-    _replace_symlink(LATEST_PATH, run_dir)
-
-
-def _replace_symlink(link_path: Path, target: Path) -> None:
-    if link_path.is_symlink() or link_path.is_file():
-        link_path.unlink()
-    elif link_path.exists():
-        raise FileExistsError(f"Refusing to replace non-symlink directory: {link_path}")
-    link_path.symlink_to(target.resolve(), target_is_directory=True)
+def _reset_path(path: Path, *, allowed_root: Path) -> None:
+    resolved = path.resolve()
+    root = allowed_root.resolve()
+    if resolved == root or root not in resolved.parents:
+        raise ValueError(f"Refusing to clear path outside allowed root: {path}")
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
 
 
 def _to_posix(path: Path) -> str:
@@ -188,7 +176,7 @@ def _target_copy_sources(root: Path) -> List[Dict[str, object]]:
         raise ValueError(f"Unsupported graph_type: {payload.get('graph_type')}")
 
     context_path = root / "context.json"
-    sample_dir = root / "graph_samples"
+    sample_dir = root / "samples"
     if context_path.is_file() and sample_dir.is_dir():
         context = json.loads(context_path.read_text(encoding="utf-8"))
         result: List[Dict[str, object]] = []

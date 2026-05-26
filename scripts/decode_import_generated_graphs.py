@@ -39,17 +39,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--generated-graphs", required=True, help="Generated graph JSON file or directory.")
     parser.add_argument("--glob", default="*.json", help="Glob used when --generated-graphs is a directory.")
-    parser.add_argument("--base-config", default="config/base_demo.yaml", help="Config that provides solver/analyze defaults.")
+    parser.add_argument("--base-config", default="config/demo.yml", help="Config that provides solver/analyze defaults.")
     parser.add_argument("--base-context-path", default="", help="Optional BaseContext path override.")
-    parser.add_argument("--output-disturbance-root", default="", help="Defaults to <generate-run>/disturbance_graphs.")
-    parser.add_argument("--output-config-root", default="", help="Defaults to <generate-run>/configs.")
+    parser.add_argument("--output-disturbance-root", default="", help="Defaults to <generation>/disturbance_graphs.")
+    parser.add_argument("--output-config-root", default="", help="Defaults to <generation>/configs.")
     parser.add_argument(
         "--project-output-root",
         default="",
-        help="Prefix written to generated YAML project.output_dir. Defaults to <generate-run>/case_outputs.",
+        help="Prefix written to generated YAML project.output_dir. Defaults to <generation>/case_outputs.",
     )
-    parser.add_argument("--summary-csv", default="", help="Defaults to <generate-run>/decode_import_summary.csv.")
-    parser.add_argument("--summary-json", default="", help="Defaults to <generate-run>/decode_import_summary.json.")
+    parser.add_argument("--summary-csv", default="", help="Defaults to <generation>/decode_summary.csv.")
+    parser.add_argument("--summary-json", default="", help="Defaults to <generation>/decode_summary.json.")
     parser.add_argument("--max-slots", type=int, default=DEFAULT_MAX_SLOTS)
     parser.add_argument("--speed-interruption-threshold", type=float, default=DEFAULT_SPEED_INTERRUPTION_THRESHOLD)
     parser.add_argument("--stop-on-error", action="store_true", help="Stop after the first failed graph.")
@@ -80,8 +80,8 @@ def main() -> None:
         if args.project_output_root
         else _config_path_text(generate_run_dir / "case_outputs")
     )
-    summary_csv = _resolve(args.summary_csv) if args.summary_csv else generate_run_dir / "decode_import_summary.csv"
-    summary_json = _resolve(args.summary_json) if args.summary_json else generate_run_dir / "decode_import_summary.json"
+    summary_csv = _resolve(args.summary_csv) if args.summary_csv else generate_run_dir / "decode_summary.csv"
+    summary_json = _resolve(args.summary_json) if args.summary_json else generate_run_dir / "decode_summary.json"
     defaults = load_config(base_config_path)
     yaml = _require_yaml()
 
@@ -199,7 +199,7 @@ def _collect_generated_graphs(root: Path, pattern: str) -> List[Path]:
     if root.is_file():
         candidates = [root]
     else:
-        graph_root = root / "math_sample" if (root / "math_sample").is_dir() else root
+        graph_root = root / "math_graphs" if (root / "math_graphs").is_dir() else root
         candidates = sorted(path for path in graph_root.glob(pattern) if path.is_file())
     result: List[Path] = []
     for path in candidates:
@@ -215,10 +215,10 @@ def _collect_generated_graphs(root: Path, pattern: str) -> List[Path]:
 def _infer_generate_run_dir(path: Path) -> Path:
     if path.is_file():
         parent = path.parent
-        return parent.parent if parent.name == "math_sample" else parent
-    if path.name == "math_sample":
+        return parent.parent if parent.name == "math_graphs" else parent
+    if path.name == "math_graphs":
         return path.parent
-    if (path / "math_sample").is_dir():
+    if (path / "math_graphs").is_dir():
         return path
     return path
 

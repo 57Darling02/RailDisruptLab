@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Batch run main solve stage for configs produced by bench_build.py."
     )
-    parser.add_argument("--config-root", default="outputs/bench_build/latest/configs")
+    parser.add_argument("--config-root", required=True)
     parser.add_argument("--glob", default="**/*.yaml")
     parser.add_argument("--start-index", type=int, default=1, help="1-based start index (inclusive).")
     parser.add_argument("--end-index", type=int, default=0, help="1-based end index (inclusive, 0 = no upper bound).")
@@ -32,8 +32,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threads-per-solve", type=int, default=0, help="Gurobi threads per solve (default: 0 = cpu_count // workers).")
     parser.add_argument("--time-limit", type=float, default=0.0, help="Gurobi time limit in seconds per solve (0 = no limit).")
     parser.add_argument("--mip-gap", type=float, default=0.0, help="Gurobi MIP relative gap threshold (0 = Gurobi default ~1e-4).")
-    parser.add_argument("--summary-csv", default="outputs/bench_solve/summary.csv")
-    parser.add_argument("--summary-json", default="outputs/bench_solve/summary.json")
+    parser.add_argument("--summary-csv", required=True)
+    parser.add_argument("--summary-json", required=True)
     return parser.parse_args()
 
 

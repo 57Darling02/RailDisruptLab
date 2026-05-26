@@ -1,0 +1,13 @@
+name: interruptions
+delays: []
+speed_limits:
+  - start_station: taian
+    end_station: qufudong
+    start_time: "09:00:00"
+    duration: 2400
+    limit_speed: 0
+  - start_station: zaozhuang
+    end_station: xuzhoudong
+    start_time: "10:50:00"
+    duration: 1800
+    limit_speed: 0

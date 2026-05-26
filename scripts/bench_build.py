@@ -1,11 +1,13 @@
 ﻿from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import contextlib
 import json
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -31,6 +33,8 @@ from core.vae_learning_graph import (
     typed_learning_graph_to_math_learning_sample,
 )
 from main import cmd_build
+from core.project_layout import reset_dir
+from core.scenario_config import expand_config_scenarios
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,12 +43,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--config-root",
-        default="config/batch_case_configs_demo",
+        default="config",
         help="Root directory containing case config files.",
     )
     parser.add_argument(
         "--glob",
-        default="**/*.yaml",
+        default="demo.yml",
         help="Glob pattern under config-root to find config files.",
     )
     parser.add_argument(
@@ -63,7 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--event-top-k", type=int, default=DEFAULT_EVENT_TOP_K)
     parser.add_argument("--section-order-window", type=int, default=DEFAULT_SECTION_ORDER_WINDOW)
     parser.add_argument("--speed-interruption-threshold", type=float, default=DEFAULT_SPEED_INTERRUPTION_THRESHOLD)
-    parser.add_argument("--no-publish-latest", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--scenarios", default="", help="Override build.scenarios with a scenario file or directory.")
+    parser.add_argument("--output-dir", required=True, help="Dataset output directory.")
     return parser.parse_args()
 
 
@@ -78,20 +83,6 @@ def _to_posix(path_value: Path) -> str:
     return str(path_value).replace("\\", "/")
 
 
-def _timestamp_for_path() -> str:
-    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-
-def _run_dir() -> Path:
-    base_path = _resolve_path(f"outputs/bench_build/{_timestamp_for_path()}")
-    run_path = base_path
-    suffix = 2
-    while run_path.exists():
-        run_path = base_path.with_name(f"{base_path.name}_{suffix}")
-        suffix += 1
-    return run_path
-
-
 class _TeeStream:
     def __init__(self, *streams):
         self.streams = streams
@@ -104,6 +95,14 @@ class _TeeStream:
     def flush(self) -> None:
         for stream in self.streams:
             stream.flush()
+
+
+@dataclass(frozen=True)
+class BuildInput:
+    source_config_path: Path
+    case_id: str
+    payload: Dict[str, object]
+    scenario_path: Optional[Path]
 
 
 def _case_id_from_path(config_path: Path) -> str:
@@ -150,9 +149,10 @@ def _require_yaml() -> Any:
 def main() -> None:
     args = parse_args()
     config_root = _resolve_path(args.config_root)
-    run_dir = _run_dir()
+    run_dir = _resolve_path(args.output_dir)
+    reset_dir(run_dir, allowed_root=REPO_ROOT / "outputs")
     run_dir.mkdir(parents=True, exist_ok=True)
-    log_file = run_dir / "bench_build.log"
+    log_file = run_dir / "logs" / "build.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     with log_file.open("w", encoding="utf-8") as log_handle:
@@ -163,21 +163,30 @@ def main() -> None:
 
 def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: Path) -> None:
     yaml = _require_yaml()
-    summary_csv = run_dir / "summary.csv"
-    summary_json = run_dir / "summary.json"
+    manifest_json = run_dir / "manifest.json"
+    summary_csv = run_dir / "benchmark" / "build_summary.csv"
+    summary_json = run_dir / "benchmark" / "build_summary.json"
     configs_dir = run_dir / "configs"
-    lp_samples_dir = run_dir / "lp_simples"
-    graph_samples_dir = run_dir / "graph_samples"
-    context_graph_path = run_dir / "context.json"
+    case_outputs_dir = run_dir / "cases"
+    graph_dir = run_dir / "graph"
+    sample_dir = graph_dir / "samples"
+    context_graph_path = graph_dir / "context.json"
+    dataset_profile_path = graph_dir / "dataset_profile.json"
 
-    configs = _collect_configs(config_root, args.glob, args.limit)
+    source_configs = _collect_configs(config_root, args.glob, args.limit)
+    build_inputs = _expand_build_inputs(
+        source_configs=source_configs,
+        scenarios_override=_resolve_path(args.scenarios) if args.scenarios else None,
+        yaml=yaml,
+    )
     print(f"Run directory: {run_dir}")
     print(f"Log file: {log_file}")
     print(f"Configs: {configs_dir}")
-    print(f"LP samples: {lp_samples_dir}")
-    print(f"Graph samples: {graph_samples_dir}")
+    print(f"Case outputs: {case_outputs_dir}")
+    print(f"Graph samples: {sample_dir}")
     print(f"Context graph: {context_graph_path}")
-    print(f"Found configs: {len(configs)}")
+    print(f"Found source configs: {len(source_configs)}")
+    print(f"Expanded cases: {len(build_inputs)}")
 
     records: List[Dict[str, object]] = []
     graph_sample_records: List[Dict[str, object]] = []
@@ -185,15 +194,16 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
     profile_source_graph: Optional[Dict[str, object]] = None
     shared_context_graph: Optional[Dict[str, object]] = None
 
-    for idx, config_path in enumerate(configs, start=1):
+    for idx, build_input in enumerate(build_inputs, start=1):
         time.sleep(0.2)
         start = time.perf_counter()
-        case_id = _case_id_from_source(config_path, yaml)
+        config_path = build_input.source_config_path
         record: Dict[str, object] = {
             "index": idx,
             "source_config_file": _to_posix(config_path),
+            "scenario_file": _to_posix(build_input.scenario_path) if build_input.scenario_path else "",
             "config_file": "",
-            "case_id": case_id,
+            "case_id": build_input.case_id,
             "status": "ok",
             "error": "",
             "output_dir": "",
@@ -205,9 +215,9 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
 
         try:
             case_id, build_config_path = _prepare_case_config(
-                source_config_path=config_path,
+                build_input=build_input,
                 configs_dir=configs_dir,
-                lp_samples_dir=lp_samples_dir,
+                case_outputs_dir=case_outputs_dir,
                 yaml=yaml,
             )
             record["case_id"] = case_id
@@ -245,12 +255,8 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
             elif context_graph != shared_context_graph:
                 raise ValueError("Math graph export only supports one shared context graph per case graph library.")
 
-            learning_sample = typed_learning_graph_to_math_learning_sample(
-                typed_graph,
-                context_ref="context.json",
-                sample_id=case_id,
-            )
-            learning_sample_path = graph_samples_dir / f"{_sanitize(case_id)}.json"
+            learning_sample = typed_learning_graph_to_math_learning_sample(typed_graph, context_ref="context.json", sample_id=case_id)
+            learning_sample_path = sample_dir / f"{_sanitize(case_id)}.json"
             _write_json(learning_sample_path, learning_sample)
             learning_samples.append(learning_sample)
             graph_sample_records.append(
@@ -269,7 +275,7 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
         records.append(record)
 
         print(
-            f"[{idx}/{len(configs)}] {record['status']} | "
+            f"[{idx}/{len(build_inputs)}] {record['status']} | "
             f"{record['case_id']} | {record['duration_sec']}s"
         )
         if record["status"] == "failed":
@@ -285,18 +291,19 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
 
     payload: Dict[str, object] = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
+        "dataset_dir": _to_posix(run_dir),
         "config_root": _to_posix(config_root),
         "glob": args.glob,
         "limit": args.limit,
+        "scenarios_override": _to_posix(_resolve_path(args.scenarios)) if args.scenarios else "",
         "total": len(records),
         "status_counts": status_counts,
-        "run_dir": _to_posix(run_dir),
         "log_file": _to_posix(log_file),
         "configs_dir": _to_posix(configs_dir),
-        "lp_samples_dir": _to_posix(lp_samples_dir),
-        "graph_samples_dir": _to_posix(graph_samples_dir),
+        "case_outputs_dir": _to_posix(case_outputs_dir),
+        "sample_dir": _to_posix(sample_dir),
         "context_graph": _to_posix(context_graph_path),
-        "dataset_profile": _to_posix(run_dir / "dataset_profile.json"),
+        "dataset_profile": _to_posix(dataset_profile_path),
         "summary_csv": _to_posix(summary_csv),
         "summary_json": _to_posix(summary_json),
     }
@@ -311,7 +318,7 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
 
     if profile_source_graph is not None:
         _write_dataset_profile(
-            run_dir=run_dir,
+            dataset_profile_path=dataset_profile_path,
             profile_source_graph=profile_source_graph,
             sample_records=graph_sample_records,
             inferred_schema=inferred_schema,
@@ -320,6 +327,7 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
 
     _write_csv(summary_csv, records)
     _write_json(summary_json, payload)
+    _write_json(manifest_json, payload)
 
     print(f"Status counts: {status_counts}")
 
@@ -336,48 +344,60 @@ def _main(args: argparse.Namespace, config_root: Path, run_dir: Path, log_file: 
     print(f"Summary JSON: {summary_json}")
     print(f"Log file: {log_file}")
     print(f"Configs: {configs_dir}")
-    print(f"LP samples: {lp_samples_dir}")
-    print(f"Graph samples: {graph_samples_dir}")
+    print(f"Case outputs: {case_outputs_dir}")
+    print(f"Graph samples: {sample_dir}")
     print(f"Context graph: {context_graph_path}")
 
-    if not failed_records and not args.no_publish_latest:
-        latest_build = REPO_ROOT / "outputs/bench_build/latest"
-        _replace_symlink(latest_build, run_dir)
-        print(f"Latest build link: {latest_build} -> {run_dir}")
-    elif failed_records:
-        print("Latest build link was not updated because build had failures.", file=sys.stderr)
 
-
-def _case_id_from_source(config_path: Path, yaml: Any) -> str:
-    try:
-        payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return _case_id_from_path(config_path)
-    if isinstance(payload, dict):
-        project = payload.get("project")
-        if isinstance(project, dict):
-            name = str(project.get("name", "")).strip()
-            if name:
-                return name
-    return _case_id_from_path(config_path)
+def _expand_build_inputs(
+    *,
+    source_configs: List[Path],
+    scenarios_override: Optional[Path],
+    yaml: Any,
+) -> List[BuildInput]:
+    inputs: List[BuildInput] = []
+    for source_config_path in source_configs:
+        payload = yaml.safe_load(source_config_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(payload, dict):
+            raise ValueError(f"Config must be a YAML object: {source_config_path}")
+        if scenarios_override is not None:
+            payload = copy.deepcopy(payload)
+            build = payload.setdefault("build", {})
+            if not isinstance(build, dict):
+                raise ValueError(f"Config build section must be a YAML object: {source_config_path}")
+            build["scenarios"] = _to_posix(scenarios_override)
+        scenario_docs = expand_config_scenarios(payload, source_config_path, yaml)
+        for scenario_doc in scenario_docs:
+            case_payload = copy.deepcopy(payload)
+            build = case_payload.setdefault("build", {})
+            if not isinstance(build, dict):
+                raise ValueError(f"Config build section must be a YAML object: {source_config_path}")
+            build["scenarios"] = scenario_doc.scenarios
+            inputs.append(
+                BuildInput(
+                    source_config_path=source_config_path,
+                    case_id=scenario_doc.name,
+                    payload=case_payload,
+                    scenario_path=scenario_doc.path,
+                )
+            )
+    return inputs
 
 
 def _prepare_case_config(
     *,
-    source_config_path: Path,
+    build_input: BuildInput,
     configs_dir: Path,
-    lp_samples_dir: Path,
+    case_outputs_dir: Path,
     yaml: Any,
 ) -> Tuple[str, Path]:
-    payload = yaml.safe_load(source_config_path.read_text(encoding="utf-8")) or {}
-    if not isinstance(payload, dict):
-        raise ValueError(f"Config must be a YAML object: {source_config_path}")
+    payload = copy.deepcopy(build_input.payload)
     project = payload.setdefault("project", {})
     if not isinstance(project, dict):
-        raise ValueError(f"Config project section must be a YAML object: {source_config_path}")
-    case_id = str(project.get("name", "")).strip() or _case_id_from_path(source_config_path)
+        raise ValueError(f"Config project section must be a YAML object: {build_input.source_config_path}")
+    case_id = build_input.case_id or str(project.get("name", "")).strip() or _case_id_from_path(build_input.source_config_path)
     project["name"] = case_id
-    project["output_dir"] = _repo_path_text(lp_samples_dir / _sanitize(case_id))
+    project["output_dir"] = _repo_path_text(case_outputs_dir / _sanitize(case_id))
     build_config_path = configs_dir / f"{_sanitize(case_id)}.yaml"
     build_config_path.parent.mkdir(parents=True, exist_ok=True)
     with build_config_path.open("w", encoding="utf-8") as file:
@@ -387,7 +407,7 @@ def _prepare_case_config(
 
 def _write_dataset_profile(
     *,
-    run_dir: Path,
+    dataset_profile_path: Path,
     profile_source_graph: Dict[str, object],
     sample_records: List[Dict[str, object]],
     inferred_schema: Dict[str, object],
@@ -405,19 +425,7 @@ def _write_dataset_profile(
         samples=sample_records,
         inferred_schema=inferred_schema,
     )
-    _write_json(run_dir / "dataset_profile.json", profile)
-
-
-def _replace_symlink(link_path: Path, target: Path) -> None:
-    link_path.parent.mkdir(parents=True, exist_ok=True)
-    if link_path.is_symlink() or link_path.is_file():
-        link_path.unlink()
-    elif link_path.exists():
-        raise FileExistsError(
-            f"Refusing to replace non-symlink directory: {link_path}. "
-            "Remove it manually once before using the symlink-based layout."
-        )
-    link_path.symlink_to(target.resolve(), target_is_directory=True)
+    _write_json(dataset_profile_path, profile)
 
 
 def _repo_path_text(path: Path) -> str:

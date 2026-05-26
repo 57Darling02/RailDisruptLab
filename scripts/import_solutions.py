@@ -31,11 +31,11 @@ def _parse_args() -> argparse.Namespace:
         description="Import external .sol files into standardized case yaml + output layout."
     )
     parser.add_argument("--solutions-root", default="tests/solutions", help="Root folder containing *.sol files.")
-    parser.add_argument("--base-config", default="config/base_demo.yaml", help="Template config used as base.")
+    parser.add_argument("--base-config", default="config/demo.yml", help="Template config used as base.")
     parser.add_argument("--generated-config-root", default="tests/generated_configs", help="Generated yaml root.")
-    parser.add_argument("--output-root", default="outputs/solutions_import", help="Per-case output root.")
-    parser.add_argument("--summary-csv", default="outputs/solutions_import/import_summary.csv", help="Import summary CSV.")
-    parser.add_argument("--summary-json", default="outputs/solutions_import/import_summary.json", help="Import summary JSON.")
+    parser.add_argument("--output-root", default="outputs/main/imports/solutions/cases", help="Per-case output root.")
+    parser.add_argument("--summary-csv", default="outputs/main/imports/solutions/import_summary.csv", help="Import summary CSV.")
+    parser.add_argument("--summary-json", default="outputs/main/imports/solutions/import_summary.json", help="Import summary JSON.")
     parser.add_argument("--limit", type=int, default=0, help="Only process first N sol files (0 = all).")
     parser.add_argument("--clean", action="store_true", help="Clean generated config/output roots before importing.")
     return parser.parse_args()
@@ -226,4 +226,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

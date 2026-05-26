@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
+from core.scenario_config import load_scenarios_for_config
 from core.types import (
     AnalyzeConfig,
     AppConfig,
@@ -264,7 +265,10 @@ def load_config(path: Path) -> AppConfig:
             raise ValueError(f"Legacy project.{legacy_key} is no longer supported; use project.base_context_path.")
 
     case_name = _str_or_default(project_cfg.get("name"), path.stem)
-    output_dir = _path_or_default(project_cfg.get("output_dir"), Path("outputs") / case_name)
+    output_dir = _path_or_default(
+        project_cfg.get("output_dir"),
+        Path("outputs") / "main" / "datasets" / case_name / "cases" / case_name,
+    )
     base_context_path = _required_path(project_cfg.get("base_context_path"), "project.base_context_path")
     base_context = load_base_context(base_context_path)
 
@@ -278,7 +282,7 @@ def load_config(path: Path) -> AppConfig:
     metrics_default_path = output_dir / "analysis_metrics.xlsx"
     plot_default_path = output_dir / "timetable_plot.png"
 
-    scenarios_cfg = build_cfg.get("scenarios", {}) or {}
+    scenarios_cfg = load_scenarios_for_config(build_cfg.get("scenarios", {}) or {}, path, yaml)
     if "interruptions" in scenarios_cfg:
         raise ValueError("Legacy build.scenarios.interruptions is no longer supported; use speed_limits with limit_speed=0.")
 
@@ -423,5 +427,3 @@ def load_timetable(path: Path, sheet_name: str) -> RawTable:
 
 def load_mileage_table(path: Path, sheet_name: str) -> RawTable:
     return _read_excel(path, sheet_name)
-
-

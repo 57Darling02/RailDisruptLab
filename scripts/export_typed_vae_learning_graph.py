@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     source.add_argument("--config", help="Source YAML config for single-graph export.")
     source.add_argument("--config-glob", help="Glob pattern for batch export.")
     parser.add_argument("--output", help="Output sample JSON path for single-config export; context.json is written beside it.")
-    parser.add_argument("--output-dir", help="Output dataset root for batch export. Samples are written to <output-dir>/graph_samples.")
+    parser.add_argument("--output-dir", help="Output graph directory for batch export. Samples are written to <output-dir>/samples.")
     parser.add_argument("--profile-output", help="Optional dataset profile JSON path.")
     parser.add_argument("--no-profile", action="store_true", help="Do not write dataset profile JSON.")
     parser.add_argument("--max-slots", type=int, default=DEFAULT_MAX_SLOTS)
@@ -98,7 +98,7 @@ def _export_batch(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"No configs matched --config-glob: {args.config_glob}")
 
     output_dir = _resolve(args.output_dir)
-    sample_dir = output_dir / "graph_samples"
+    sample_dir = output_dir / "samples"
     sample_dir.mkdir(parents=True, exist_ok=True)
     context_path = output_dir / "context.json"
     used_names: Dict[str, int] = {}
@@ -193,7 +193,7 @@ def _default_profile_path(output_path: Path) -> Path:
 
 
 def _context_path_for_sample(sample_path: Path) -> Path:
-    root = sample_path.parent.parent if sample_path.parent.name == "graph_samples" else sample_path.parent
+    root = sample_path.parent.parent if sample_path.parent.name == "samples" else sample_path.parent
     return root / "context.json"
 
 

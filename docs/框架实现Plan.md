@@ -20,7 +20,8 @@ VAE:
 当前已完成的主线：
 
 - `core/vae_learning_graph.py` 已能从 scenario config 导出共享 `vae_math_context_graph`、逐样本 `vae_math_learning_sample` 和 `vae_math_dataset_profile`。
-- `scripts/bench_build.py` 已统一完成 build run 构建，并把 `outputs/bench_build/latest` 作为 latest 软连接。
+- `core/project_layout.py` 已定义统一项目目录：dataset、model、generation、comparison。
+- `scripts/project.py` 已作为推荐入口，把单个 config、批量 config、训练、生成、解码和评估统一写到 `outputs/<project>/`。
 - `scripts/decode_typed_generated_graph.py` 已能解码单个 `vae_math_generated_graph`。
 - `scripts/decode_import_generated_graphs.py` 已能批量完成 generated graph -> disturbance graph -> config。
 - `VAE/src` 已扁平化为 reader、model、train、generate、evaluate。
@@ -32,30 +33,42 @@ VAE:
 
 ## 2. 导出目录
 
-`bench_build.py` 每次只生成一个 timestamp run。这个 run 里同时放构建用配置、LP 样本和 VAE 训练样本。
-
-输出结构是：
+主流程使用显式工程名，不再创建或读取 `latest`。推荐的项目目录是：
 
 ```text
-outputs/bench_build/<time>/configs/*.yaml
-outputs/bench_build/<time>/lp_simples/<case>/<case>.lp
-outputs/bench_build/<time>/graph_samples/*.json
-outputs/bench_build/<time>/context.json
-outputs/bench_build/<time>/dataset_profile.json
-outputs/bench_build/<time>/summary.csv
-outputs/bench_build/<time>/summary.json
-outputs/bench_build/<time>/bench_build.log
-
-outputs/bench_build/latest -> outputs/bench_build/<time>
+outputs/<project>/
+outputs/<project>/project.json
+outputs/<project>/datasets/<dataset>/
+outputs/<project>/models/<model>/
+outputs/<project>/generations/<generation>/
+outputs/<project>/comparisons/<comparison>/
 ```
 
-`latest` 只是指向最新 run 的软连接，不再复制目录。后续 `bench_solve`、`bench_export_timetable`、`bench_analyze` 都读：
+dataset 同时支持单个 config 和批量 config。输出结构是：
 
 ```text
-outputs/bench_build/latest/configs
+outputs/<project>/datasets/<dataset>/manifest.json
+outputs/<project>/datasets/<dataset>/configs/*.yaml
+outputs/<project>/datasets/<dataset>/cases/<case>/<case>.lp
+outputs/<project>/datasets/<dataset>/graph/context.json
+outputs/<project>/datasets/<dataset>/graph/samples/*.json
+outputs/<project>/datasets/<dataset>/graph/dataset_profile.json
+outputs/<project>/datasets/<dataset>/benchmark/build_summary.csv
+outputs/<project>/datasets/<dataset>/benchmark/solve_summary.csv
+outputs/<project>/datasets/<dataset>/benchmark/export_timetable_summary.csv
+outputs/<project>/datasets/<dataset>/benchmark/analyze_summary.csv
+outputs/<project>/datasets/<dataset>/logs/*.log
 ```
 
-latest 软连接只有在本次 build 全部成功时才更新。
+model 和 generation 输出结构是：
+
+```text
+outputs/<project>/models/<model>/best_model.pt
+outputs/<project>/models/<model>/training_summary.json
+outputs/<project>/generations/<generation>/math_graphs/*.json
+outputs/<project>/generations/<generation>/disturbance_graphs/*.json
+outputs/<project>/generations/<generation>/configs/*.yaml
+```
 
 ## 3. JSON 接口
 
@@ -95,7 +108,7 @@ latest 软连接只有在本次 build 全部成功时才更新。
 
 ### 3.2 Learning Sample
 
-每个 `graph_samples/*.json` 是一个训练样本，也就是 `G_D / R`：
+每个 `graph/samples/*.json` 是一个训练样本，也就是 `G_D / R`：
 
 ```json
 {
@@ -166,7 +179,7 @@ RailGraph2Gurobi 读取 `decode_handle + task_outputs`，恢复标准 `disturban
 ```text
 RailDisturbanceDataset(graphs_root)
   -> 读取 context.json
-  -> 扫描 graph_samples/*.json
+  -> 扫描 samples/*.json
   -> 每个样本组合成 MathGraphSample
 ```
 
@@ -347,45 +360,59 @@ loss =
 
 ```bash
 python -u scripts/case_library_builder.py \
-  --output-root config/batch_case_configs_demo \
+  --output-root config/scenario/generated_reference \
   --clean
 ```
 
-构建 reference build run：
+构建 reference dataset：
 
 ```bash
-python -u scripts/bench_build.py --config-root config/batch_case_configs_demo
+python scripts/project.py dataset build \
+  --config config/demo.yml \
+  --dataset reference \
+  --scenarios config/scenario/generated_reference
+
+python scripts/project.py dataset benchmark \
+  --config config/demo.yml \
+  --dataset reference \
+  --time-limit 120
 ```
 
 训练：
 
 ```bash
-python scripts/train_vae.py
+python scripts/project.py model train \
+  --config config/demo.yml \
+  --model vae_reference \
+  --dataset reference
 ```
 
 也可以显式指定配置：
 
 ```bash
-python scripts/train_vae.py config/train.yml
+python scripts/project.py model train --config config/demo.yml --model <model> --dataset <dataset>
 ```
 
-`config/train.yml` 保存训练输入目录、模型维度、优化参数和 loss 权重。训练脚本不再接受零散训练参数，避免同一套实验参数散落在命令行里。
+`config/demo.yml` 的 `train` 段保存模型维度、优化参数和 loss 权重。训练脚本不再接受零散训练参数，避免同一套实验参数散落在命令行里。
 
 模型生成：
 
 ```bash
-python scripts/generate_vae.py \
-  --checkpoint outputs/train/latest/best_model.pt \
-  --context-graph outputs/bench_build/latest/context.json \
-  --num-samples 100 \
-  --mode model
+python scripts/project.py generation create \
+  --config config/demo.yml \
+  --generation gen_reference \
+  --dataset reference \
+  --model vae_reference \
+  --num-samples 100
 ```
 
 target-copy 调试生成：
 
 ```bash
-python scripts/generate_vae.py \
-  --context-graphs outputs/bench_build/latest \
+python scripts/project.py generation create \
+  --project main \
+  --generation target_copy_reference \
+  --dataset reference \
   --num-samples 10 \
   --mode target-copy
 ```
@@ -393,18 +420,18 @@ python scripts/generate_vae.py \
 评估：
 
 ```bash
-python scripts/evaluate_vae.py \
-  --reference-graphs outputs/bench_build/latest \
-  --generated-graphs outputs/generate/latest \
-  --output outputs/generate/latest/evaluation.json
+python scripts/project.py generation evaluate-graphs \
+  --project main \
+  --generation gen_reference \
+  --dataset reference
 ```
 
 解码并回灌配置：
 
 ```bash
-python scripts/decode_import_generated_graphs.py \
-  --generated-graphs outputs/generate/latest \
-  --base-config config/base_demo.yaml
+python scripts/project.py generation decode \
+  --config config/demo.yml \
+  --generation gen_reference
 ```
 
 ## 7. 生成实例相似性评估计划
@@ -451,17 +478,18 @@ python scripts/decode_import_generated_graphs.py \
 
 已完成：
 
-- timestamp build run 的 `context.json`、`graph_samples/*.json` 和 `dataset_profile.json` 导出。
+- project layout 的 `graph/context.json`、`graph/samples/*.json` 和 `graph/dataset_profile.json` 导出。
 - `context.json` 的 `rules.tasks` 会由本次 build 的 learning samples 推断 `max_slots`、`count_bounds` 和 `param_bounds`。
-- `outputs/bench_build/latest` latest build run 软连接发布。
-- `outputs/train/latest` latest training run 软连接发布。
+- 显式 dataset 工程目录：`outputs/<project>/datasets/<dataset>`。
+- 显式训练工程目录：`outputs/<project>/models/<model>`。
+- 显式生成工程目录：`outputs/<project>/generations/<generation>`。
 - VAE 训练同时写出 `best_model.pt` 和 `last_model.pt`，生成默认使用 best checkpoint。
-- `config/train.yml` 统一管理训练输入、模型维度、优化参数和 loss 权重。
+- `config/demo.yml` 统一管理 BaseContext、solver/analyze 和 train 参数，`config/scenario/` 单独管理场景输入。
 - speed 维度按 `speed_limit / 350` 归一化后进入训练样本。
 - VAE reader 支持共享 context + 多 learning sample。
 - VAE generation reader 支持只读 context graph。
 - VAE typed message passing 已接入 `edge_index + edge_attr`。
-- model generate 输出 `outputs/generate/<run>/math_sample/*.json`，并发布 `outputs/generate/latest` 软连接。
+- model generate 输出 `outputs/<project>/generations/<generation>/math_graphs/*.json`。
 - target-copy 作为管道连通性检查保留。
 - generated graph 可解码为 disturbance graph，并批量回灌为 config。
 - evaluate 支持 graph/task output 相似性和 solver CSV 难度对比入口。
@@ -473,15 +501,15 @@ python scripts/decode_import_generated_graphs.py \
   - model generate
   - target-copy
   - graph/task output evaluation
-  - `bench_build.py --limit 1`
+  - `project.py dataset build --config ...`
 
 待完整批量验收：
 
-- 全量 `bench_build.py`。
+- 全量 `scripts/project.py dataset build/benchmark --project main --dataset reference`。
 - 全量 VAE 训练。
 - 全量 model generate。
 - generated graph 批量 decode/import。
-- 生成配置的 build/solve/export/analyze。
+- 生成配置的 `scripts/project.py dataset build --project-config config/demo.yml --config-root outputs/<project>/generations/<generation>/configs`。
 - reference 和 generated solver CSV 对比。
 
 验收步骤以 `docs/exp.md` 为准。

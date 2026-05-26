@@ -106,8 +106,8 @@ JOINT_LABELS = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate ablation similarity against a reference build run.")
-    parser.add_argument("--ablation-root", default="outputs/gnn_steps_ablation")
+    parser = argparse.ArgumentParser(description="Evaluate ablation similarity against a reference dataset.")
+    parser.add_argument("--ablation-root", required=True)
     parser.add_argument("--output-root", default="", help="Defaults to <ablation-root>/similarity_eval.")
     parser.add_argument("--docs-dir", default="docs/消融实验")
     parser.add_argument("--skip-milp-read", action="store_true", help="Skip gurobipy LP inspection and use build duration only.")
@@ -124,8 +124,7 @@ def main() -> None:
     ablation_root = resolve_path(args.ablation_root)
     output_root = resolve_path(args.output_root) if args.output_root else ablation_root / "similarity_eval"
     docs_dir = resolve_path(args.docs_dir)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = output_root / timestamp
+    run_dir = output_root
     figures_dir = run_dir / "figures"
     docs_figures_dir = docs_dir / "figures"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -260,8 +259,6 @@ def main() -> None:
 
     report_path = docs_dir / "报告.md"
     write_report(metrics, figures, docs_dir, report_path)
-    update_latest(output_root, run_dir)
-
     print(f"Similarity evaluation written: {run_dir}")
     print(f"Report written: {report_path}")
 
@@ -350,8 +347,9 @@ def load_dataset(
     skip_milp_read: bool,
 ) -> Dict[str, object]:
     context = load_anchor_context(build_run)
-    build_rows = read_csv(build_run / "summary.csv")
-    solve_rows = read_csv(step_dir / "bench_solve_summary.csv")
+    build_rows = read_csv(build_summary_path(build_run))
+    benchmark_dir = load_benchmark_dir(step_dir)
+    solve_rows = read_csv(resolve_stage_summary(benchmark_dir, "solve"))
     solve_by_case = {row.get("case_id", ""): row for row in solve_rows}
     build_by_case = {row.get("case_id", ""): row for row in build_rows}
     milp_by_case = collect_milp_sizes(build_rows, build_run, milp_cache, skip_milp_read)
@@ -388,6 +386,7 @@ def load_dataset(
         "label": label,
         "step_dir": step_dir,
         "build_run": build_run,
+        "benchmark_dir": benchmark_dir,
         "context": context,
         "sample_rows": sample_rows,
         "events": events,
@@ -397,8 +396,29 @@ def load_dataset(
     }
 
 
+def load_benchmark_dir(step_dir: Path) -> Path | None:
+    pointer = step_dir / "benchmark_dir.txt"
+    if not pointer.exists():
+        raise FileNotFoundError(f"Missing benchmark pointer: {pointer}")
+    text = pointer.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"Empty benchmark pointer: {pointer}")
+    path = Path(text)
+    return path if path.is_absolute() else (REPO_ROOT / path).resolve()
+
+
+def resolve_stage_summary(benchmark_dir: Path | None, stage: str) -> Path:
+    if benchmark_dir is None:
+        raise ValueError("benchmark_dir is required.")
+    return benchmark_dir / "benchmark" / f"{stage}_summary.csv"
+
+
+def build_summary_path(build_run: Path) -> Path:
+    return build_run / "benchmark" / "build_summary.csv"
+
+
 def load_anchor_context(build_run: Path) -> Dict[str, object]:
-    context_path = build_run / "context.json"
+    context_path = build_run / "graph" / "context.json"
     context_payload = read_json(context_path, default={}) or {}
     base_context_text = ((context_payload.get("decode_handle") or {}).get("base_context_path") or "")
     base_context_path = Path(str(base_context_text))
@@ -625,7 +645,7 @@ def resolve_lp_path(row: Mapping[str, str], build_run: Path) -> Path:
         path = Path(raw)
         candidates.append(path if path.is_absolute() else (REPO_ROOT / path))
     if case_id:
-        candidates.append(build_run / "lp_simples" / case_id / f"{case_id}.lp")
+        candidates.append(build_run / "cases" / case_id / f"{case_id}.lp")
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -1239,11 +1259,12 @@ def write_report(metrics: Mapping[str, object], figures: Mapping[str, Path], doc
     lines.append("")
     lines.append("## 数据与口径")
     lines.append("")
-    lines.append(f"- 参考集 build run：`{metrics['reference']['build_run']}`。")
-    lines.append("- 本报告由 `scripts/evaluate_ablation_similarity.py` 可重复生成；完整 JSON/CSV 输出位于 `outputs/gnn_steps_ablation/similarity_eval/latest/`。")
+    lines.append(f"- 参考集 dataset：`{metrics['reference']['build_run']}`。")
+    output_dir = str(metrics["output_dir"])
+    lines.append(f"- 本报告由 `scripts/evaluate_ablation_similarity.py` 可重复生成；完整 JSON/CSV 输出位于 `{output_dir}`。")
     lines.append("- 评估不重跑训练、generate、build 或 solve，只读取既有 run 产物。")
     lines.append("- `limit_speed == 0` 计为中断，`limit_speed > 0` 计为普通限速；晚点时长、限速持续时长、限速值等扰动程度指标均使用分箱 JSD。")
-    lines.append("- 当前旧 solve CSV 没有 `num_nodes` 和 `t_first_feas`，分支节点数与首个可行解时间不做旧结果推断；未来字段出现后会自动纳入。")
+    lines.append("- 当前 solve CSV 没有 `num_nodes` 和 `t_first_feas`，分支节点数与首个可行解时间暂不纳入；字段出现后会自动纳入。")
     lines.append("")
     lines.append("## 指标解释")
     lines.append("")
@@ -1333,25 +1354,16 @@ def write_report(metrics: Mapping[str, object], figures: Mapping[str, Path], doc
     lines.append("")
     lines.append("## 产物位置")
     lines.append("")
-    lines.append("- `outputs/gnn_steps_ablation/similarity_eval/latest/metrics_summary.json`：完整指标。")
-    lines.append("- `outputs/gnn_steps_ablation/similarity_eval/latest/group_summary.csv`：三组汇总表。")
-    lines.append("- `outputs/gnn_steps_ablation/similarity_eval/latest/metric_long.csv`：长表指标，便于后续制图或论文表格。")
-    lines.append("- `outputs/gnn_steps_ablation/similarity_eval/latest/sample_features.csv`：逐样本特征。")
+    lines.append(f"- `{output_dir}/metrics_summary.json`：完整指标。")
+    lines.append(f"- `{output_dir}/group_summary.csv`：三组汇总表。")
+    lines.append(f"- `{output_dir}/metric_long.csv`：长表指标，便于后续制图或论文表格。")
+    lines.append(f"- `{output_dir}/sample_features.csv`：逐样本特征。")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def fmt(value: object, digits: int = 3) -> str:
     return f"{to_float(value):.{digits}f}"
-
-
-def update_latest(output_root: Path, run_dir: Path) -> None:
-    latest = output_root / "latest"
-    if latest.is_symlink() or latest.is_file():
-        latest.unlink()
-    elif latest.exists() and latest.is_dir():
-        shutil.rmtree(latest)
-    latest.symlink_to(run_dir.name, target_is_directory=True)
 
 
 def run_self_tests() -> None:

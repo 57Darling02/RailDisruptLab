@@ -4,7 +4,7 @@ import argparse
 import random
 import shutil
 from pathlib import Path
-from typing import Any, Dict
+from typing import Dict
 
 import _case_generation_core as gen
 
@@ -28,13 +28,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-root",
-        default="config/batch_case_configs_demo",
-        help="Directory where scenario simulation YAML files will be written.",
-    )
-    parser.add_argument(
-        "--project-output-root",
-        default="outputs/scenario_simulation",
-        help="Placeholder project.output_dir prefix for generated scenario configs.",
+        default="config/scenario/generated_demo",
+        help="Directory where scenario YAML files will be written.",
     )
     parser.add_argument("--seed", type=int, default=20260320)
     parser.add_argument("--delay-count", type=int, default=10)
@@ -45,16 +40,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _to_posix(path_text: str) -> str:
-    return path_text.replace("\\", "/").rstrip("/")
-
-
 def _write_config_only(case_path: Path, config_payload: Dict[str, object], _meta_payload: Dict[str, object]) -> None:
     yaml = _require_yaml()
     yaml_path = case_path.with_suffix(".yaml")
     yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    project = config_payload.get("project", {})
+    build = config_payload.get("build", {})
+    scenario_payload: Dict[str, object] = {
+        "name": project.get("name", yaml_path.stem) if isinstance(project, dict) else yaml_path.stem,
+        "delays": [],
+        "speed_limits": [],
+    }
+    if isinstance(build, dict) and isinstance(build.get("scenarios"), dict):
+        scenarios = build["scenarios"]
+        scenario_payload["delays"] = scenarios.get("delays", []) or []
+        scenario_payload["speed_limits"] = scenarios.get("speed_limits", []) or []
     with yaml_path.open("w", encoding="utf-8") as file:
-        yaml.safe_dump(config_payload, file, allow_unicode=True, sort_keys=False)
+        yaml.safe_dump(scenario_payload, file, allow_unicode=True, sort_keys=False)
 
 
 def _validate_counts(args: argparse.Namespace) -> None:
@@ -84,20 +86,12 @@ def main() -> None:
             elif old_path.is_dir() and old_path.name.startswith("case"):
                 shutil.rmtree(old_path)
 
-    project_output_root = _to_posix(args.project_output_root)
-
     rng = random.Random(args.seed)
     base = gen.load_base_data(base_config)
 
     original_write_case = gen.write_case
-    original_base_config_payload = gen.base_config_payload
-
-    def patched_base_config_payload(case_name: str, _output_dir: str, base_data: Any) -> Dict[str, object]:
-        output_dir = f"{project_output_root}/{case_name}"
-        return original_base_config_payload(case_name, output_dir, base_data)
 
     gen.write_case = _write_config_only
-    gen.base_config_payload = patched_base_config_payload
 
     try:
         case_index = 1
@@ -107,10 +101,9 @@ def main() -> None:
         case_index = gen.generate_combo_cases(rng, base, output_root, case_index, args.combo_per_type)
     finally:
         gen.write_case = original_write_case
-        gen.base_config_payload = original_base_config_payload
 
-    print(f"Generated {case_index - 1} scenario simulation YAML files under {output_root}")
-    print("These configs are bench_build inputs; bench_build owns the real output paths.")
+    print(f"Generated {case_index - 1} scenario YAML files under {output_root}")
+    print("Use scripts/project.py dataset build --config config/demo.yml --scenarios <that directory>.")
 
 
 if __name__ == "__main__":

@@ -3,21 +3,31 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import shutil
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-TRAIN_ROOT = Path("outputs/train")
-LATEST_PATH = TRAIN_ROOT / "latest"
-DEFAULT_CONFIG_PATH = "config/train.yml"
+DEFAULT_OUTPUT_DIR = Path("outputs/main/models/default")
+DEFAULT_CONFIG_PATH = "config/demo.yml"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the math rail-disturbance VAE.")
     parser.add_argument("config", nargs="?", default=DEFAULT_CONFIG_PATH, help="Training YAML config path.")
-    return _load_train_config(parser.parse_args().config)
+    parser.add_argument("--graphs-root", default="", help="Override config data.graphs_root.")
+    parser.add_argument("--output-dir", default="", help="Override config output.dir.")
+    cli_args = parser.parse_args()
+    args = _load_train_config(cli_args.config)
+    if cli_args.graphs_root:
+        args.graphs_root = cli_args.graphs_root
+    if cli_args.output_dir:
+        args.output_dir = cli_args.output_dir
+    if not str(args.graphs_root).strip():
+        raise ValueError("config.train.data.graphs_root is required unless --graphs-root is provided.")
+    return args
 
 
 def main() -> None:
@@ -41,13 +51,13 @@ def main() -> None:
     ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    output_dir = _run_dir()
+    output_dir = Path(args.output_dir)
+    _reset_path(output_dir, allowed_root=Path("outputs"))
     output_dir.mkdir(parents=True, exist_ok=True)
     logger = _TrainingLogger(output_dir / "training.log")
     config_payload = vars(args).copy()
     config_payload["created_at"] = datetime.now().isoformat(timespec="seconds")
     config_payload["run_dir"] = str(output_dir.resolve()).replace("\\", "/")
-    config_payload["latest_path"] = str(LATEST_PATH.resolve()).replace("\\", "/")
     config_payload["resolved_output_dir"] = str(output_dir.resolve()).replace("\\", "/")
     (output_dir / "training_config.json").write_text(
         json.dumps(config_payload, ensure_ascii=False, indent=2),
@@ -61,7 +71,6 @@ def main() -> None:
     logger.log(f"config={args.config}")
     logger.log(f"graphs_root={args.graphs_root}")
     logger.log(f"run_dir={output_dir}")
-    logger.log(f"latest_path={LATEST_PATH}")
     logger.log(f"samples={len(dataset)} epochs={args.epochs} batch_size={args.batch_size} device={device}")
     logger.log(f"training_config={output_dir / 'training_config.json'}")
     logger.log(f"schema_summary={output_dir / 'schema_summary.json'}")
@@ -71,7 +80,6 @@ def main() -> None:
 
     history: List[Dict[str, float]] = []
     best_metrics: Dict[str, float] | None = None
-    completed = False
     try:
         for epoch in range(1, args.epochs + 1):
             model.train()
@@ -154,12 +162,8 @@ def main() -> None:
         )
         logger.log(f"Last checkpoint written: {output_dir / 'last_model.pt'}")
         logger.log(f"Best checkpoint: {output_dir / 'best_model.pt'}")
-        completed = True
     finally:
         logger.close()
-    if completed and not args.no_publish_latest:
-        _publish_latest(output_dir)
-        print(f"Latest training run: {LATEST_PATH}", flush=True)
 
 
 def _device(value: str, torch_module) -> object:
@@ -189,14 +193,14 @@ def _load_train_config(path_text: str) -> argparse.Namespace:
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
         raise ValueError(f"Training config must be a YAML object: {path}")
+    if isinstance(payload.get("train"), dict):
+        payload = payload["train"]
     data = _section(payload, "data")
     model = _section(payload, "model")
     optimization = _section(payload, "optimization")
     loss_weights = _section(payload, "loss_weights")
     output = _section(payload, "output")
     graphs_root = str(data.get("graphs_root", "")).strip()
-    if not graphs_root:
-        raise ValueError("config.data.graphs_root is required.")
     return argparse.Namespace(
         config=str(path),
         graphs_root=graphs_root,
@@ -214,7 +218,7 @@ def _load_train_config(path_text: str) -> argparse.Namespace:
         anchor_weight=float(loss_weights.get("anchor", 1.0)),
         param_weight=float(loss_weights.get("param", 1.0)),
         kl_weight=float(loss_weights.get("kl", 1e-3)),
-        no_publish_latest=not bool(output.get("publish_latest", True)),
+        output_dir=str(output.get("dir", DEFAULT_OUTPUT_DIR)),
     )
 
 
@@ -235,31 +239,15 @@ def _require_yaml() -> Any:
     return yaml
 
 
-def _run_dir() -> Path:
-    TRAIN_ROOT.mkdir(parents=True, exist_ok=True)
-    base_path = TRAIN_ROOT / _timestamp_for_path()
-    run_path = base_path
-    suffix = 2
-    while run_path.exists():
-        run_path = base_path.with_name(f"{base_path.name}_{suffix}")
-        suffix += 1
-    return run_path
-
-
-def _timestamp_for_path() -> str:
-    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
-
-def _publish_latest(run_dir: Path) -> None:
-    _replace_symlink(LATEST_PATH, run_dir)
-
-
-def _replace_symlink(link_path: Path, target: Path) -> None:
-    if link_path.is_symlink() or link_path.is_file():
-        link_path.unlink()
-    elif link_path.exists():
-        raise FileExistsError(f"Refusing to replace non-symlink directory: {link_path}")
-    link_path.symlink_to(target.resolve(), target_is_directory=True)
+def _reset_path(path: Path, *, allowed_root: Path) -> None:
+    resolved = path.resolve()
+    root = allowed_root.resolve()
+    if resolved == root or root not in resolved.parents:
+        raise ValueError(f"Refusing to clear path outside allowed root: {path}")
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
 
 
 def _schema_summary(sample) -> Dict[str, object]:

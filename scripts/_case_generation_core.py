@@ -55,11 +55,7 @@ COMBO_TYPES = [
 ]
 
 DEFAULT_BASE_CONFIG_CANDIDATES = [
-    Path("config/base_demo.yaml"),
-    Path("config/mixed_scenarios_demo.yaml"),
-    Path("config/delays_demo.yaml"),
-    Path("config/speed_limits_demo.yaml"),
-    Path("config/interruptions_demo.yaml"),
+    Path("config/demo.yml"),
 ]
 
 
@@ -80,7 +76,7 @@ class BaseData:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate case library for converter validation.")
     parser.add_argument("--base-config", default="", help="Base config path. If omitted, auto-select from config/*.yaml.")
-    parser.add_argument("--output-root", default="config/batch_case_configs_demo")
+    parser.add_argument("--output-root", default="config/scenario/generated_demo")
     parser.add_argument("--seed", type=int, default=20260320)
     parser.add_argument("--delay-count", type=int, default=10)
     parser.add_argument("--speed-count", type=int, default=10)
@@ -396,6 +392,11 @@ def base_config_payload(case_name: str, output_dir: str, base: BaseData) -> Dict
         },
     }
 
+
+def case_output_dir(case_id: str) -> str:
+    return f"outputs/main/datasets/case_library/cases/{case_id}"
+
+
 def write_case(case_dir: Path, config_payload: Dict[str, object], meta_payload: Dict[str, object]) -> None:
     case_dir.mkdir(parents=True, exist_ok=True)
     yaml = _require_yaml()
@@ -411,7 +412,7 @@ def generate_delay_cases(rng: random.Random, base: BaseData, output_root: Path, 
         train_id, station, event_type, event_time, event_anchor_id = rng.choice(base.event_candidates)
         delay_seconds = rng.randint(low, high)
         case_id = f"case{case_index:04d}_delay_{level.lower()}"
-        cfg = base_config_payload(case_id, f"outputs/case_library/{case_id}", base)
+        cfg = base_config_payload(case_id, case_output_dir(case_id), base)
         cfg["build"]["scenarios"]["delays"] = [
             {
                 "event_anchor_id": event_anchor_id,
@@ -448,7 +449,7 @@ def generate_speed_cases(rng: random.Random, base: BaseData, output_root: Path, 
         window = random_window(rng)
         limit_speed = rng.randint(low, high)
         case_id = f"case{case_index:04d}_speedlimit_{level.lower()}"
-        cfg = base_config_payload(case_id, f"outputs/case_library/{case_id}", base)
+        cfg = base_config_payload(case_id, case_output_dir(case_id), base)
         cfg["build"]["scenarios"]["speed_limits"] = [
             {
                 "section_anchor_id": base.section_anchor_by_key[section].anchor_id,
@@ -490,7 +491,7 @@ def generate_interruption_cases(rng: random.Random, base: BaseData, output_root:
         sections = pick_contiguous_sections(rng, base.section_candidates, span=span)
         window = random_window(rng, min_len=1200, max_len=4200)
         case_id = f"case{case_index:04d}_interruption_s{span}"
-        cfg = base_config_payload(case_id, f"outputs/case_library/{case_id}", base)
+        cfg = base_config_payload(case_id, case_output_dir(case_id), base)
         cfg["build"]["scenarios"]["speed_limits"] = [
             {
                 "section_anchor_id": base.section_anchor_by_key[(s1, s2)].anchor_id,
@@ -531,7 +532,7 @@ def combo_case_payload(
     time_relation: str,
     space_relation: str,
 ) -> Tuple[Dict[str, object], Dict[str, object]]:
-    cfg = base_config_payload(case_id, f"outputs/case_library/{case_id}", base)
+    cfg = base_config_payload(case_id, case_output_dir(case_id), base)
     events: List[Dict[str, object]] = []
 
     if combo_type == "delay_speedlimit":
@@ -696,5 +697,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
