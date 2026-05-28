@@ -1,7 +1,0 @@
-name: delay
-delays:
-  - train_id: G1
-    station: jinanxi
-    event_type: dep
-    seconds: 600
-speed_limits: []
