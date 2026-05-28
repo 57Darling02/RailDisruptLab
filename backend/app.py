@@ -171,6 +171,11 @@ def create_scenario_set(project_id: str, request: ScenarioSetCreateRequest) -> D
     )
 
 
+@api.delete("/projects/{project_id}/scenario-sets/{scenario_set_id}")
+def delete_scenario_set(project_id: str, scenario_set_id: str) -> Dict[str, object]:
+    return backend.delete_scenario_set(project_id, scenario_set_id)
+
+
 @api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios")
 def list_scenarios(project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
     return backend.list_scenarios(project_id, scenario_set_id)
@@ -253,6 +258,27 @@ def submit_prepare(project_id: str, request: PrepareRequest) -> Dict[str, object
     )
 
 
+@api.post("/projects/{project_id}/plan/activate")
+def activate_plan(
+    project_id: str,
+    timetable_file: UploadFile = File(...),
+    mileage_file: UploadFile = File(...),
+    timetable_sheet_name: str = TASK_DEFAULTS["prepare"]["timetable_sheet_name"],
+    mileage_sheet_name: str = TASK_DEFAULTS["prepare"]["mileage_sheet_name"],
+) -> Dict[str, object]:
+    return _task_response(
+        backend.activate_plan(
+            project_id,
+            timetable_filename=timetable_file.filename or "timetable.xlsx",
+            timetable_content=timetable_file.file.read(),
+            mileage_filename=mileage_file.filename or "mileage.xlsx",
+            mileage_content=mileage_file.file.read(),
+            timetable_sheet_name=timetable_sheet_name,
+            mileage_sheet_name=mileage_sheet_name,
+        )
+    )
+
+
 @api.post("/projects/{project_id}/tasks/normal-generate")
 def submit_normal_generate(project_id: str, request: NormalGenerateRequest) -> Dict[str, object]:
     return _task_response(
@@ -294,6 +320,11 @@ def submit_build(project_id: str, request: BuildRequest) -> Dict[str, object]:
 @api.post("/projects/{project_id}/datasets")
 def create_dataset(project_id: str, request: DatasetCreateRequest) -> Dict[str, object]:
     return _task_response(backend.create_dataset(project_id, request.dataset_id, exist_ok=request.exist_ok))
+
+
+@api.delete("/projects/{project_id}/datasets/{dataset_id}")
+def delete_dataset(project_id: str, dataset_id: str) -> Dict[str, object]:
+    return backend.delete_dataset(project_id, dataset_id)
 
 
 @api.post("/projects/{project_id}/tasks/solve")
@@ -435,6 +466,11 @@ def read_model_detail(project_id: str, model_id: str) -> Dict[str, object]:
 @api.get("/projects/{project_id}/models/{model_id}/files")
 def list_model_files(project_id: str, model_id: str) -> List[Dict[str, object]]:
     return backend.list_model_files(project_id, model_id)
+
+
+@api.delete("/projects/{project_id}/models/{model_id}")
+def delete_model(project_id: str, model_id: str) -> Dict[str, object]:
+    return backend.delete_model(project_id, model_id)
 
 
 def _task_response(task: Dict[str, object]) -> Dict[str, object]:

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { UploadRequestOptions } from 'element-plus'
+import type { ScrollbarInstance, UploadFile } from 'element-plus'
 
 import { api, ApiError } from '@/api/client'
 import FieldLabelTip from '@/components/FieldLabelTip.vue'
@@ -36,7 +36,6 @@ import type {
   ArtifactSummary,
   CaseTimetableState,
   DatasetSummary,
-  FileState,
   JsonObject,
   ModelCheckpoint,
   ModelDetail,
@@ -51,7 +50,7 @@ import type {
 
 type PageKey = 'dashboard' | 'scenarios' | 'datasets' | 'models' | 'ablation-scenarios' | 'ablation-datasets'
 type DatasetBuildSource = 'scenario_set' | 'scenario'
-type UploadError = Parameters<UploadRequestOptions['onError']>[0]
+type DatasetCreateMode = 'empty' | 'scenario_set'
 type ScenarioDelayForm = { event_anchor_id: string; seconds: number }
 type ScenarioSpeedLimitForm = {
   section_anchor_id: string
@@ -101,16 +100,16 @@ const DEFAULT_TRAIN_FORM: TrainForm = {
 }
 const DEFAULT_SPEED_INTERRUPTION_THRESHOLD = 20
 const TRAIN_FIELD_TIPS = {
-  model_id: '本次训练产物的模型目录 ID，用于后续选择 checkpoint 生成场景。',
-  scenario_set_id: '训练样本来源，固定使用一个完整场景集合。',
+  model_id: '本次训练产物的扰动生成模型目录 ID，用于后续选择 checkpoint 生成场景。',
+  scenario_set_id: '训练样本来源，固定使用一个完整扰动场景集。',
   max_slots: '每类扰动最多保留/预测的事件槽位数，决定辅助扰动图的目标容量。',
   event_time_window: '判断两个时刻事件是否存在近邻关系的时间窗口，单位秒。',
   event_top_k: '每个时刻事件最多连接的近邻事件数量，用于控制辅助扰动图稠密度。',
   section_order_window: '沿线路顺序连接前后区间的窗口大小，用于表达邻近区间关系。',
   hidden_dim: 'VAE 编码器/解码器隐藏层维度，越大表达能力越强但训练更重。',
-  latent_dim: '潜变量维度，控制模型压缩扰动模式的容量。',
+  latent_dim: '潜变量维度，控制扰动生成模型压缩扰动模式的容量。',
   message_passing_steps: '图神经网络消息传递轮数，越大可聚合更远邻域信息。',
-  epochs: '完整遍历训练场景集的轮数。',
+  epochs: '完整遍历训练扰动场景集的轮数。',
   batch_size: '每次优化使用的样本数量。',
   lr: '优化器学习率。',
   seed: '随机种子，用于复现实验。',
@@ -121,19 +120,27 @@ const TRAIN_FIELD_TIPS = {
   kl_weight: 'VAE KL 散度损失权重，控制潜空间正则强度。',
 } as const
 const GENERATION_FIELD_TIPS = {
-  scenario_set_id: '模型生成的场景会写入这个场景集合。',
-  num_samples: '本次从模型采样并解码出的场景数量。',
+  scenario_set_id: '扰动生成模型生成的场景会写入这个扰动场景集。',
+  num_samples: '本次从扰动生成模型采样并解码出的场景数量。',
   seed: '生成随机种子，用于复现采样结果。',
   device: '生成使用的设备，auto 会优先使用 CUDA。',
   speed_interruption_threshold:
     '生成解码时，低于该速度阈值的限速会被转成 limit_speed=0；后续 build 会按中断建模。',
-  overwrite: '开启后会覆盖同名场景集合。',
+  overwrite: '开启后会覆盖同名扰动场景集。',
 } as const
 const TASK_LABELS = {
+  dashboard: ['newproject', 'deleteproject', 'source_delete', 'prepare'],
   scenarios: ['normal_generate', 'scenario_set_create', 'scenario_add', 'scenario_delete'],
   datasets: ['dataset_create', 'build', 'solve', 'export_timetable'],
   models: ['train', 'generation'],
 } as const
+const PAGE_TASK_FILTERS = [
+  { value: 'dashboard', label: '仪表盘', labels: TASK_LABELS.dashboard },
+  { value: 'scenarios', label: '构建扰动场景', labels: TASK_LABELS.scenarios },
+  { value: 'datasets', label: '构建MILP实例', labels: TASK_LABELS.datasets },
+  { value: 'models', label: '扰动生成模型', labels: TASK_LABELS.models },
+  { value: 'ablation', label: '消融分析', labels: [] },
+] as const
 const TRAINING_CONFIG_LABELS: Record<string, string> = {
   created_at: '训练时间',
   graphs_root: '训练图目录',
@@ -159,14 +166,15 @@ const planTimetable = ref<PlanTimetableState | null>(null)
 const tasks = ref<Task[]>([])
 const activePage = ref<PageKey>('dashboard')
 const busy = ref(false)
+const mainScrollbar = ref<ScrollbarInstance>()
 
 const projectDialogVisible = ref(false)
 const newProjectId = ref('')
 
 const prepareDialogVisible = ref(false)
 const prepareForm = ref({
-  timetable_filename: '',
-  mileage_filename: '',
+  timetable_file: null as File | null,
+  mileage_file: null as File | null,
   timetable_sheet_name: 'Sheet1',
   mileage_sheet_name: 'Sheet1',
 })
@@ -195,7 +203,10 @@ const normalGenerateForm = ref({
 const selectedDatasetId = ref('')
 const datasetArtifacts = ref<ArtifactSummary[]>([])
 const datasetCreateDialogVisible = ref(false)
+const datasetCreateMode = ref<DatasetCreateMode>('scenario_set')
 const newDatasetId = ref('')
+const datasetCreateScenarioSetId = ref('')
+const datasetCreateSuffix = ref('')
 const datasetBuildDialogVisible = ref(false)
 const datasetBuildForm = ref({
   scenario_set_id: '',
@@ -219,6 +230,8 @@ const trainDialogVisible = ref(false)
 const trainDialogMode = ref<'create' | 'retrain'>('create')
 const generationDialogVisible = ref(false)
 const trainForm = reactive<TrainForm>({ ...DEFAULT_TRAIN_FORM })
+const trainModelSuffix = ref('')
+const generationScenarioSetSuffix = ref('')
 const generationForm = ref({
   checkpoint: '',
   scenario_set_id: '',
@@ -232,8 +245,6 @@ const generationForm = ref({
 let pollHandle = 0
 
 const hasProject = computed(() => Boolean(selectedProjectId.value && project.value?.exists))
-const sourceFiles = computed(() => project.value?.source_files ?? [])
-const sourceOptions = computed(() => sourceFiles.value.map((file) => file.name))
 const originalGraphActive = computed(() => Boolean(project.value?.has_context))
 const scenarioSets = computed(() => project.value?.scenario_sets ?? [])
 const datasets = computed(() => project.value?.datasets ?? [])
@@ -244,6 +255,10 @@ const selectedDataset = computed(
 const selectedModel = computed(
   () => models.value.find((item) => item.model_id === selectedModelId.value) ?? null,
 )
+const taskProjectOptions = computed(() => [
+  { label: '全部项目', value: '' },
+  ...projects.value.map((item) => ({ label: item.project_id, value: item.project_id })),
+])
 const datasetArtifactGroups = computed(() => groupArtifactsByCase(datasetArtifacts.value))
 const selectedBuildScenarios = computed(() =>
   selectedScenarioSetId.value === datasetBuildForm.value.scenario_set_id ? scenarios.value : [],
@@ -268,22 +283,15 @@ const hasSchemaSummary = computed(() => hasEntries(modelDetail.value?.schema))
 const scenarioTasks = computed(() => filterTasks(TASK_LABELS.scenarios))
 const datasetTasks = computed(() => filterTasks(TASK_LABELS.datasets))
 const modelTasks = computed(() => filterTasks(TASK_LABELS.models))
-const activeTasks = computed(() => {
-  if (activePage.value === 'scenarios') return scenarioTasks.value
-  if (activePage.value === 'datasets') return datasetTasks.value
-  if (activePage.value === 'models') return modelTasks.value
-  return tasks.value
-})
-const activeTaskTitle = computed(() => {
-  if (activePage.value === 'scenarios') return '场景任务'
-  if (activePage.value === 'datasets') return '数据集任务'
-  if (activePage.value === 'models') return '模型任务'
-  if (activePage.value.startsWith('ablation-')) return '分析相关任务'
-  return '全部任务'
-})
-const runningTaskCount = computed(() => tasks.value.filter((task) => !isTaskTerminal(task)).length)
-const doneTaskCount = computed(() => tasks.value.filter(isTaskSuccessful).length)
-const failedTaskCount = computed(() => tasks.value.filter(isTaskFailed).length)
+const taskPageOptions = computed(() => [
+  { label: '全部页面', value: '' },
+  ...PAGE_TASK_FILTERS.map((item) => ({ label: item.label, value: item.value })),
+])
+const visibleTasks = computed(() => tasks.value)
+const projectTasks = computed(() => tasks.value.filter((task) => task.group === selectedProjectId.value))
+const runningTaskCount = computed(() => projectTasks.value.filter((task) => !isTaskTerminal(task)).length)
+const doneTaskCount = computed(() => projectTasks.value.filter(isTaskSuccessful).length)
+const failedTaskCount = computed(() => projectTasks.value.filter(isTaskFailed).length)
 
 watch(selectedProjectId, async (_projectId, previousProjectId) => {
   if (previousProjectId) {
@@ -296,6 +304,7 @@ watch(selectedProjectId, async (_projectId, previousProjectId) => {
 })
 
 watch(activePage, async () => {
+  await scrollMainToTop()
   await hydrateActivePage()
 })
 
@@ -307,8 +316,42 @@ watch(selectedDatasetId, async () => {
   await loadDatasetArtifacts()
 })
 
+watch(datasetCreateMode, (mode) => {
+  if (mode === 'scenario_set' && !datasetCreateScenarioSetId.value) {
+    datasetCreateScenarioSetId.value = selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
+    if (!datasetCreateSuffix.value) datasetCreateSuffix.value = nextTimestampSuffix()
+    syncDatasetCreateId()
+  }
+  if (mode === 'empty' && !newDatasetId.value) {
+    newDatasetId.value = nextDatasetId()
+  }
+})
+
+watch(datasetCreateScenarioSetId, () => {
+  if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
+})
+
+watch(datasetCreateSuffix, () => {
+  if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
+})
+
 watch(selectedModelId, async () => {
   if (activePage.value === 'models') await loadModelDetails(false)
+})
+
+watch(
+  () => trainForm.scenario_set_id,
+  () => {
+    if (trainDialogMode.value === 'create') syncTrainModelId()
+  },
+)
+
+watch(trainModelSuffix, () => {
+  if (trainDialogMode.value === 'create') syncTrainModelId()
+})
+
+watch(generationScenarioSetSuffix, () => {
+  if (generationDialogVisible.value) syncGenerationScenarioSetId()
 })
 
 onMounted(async () => {
@@ -368,7 +411,10 @@ function selectFirstOptions() {
   ) {
     selectedScenarioSetId.value = project.value.scenario_sets[0]?.scenario_set_id ?? ''
   }
-  if (!selectedDatasetId.value) {
+  if (
+    !selectedDatasetId.value ||
+    !project.value.datasets.some((item) => item.dataset_id === selectedDatasetId.value)
+  ) {
     selectedDatasetId.value = project.value.datasets[0]?.dataset_id ?? ''
   }
   const readyPendingModel = project.value.models.find((item) => item.model_id === pendingModelId.value)
@@ -410,7 +456,7 @@ async function loadPlanTimetable(showMessage = true) {
 
 async function refreshTasks(showMessage = true) {
   try {
-    tasks.value = await api.listTasks(selectedProjectId.value || undefined)
+    tasks.value = await api.listTasks()
     reconcilePendingModel()
   } catch (error) {
     if (showMessage) notifyError(error)
@@ -455,74 +501,70 @@ async function removeSelectedProject() {
   })
 }
 
-async function uploadSource(options: UploadRequestOptions) {
-  const file = options.file
-  if (!selectedProjectId.value || !(file instanceof File)) {
-    options.onError(toUploadError('请选择有效文件'))
-    return
-  }
-  busy.value = true
-  try {
-    await api.uploadSource(selectedProjectId.value, file)
-    await loadSelectedProject(false)
-    options.onSuccess({ ok: true })
-    ElMessage.success('上传源文件')
-  } catch (error) {
-    options.onError(toUploadError(error))
-    notifyError(error)
-  } finally {
-    busy.value = false
-  }
-}
-
-async function deleteSource(file: FileState) {
-  try {
-    await ElMessageBox.confirm(`确认删除源文件 ${file.name}？`, '删除源文件', {
-      type: 'warning',
-    })
-  } catch {
-    return
-  }
-  await run('删除源文件', async () => {
-    const response = await api.deleteSource(selectedProjectId.value, file.name)
-    const message = await finishShortTask(response.task, '删除源文件')
-    await loadSelectedProject(false)
-    return message
-  })
-}
-
 function openPrepareDialog() {
-  if (!sourceFiles.value.length) {
-    ElMessage.warning('请先上传时刻表和里程表文件到源文件。')
-    return
-  }
-  prepareForm.value.timetable_filename ||= sourceFiles.value[0]?.name ?? ''
-  prepareForm.value.mileage_filename ||=
-    sourceFiles.value[1]?.name ?? sourceFiles.value[0]?.name ?? ''
   prepareDialogVisible.value = true
 }
 
 async function submitPrepare() {
+  if (!prepareForm.value.timetable_file || !prepareForm.value.mileage_file) {
+    ElMessage.warning('请上传时刻表和里程表文件。')
+    return
+  }
   await run('激活原计划运行图', async () => {
-    const response = await api.submitPrepare(selectedProjectId.value, prepareForm.value)
+    const response = await api.activatePlan(
+      selectedProjectId.value,
+      prepareForm.value.timetable_file as File,
+      prepareForm.value.mileage_file as File,
+      prepareForm.value.timetable_sheet_name,
+      prepareForm.value.mileage_sheet_name,
+    )
     trackTask(response.task)
     planTimetable.value = null
     prepareDialogVisible.value = false
+    prepareForm.value.timetable_file = null
+    prepareForm.value.mileage_file = null
   })
 }
 
 async function createScenarioSet() {
   const scenarioSetId = newScenarioSetId.value.trim()
   if (!scenarioSetId) return
-  await run('创建场景集合', async () => {
+  await run('创建扰动场景集', async () => {
     const response = await api.createScenarioSet(selectedProjectId.value, scenarioSetId)
-    const message = await finishShortTask(response.task, '创建场景集合')
+    const message = await finishShortTask(response.task, '创建扰动场景集')
     selectedScenarioSetId.value = scenarioSetId
     newScenarioSetId.value = ''
     scenarioSetDialogVisible.value = false
     await loadSelectedProject(false)
     await loadScenarioSetData(false)
     return message
+  })
+}
+
+async function deleteScenarioSetById(scenarioSetId: string) {
+  if (!selectedProjectId.value || !scenarioSetId) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除扰动场景集 ${scenarioSetId}？该操作会删除对应场景文件目录。`,
+      '删除扰动场景集',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+  await run('删除扰动场景集', async () => {
+    await api.deleteScenarioSet(selectedProjectId.value, scenarioSetId)
+    if (selectedScenarioSetId.value === scenarioSetId) {
+      selectedScenarioSetId.value = ''
+      scenarios.value = []
+      scenarioSetVisualization.value = null
+    }
+    await loadSelectedProject(false)
+    return `扰动场景集 ${scenarioSetId} 已删除`
   })
 }
 
@@ -601,7 +643,7 @@ async function reloadScenarioSetsOnOpen(visible: boolean) {
 
 async function openScenarioDialog() {
   if (!selectedScenarioSetId.value) {
-    ElMessage.warning('请先选择场景集合。')
+    ElMessage.warning('请先选择扰动场景集。')
     return
   }
   if (!originalGraphActive.value) {
@@ -708,7 +750,7 @@ async function deleteScenario(id: string) {
 
 function openNormalGenerateDialog() {
   if (!selectedScenarioSetId.value) {
-    ElMessage.warning('请先选择场景集合。')
+    ElMessage.warning('请先选择扰动场景集。')
     return
   }
   normalGenerateDialogVisible.value = true
@@ -735,7 +777,7 @@ async function submitBuild() {
   const scenarioId =
     datasetBuildForm.value.source === 'scenario' ? datasetBuildForm.value.scenario_id.trim() : ''
   if (!datasetId || !scenarioSetId) {
-    ElMessage.warning('请先选择 MILP 数据集和场景来源。')
+    ElMessage.warning('请先选择 MILP 实例集和场景来源。')
     return
   }
   if (datasetBuildForm.value.source === 'scenario' && !scenarioId) {
@@ -801,20 +843,72 @@ function positiveNumber(value: number | null | undefined, fallback: number) {
 }
 
 async function createDataset() {
+  const importScenarioSet = datasetCreateMode.value === 'scenario_set'
+  const scenarioSetId = datasetCreateScenarioSetId.value.trim()
+  if (importScenarioSet) syncDatasetCreateId()
   const datasetId = newDatasetId.value.trim()
   if (!datasetId) {
-    ElMessage.warning('请填写 MILP 数据集 ID。')
+    ElMessage.warning(
+      importScenarioSet
+        ? '请先选择扰动场景集并填写 MILP 实例集后缀。'
+        : '请填写 MILP 实例集 ID。',
+    )
     return
   }
-  await run('新增 MILP 数据集', async () => {
+  if (importScenarioSet && !scenarioSetId) {
+    ElMessage.warning('请先选择要引入的扰动场景集。')
+    return
+  }
+  await run('新增 MILP 实例集', async () => {
     const response = await api.createDataset(selectedProjectId.value, datasetId)
-    const message = await finishShortTask(response.task, '新增 MILP 数据集')
+    const message = importScenarioSet
+      ? await requireShortTaskSuccess(response.task, '新增 MILP 实例集')
+      : await finishShortTask(response.task, '新增 MILP 实例集')
     selectedDatasetId.value = datasetId
-    newDatasetId.value = ''
+    if (importScenarioSet) {
+      selectedScenarioSetId.value = scenarioSetId
+      const buildResponse = await api.submitBuild(
+        selectedProjectId.value,
+        scenarioSetId,
+        datasetId,
+        '',
+        defaultBuildOptions(),
+      )
+      trackTask(buildResponse.task)
+    }
+    resetDatasetCreateForm()
     datasetCreateDialogVisible.value = false
     await loadSelectedProject(false)
     await loadDatasetArtifacts(false)
-    return message
+    return importScenarioSet
+      ? `${message}，已提交从扰动场景集 ${scenarioSetId} 构建任务`
+      : message
+  })
+}
+
+async function deleteDatasetById(datasetId: string) {
+  if (!selectedProjectId.value || !datasetId) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除 MILP 实例集 ${datasetId}？该操作会删除构建、求解和时刻表产物。`,
+      '删除 MILP 实例集',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+  await run('删除 MILP 实例集', async () => {
+    await api.deleteDataset(selectedProjectId.value, datasetId)
+    if (selectedDatasetId.value === datasetId) {
+      selectedDatasetId.value = ''
+      datasetArtifacts.value = []
+    }
+    await loadSelectedProject(false)
+    return `MILP 实例集 ${datasetId} 已删除`
   })
 }
 
@@ -905,13 +999,35 @@ async function reloadDatasetsOnOpen(visible: boolean) {
 }
 
 async function openDatasetCreateDialog() {
-  newDatasetId.value = nextDatasetId()
+  datasetCreateMode.value = scenarioSets.value.length ? 'scenario_set' : 'empty'
+  datasetCreateScenarioSetId.value = selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
+  datasetCreateSuffix.value = nextTimestampSuffix()
+  newDatasetId.value =
+    datasetCreateMode.value === 'scenario_set' ? '' : nextDatasetId()
+  if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
   datasetCreateDialogVisible.value = true
+}
+
+function resetDatasetCreateForm() {
+  newDatasetId.value = ''
+  datasetCreateScenarioSetId.value = ''
+  datasetCreateSuffix.value = ''
+  datasetCreateMode.value = 'scenario_set'
+}
+
+function defaultBuildOptions(): DatasetBuildForm {
+  return { ...DEFAULT_DATASET_BUILD_FORM }
+}
+
+function syncDatasetCreateId() {
+  const prefix = datasetCreateScenarioSetId.value.trim()
+  const suffix = datasetCreateSuffix.value.trim()
+  newDatasetId.value = prefix && suffix ? `${prefix}_${suffix}` : prefix || suffix
 }
 
 async function openDatasetBuildDialog() {
   if (!selectedDatasetId.value) {
-    ElMessage.warning('请先新增或选择一个 MILP 数据集。')
+    ElMessage.warning('请先新增或选择一个 MILP 实例集。')
     return
   }
   datasetBuildForm.value.scenario_set_id =
@@ -970,18 +1086,23 @@ async function cancelTask(task: Task) {
   })
 }
 
-async function cleanTasks() {
+async function cleanTasks(projectId = '') {
+  const targetText = projectId ? `项目 ${projectId}` : '全部项目'
   try {
-    await ElMessageBox.confirm('清理当前项目已结束的历史任务？运行中和排队中的任务不会被清理。', '清理历史任务', {
-      type: 'warning',
-      confirmButtonText: '清理',
-      cancelButtonText: '取消',
-    })
+    await ElMessageBox.confirm(
+      `清理${targetText}已结束的历史任务？运行中和排队中的任务不会被清理。`,
+      '清理历史任务',
+      {
+        type: 'warning',
+        confirmButtonText: '清理',
+        cancelButtonText: '取消',
+      },
+    )
   } catch {
     return
   }
   await run('清理历史任务', async () => {
-    const result = await api.cleanTasks(selectedProjectId.value || undefined)
+    const result = await api.cleanTasks(projectId || undefined)
     await refreshTasks(false)
     const removed = Number(result.removed ?? 0)
     return `已清理 ${removed} 个历史任务`
@@ -1001,30 +1122,43 @@ async function openTrainDialog(mode: 'create' | 'retrain' = 'create') {
 
 function resetTrainForm(mode: 'create' | 'retrain' = trainDialogMode.value) {
   const config = modelDetail.value?.config ?? {}
-  const modelId = mode === 'retrain' && selectedModelId.value ? selectedModelId.value : nextModelId()
+  const scenarioSetId =
+    stringConfigValue(config.scenario_set_id) ||
+    selectedScenarioSetId.value ||
+    scenarioSets.value[0]?.scenario_set_id ||
+    ''
+  const modelId = mode === 'retrain' && selectedModelId.value ? selectedModelId.value : ''
   Object.assign(trainForm, {
     ...DEFAULT_TRAIN_FORM,
     ...trainFormDefaultsFromConfig(config),
     model_id: modelId,
-    scenario_set_id:
-      stringConfigValue(config.scenario_set_id) ||
-      selectedScenarioSetId.value ||
-      scenarioSets.value[0]?.scenario_set_id ||
-      '',
+    scenario_set_id: scenarioSetId,
   })
+  if (mode === 'create') {
+    trainModelSuffix.value = nextModelSuffix()
+    syncTrainModelId()
+  } else {
+    trainModelSuffix.value = ''
+  }
+}
+
+function syncTrainModelId() {
+  const prefix = trainForm.scenario_set_id.trim()
+  const suffix = trainModelSuffix.value.trim()
+  trainForm.model_id = prefix && suffix ? `${prefix}_${suffix}` : prefix || suffix
 }
 
 async function submitTrain() {
   if (!trainForm.model_id.trim() || !trainForm.scenario_set_id.trim()) {
-    ElMessage.warning('请填写模型 ID 并选择训练场景集合。')
+    ElMessage.warning('请填写扰动生成模型 ID 并选择训练扰动场景集。')
     return
   }
   const existingModel = models.value.find((item) => item.model_id === trainForm.model_id.trim())
   if (existingModel && trainDialogMode.value !== 'retrain') {
     try {
       await ElMessageBox.confirm(
-        `模型 ${existingModel.model_id} 已存在。重新训练会先删除旧模型产物，再开始训练。`,
-        '覆盖训练模型',
+        `扰动生成模型 ${existingModel.model_id} 已存在。重新训练会先删除旧模型产物，再开始训练。`,
+        '覆盖训练扰动生成模型',
         { type: 'warning', confirmButtonText: '覆盖并训练', cancelButtonText: '取消' },
       )
     } catch {
@@ -1042,23 +1176,30 @@ async function submitTrain() {
 
 function openGenerationDialog(file: ModelCheckpoint) {
   if (!selectedModelId.value) {
-    ElMessage.warning('请先选择模型。')
+    ElMessage.warning('请先选择扰动生成模型。')
     return
   }
   generationForm.value.checkpoint = file.relative_path
-  generationForm.value.scenario_set_id ||= `${selectedModelId.value}_generated`
+  generationScenarioSetSuffix.value = nextTimestampSuffix()
+  syncGenerationScenarioSetId()
   generationForm.value.speed_interruption_threshold = DEFAULT_SPEED_INTERRUPTION_THRESHOLD
   generationDialogVisible.value = true
 }
 
+function syncGenerationScenarioSetId() {
+  const suffix = generationScenarioSetSuffix.value.trim()
+  generationForm.value.scenario_set_id = suffix ? `generated_${suffix}` : 'generated'
+}
+
 async function submitGeneration() {
   if (!selectedModelId.value) return
+  syncGenerationScenarioSetId()
   if (!generationForm.value.checkpoint) {
     ElMessage.warning('请先选择 checkpoint 文件。')
     return
   }
   if (!generationForm.value.scenario_set_id.trim()) {
-    ElMessage.warning('请填写生成到的场景集合 ID。')
+    ElMessage.warning('请填写生成到的扰动场景集 ID。')
     return
   }
   await run('提交生成任务', async () => {
@@ -1075,6 +1216,35 @@ async function submitGeneration() {
     )
     trackTask(response.task)
     generationDialogVisible.value = false
+  })
+}
+
+async function deleteModelById(modelId: string) {
+  if (!selectedProjectId.value || !modelId) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除扰动生成模型 ${modelId}？该操作会删除模型产物目录。`,
+      '删除扰动生成模型',
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+  await run('删除扰动生成模型', async () => {
+    await api.deleteModel(selectedProjectId.value, modelId)
+    if (selectedModelId.value === modelId) {
+      selectedModelId.value = ''
+      modelDetail.value = null
+    }
+    if (pendingModelId.value === modelId) {
+      clearPendingModel()
+    }
+    await loadSelectedProject(false)
+    return `扰动生成模型 ${modelId} 已删除`
   })
 }
 
@@ -1154,6 +1324,24 @@ async function finishShortTask(task: Task, label: string) {
   )
 }
 
+async function requireShortTaskSuccess(task: Task, label: string) {
+  const doneTask = await waitForShortTask(task)
+  const log = await api.getTaskLog(task.id, 160)
+  await refreshTasks(false)
+
+  if (isTaskSuccessful(doneTask)) {
+    const lastLine = lastMeaningfulLine(log)
+    return lastLine ? `${label}完成：${lastLine}` : `${label}完成`
+  }
+
+  const detail = lastMeaningfulLine(log)
+  throw new Error(
+    detail
+      ? `${label}未完成：${taskDisplayStatus(doneTask)}，${detail}`
+      : `${label}未完成：${taskDisplayStatus(doneTask)}`,
+  )
+}
+
 async function waitForShortTask(task: Task) {
   let current = task
   const deadline = Date.now() + SHORT_TASK_WAIT_MS
@@ -1169,12 +1357,7 @@ function isTerminalTask(task: Task) {
 }
 
 function filterTasks(labels: readonly string[]) {
-  return tasks.value.filter((task) => labels.includes(String(task.label ?? '')))
-}
-
-function taskMatchesDataset(task: Task, datasetId: string) {
-  const command = `${task.command ?? ''} ${task.original_command ?? ''}`
-  return command.split(/\s+/).some((part) => part.replace(/^['"]|['"]$/g, '') === datasetId)
+  return projectTasks.value.filter((task) => labels.includes(String(task.label ?? '')))
 }
 
 function groupArtifactsByCase(artifacts: ArtifactSummary[]) {
@@ -1209,7 +1392,7 @@ function formatMetadataValue(key: string, value: unknown) {
   if (key === 'created_at' && typeof value === 'string') return value.replace('T', ' ')
   if (key === 'source') {
     if (value === 'scenario') return '单个场景'
-    if (value === 'scenario_set') return '场景集合'
+    if (value === 'scenario_set') return '扰动场景集'
   }
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
@@ -1350,28 +1533,21 @@ function stringConfigValue(value: unknown) {
   return typeof value === 'string' ? value : ''
 }
 
-function nextModelId() {
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
-  return `vae_${stamp}`
+function nextModelSuffix() {
+  return nextTimestampSuffix()
+}
+
+function nextTimestampSuffix() {
+  return new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
 }
 
 function nextDatasetId() {
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
-  return `milp_${stamp}`
+  return `milp_${nextTimestampSuffix()}`
 }
 
 function nextScenarioId() {
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
+  const stamp = nextTimestampSuffix()
   return `scenario_${stamp}`
-}
-
-function toUploadError(error: unknown): UploadError {
-  const message = error instanceof Error ? error.message : String(error)
-  return Object.assign(new Error(message), {
-    status: 0,
-    method: 'POST',
-    url: '',
-  }) as UploadError
 }
 
 function lastMeaningfulLine(log: string) {
@@ -1384,6 +1560,27 @@ function lastMeaningfulLine(log: string) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function scrollMainToTop() {
+  await nextTick()
+  mainScrollbar.value?.setScrollTop(0)
+}
+
+function setPrepareFile(kind: 'timetable_file' | 'mileage_file', file: UploadFile) {
+  if (file.raw) prepareForm.value[kind] = file.raw
+}
+
+function setTimetableFile(file: UploadFile) {
+  setPrepareFile('timetable_file', file)
+}
+
+function setMileageFile(file: UploadFile) {
+  setPrepareFile('mileage_file', file)
+}
+
+function warnSingleFile() {
+  ElMessage.warning('每项只需要一个文件，请先移除后重新选择。')
 }
 
 async function run(label: string, action: () => Promise<string | void>) {
@@ -1420,21 +1617,21 @@ function notifyError(error: unknown) {
         <div class="brand">RailGraph2Gurobi</div>
         <el-menu :default-active="activePage" @select="selectPage">
           <el-menu-item index="dashboard">仪表盘</el-menu-item>
-          <el-menu-item index="scenarios">场景集合</el-menu-item>
-          <el-menu-item index="datasets">数据集</el-menu-item>
-          <el-menu-item index="models">模型</el-menu-item>
+          <el-menu-item index="scenarios">构建扰动场景</el-menu-item>
+          <el-menu-item index="datasets">构建MILP实例</el-menu-item>
+          <el-menu-item index="models">扰动生成模型</el-menu-item>
           <el-sub-menu index="ablation">
             <template #title>消融分析</template>
-            <el-menu-item index="ablation-scenarios">场景集消融实验台</el-menu-item>
-            <el-menu-item index="ablation-datasets">数据集消融实验台</el-menu-item>
+            <el-menu-item index="ablation-scenarios">场景分析</el-menu-item>
+            <el-menu-item index="ablation-datasets">MILP 分析</el-menu-item>
           </el-sub-menu>
         </el-menu>
       </el-aside>
 
       <el-container>
         <el-header class="app-header">
-          <div class="header-title">实验平台</div>
           <div class="header-actions">
+            <span class="control-label">项目</span>
             <el-select
               v-model="selectedProjectId"
               placeholder="选择项目"
@@ -1461,7 +1658,7 @@ function notifyError(error: unknown) {
 
         <el-container class="workspace-container">
           <el-main v-loading="busy" class="app-main">
-            <el-scrollbar class="main-scroll">
+            <el-scrollbar ref="mainScrollbar" class="main-scroll">
               <el-empty v-if="!hasProject" description="还没有可用项目">
                 <el-button type="primary" @click="projectDialogVisible = true">新建项目</el-button>
               </el-empty>
@@ -1469,9 +1666,7 @@ function notifyError(error: unknown) {
               <template v-else>
                 <DashboardView
                   v-if="activePage === 'dashboard'"
-                  :selected-project-id="selectedProjectId"
                   :plan-timetable="planTimetable"
-                  :source-files="sourceFiles"
                   :scenario-set-count="scenarioSets.length"
                   :datasets="datasets"
                   :models="models"
@@ -1481,8 +1676,6 @@ function notifyError(error: unknown) {
                   :done-task-count="doneTaskCount"
                   :failed-task-count="failedTaskCount"
                   @prepare="openPrepareDialog"
-                  @upload-source="uploadSource"
-                  @delete-source="deleteSource"
                   @refresh-tasks="refreshTasks"
                 />
 
@@ -1495,6 +1688,7 @@ function notifyError(error: unknown) {
                   :loading="scenarioSetLoading"
                   @reload-scenario-sets="reloadScenarioSetsOnOpen"
                   @create-scenario-set="scenarioSetDialogVisible = true"
+                  @delete-scenario-set="deleteScenarioSetById"
                   @normal-generate="openNormalGenerateDialog"
                   @create-scenario="openScenarioDialog"
                   @delete-scenario="deleteScenario"
@@ -1509,6 +1703,7 @@ function notifyError(error: unknown) {
                   :format-bytes="formatBytes"
                   @reload-datasets="reloadDatasetsOnOpen"
                   @create-dataset="openDatasetCreateDialog"
+                  @delete-dataset="deleteDatasetById"
                   @refresh-artifacts="loadDatasetArtifacts"
                   @build-dataset="openDatasetBuildDialog"
                   @solve-all="() => openSolveDialog()"
@@ -1542,6 +1737,7 @@ function notifyError(error: unknown) {
                   @reload-models="reloadModelsOnOpen"
                   @train="() => openTrainDialog('create')"
                   @retrain="() => openTrainDialog('retrain')"
+                  @delete-model="deleteModelById"
                   @refresh-model="loadModelDetails"
                   @open-task-log="openTaskLog"
                   @generate="openGenerationDialog"
@@ -1559,8 +1755,11 @@ function notifyError(error: unknown) {
           </el-main>
           <el-aside v-if="hasProject" width="340px" class="task-aside">
             <TaskPanel
-              :title="activeTaskTitle"
-              :tasks="activeTasks"
+              :tasks="visibleTasks"
+              :project-options="taskProjectOptions"
+              :page-options="taskPageOptions"
+              :initial-project-id="selectedProjectId"
+              :page-filters="PAGE_TASK_FILTERS"
               @refresh="refreshTasks"
               @clean="cleanTasks"
               @cancel="cancelTask"
@@ -1581,14 +1780,24 @@ function notifyError(error: unknown) {
     <el-dialog v-model="prepareDialogVisible" title="激活原计划运行图" width="560px">
       <el-form label-width="140px">
         <el-form-item label="时刻表文件">
-          <el-select v-model="prepareForm.timetable_filename" class="full-width">
-            <el-option v-for="name in sourceOptions" :key="name" :label="name" :value="name" />
-          </el-select>
+          <el-upload
+            :auto-upload="false"
+            :limit="1"
+            :on-change="setTimetableFile"
+            :on-exceed="warnSingleFile"
+          >
+            <el-button>选择文件</el-button>
+          </el-upload>
         </el-form-item>
         <el-form-item label="里程表文件">
-          <el-select v-model="prepareForm.mileage_filename" class="full-width">
-            <el-option v-for="name in sourceOptions" :key="name" :label="name" :value="name" />
-          </el-select>
+          <el-upload
+            :auto-upload="false"
+            :limit="1"
+            :on-change="setMileageFile"
+            :on-exceed="warnSingleFile"
+          >
+            <el-button>选择文件</el-button>
+          </el-upload>
         </el-form-item>
         <el-form-item label="时刻表工作表">
           <el-input v-model="prepareForm.timetable_sheet_name" />
@@ -1603,10 +1812,10 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="scenarioSetDialogVisible" title="新建场景集合" width="420px">
+    <el-dialog v-model="scenarioSetDialogVisible" title="新建扰动场景集" width="420px">
       <el-input
         v-model="newScenarioSetId"
-        placeholder="场景集合 ID"
+        placeholder="扰动场景集 ID"
         @keyup.enter="createScenarioSet"
       />
       <template #footer>
@@ -1706,13 +1915,13 @@ function notifyError(error: unknown) {
 
     <el-dialog v-model="normalGenerateDialogVisible" title="批量生成场景" width="560px">
       <el-alert
-        title="将生成到当前场景集合；若生成的场景 ID 已存在，会覆盖同名场景。"
+        title="将生成到当前扰动场景集；若生成的场景 ID 已存在，会覆盖同名场景。"
         type="warning"
         show-icon
         :closable="false"
       />
       <el-form class="dialog-section" label-width="150px">
-        <el-form-item label="当前场景集合">
+        <el-form-item label="当前扰动场景集">
           <el-input :model-value="selectedScenarioSetId" disabled />
         </el-form-item>
         <el-form-item label="随机种子">
@@ -1739,7 +1948,7 @@ function notifyError(error: unknown) {
 
     <el-dialog
       v-model="trainDialogVisible"
-      :title="trainDialogMode === 'retrain' ? '重新训练模型' : '训练新模型'"
+      :title="trainDialogMode === 'retrain' ? '重新训练扰动生成模型' : '训练新扰动生成模型'"
       width="920px"
       class="train-dialog"
     >
@@ -1749,20 +1958,12 @@ function notifyError(error: unknown) {
             <el-col :xs="24" :sm="12">
               <el-form-item>
                 <template #label>
-                  <FieldLabelTip label="模型 ID" :tip="TRAIN_FIELD_TIPS.model_id" />
-                </template>
-                <el-input v-model="trainForm.model_id" :disabled="trainDialogMode === 'retrain'" />
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="12">
-              <el-form-item>
-                <template #label>
-                  <FieldLabelTip label="训练场景集合" :tip="TRAIN_FIELD_TIPS.scenario_set_id" />
+                  <FieldLabelTip label="训练扰动场景集" :tip="TRAIN_FIELD_TIPS.scenario_set_id" />
                 </template>
                 <el-select
                   v-model="trainForm.scenario_set_id"
                   class="full-width"
-                  placeholder="选择训练场景集合"
+                  placeholder="选择训练扰动场景集"
                   @visible-change="reloadScenarioSetsOnOpen"
                 >
                   <el-option
@@ -1772,6 +1973,21 @@ function notifyError(error: unknown) {
                     :value="item.scenario_set_id"
                   />
                 </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12">
+              <el-form-item>
+                <template #label>
+                  <FieldLabelTip label="模型 ID" :tip="TRAIN_FIELD_TIPS.model_id" />
+                </template>
+                <el-input
+                  v-if="trainDialogMode === 'create'"
+                  v-model="trainModelSuffix"
+                  placeholder="默认使用当前时间戳"
+                >
+                  <template #prepend>{{ trainForm.scenario_set_id || '请选择扰动场景集' }}_</template>
+                </el-input>
+                <el-input v-else v-model="trainForm.model_id" disabled />
               </el-form-item>
             </el-col>
           </el-row>
@@ -1923,9 +2139,9 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="generationDialogVisible" title="使用模型生成数据" width="560px">
+    <el-dialog v-model="generationDialogVisible" title="使用扰动生成模型生成数据" width="560px">
       <el-form label-width="150px">
-        <el-form-item label="模型">
+        <el-form-item label="扰动生成模型">
           <el-input :model-value="selectedModelId" disabled />
         </el-form-item>
         <el-form-item label="Checkpoint">
@@ -1933,9 +2149,14 @@ function notifyError(error: unknown) {
         </el-form-item>
         <el-form-item>
           <template #label>
-            <FieldLabelTip label="输出场景集合" :tip="GENERATION_FIELD_TIPS.scenario_set_id" />
+            <FieldLabelTip label="输出扰动场景集" :tip="GENERATION_FIELD_TIPS.scenario_set_id" />
           </template>
-          <el-input v-model="generationForm.scenario_set_id" />
+          <el-input
+            v-model="generationScenarioSetSuffix"
+            placeholder="默认使用当前时间戳"
+          >
+            <template #prepend>generated_</template>
+          </el-input>
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -1981,10 +2202,48 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="datasetCreateDialogVisible" title="新增 MILP 数据集" width="520px">
-      <el-form label-width="130px">
-        <el-form-item label="MILP 数据集 ID">
-          <el-input v-model="newDatasetId" placeholder="例如 milp_reference" />
+    <el-dialog v-model="datasetCreateDialogVisible" title="新增 MILP 实例集" width="560px">
+      <el-form label-width="130px" @submit.prevent="createDataset">
+        <el-form-item label="创建方式">
+          <el-radio-group v-model="datasetCreateMode">
+            <el-radio-button value="scenario_set" :disabled="!scenarioSets.length">
+              从扰动场景集引入
+            </el-radio-button>
+            <el-radio-button value="empty">空建</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <template v-if="datasetCreateMode === 'scenario_set'">
+          <el-form-item label="扰动场景集">
+            <el-select
+              v-model="datasetCreateScenarioSetId"
+              class="full-width"
+              placeholder="选择扰动场景集"
+              @visible-change="reloadScenarioSetsOnOpen"
+            >
+              <el-option
+                v-for="item in scenarioSets"
+                :key="item.scenario_set_id"
+                :label="`${item.scenario_set_id} (${item.case_count})`"
+                :value="item.scenario_set_id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="MILP 实例集 ID">
+            <el-input
+              v-model="datasetCreateSuffix"
+              placeholder="默认使用当前时间戳"
+              @keydown.enter.prevent="createDataset"
+            >
+              <template #prepend>{{ datasetCreateScenarioSetId || '请选择扰动场景集' }}_</template>
+            </el-input>
+          </el-form-item>
+        </template>
+        <el-form-item v-else label="MILP 实例集 ID">
+          <el-input
+            v-model="newDatasetId"
+            placeholder="例如 milp_reference"
+            @keydown.enter.prevent="createDataset"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -1993,18 +2252,18 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="datasetBuildDialogVisible" title="从场景构建 MILP 数据集" width="640px">
+    <el-dialog v-model="datasetBuildDialogVisible" title="从场景构建 MILP 实例集" width="640px">
       <el-form label-width="150px">
-        <el-form-item label="MILP 数据集 ID">
+        <el-form-item label="MILP 实例集 ID">
           <el-input :model-value="selectedDatasetId" disabled />
         </el-form-item>
         <el-form-item label="构建来源">
           <el-radio-group v-model="datasetBuildForm.source">
-            <el-radio-button value="scenario_set">从场景集中构建</el-radio-button>
+            <el-radio-button value="scenario_set">从扰动场景集中构建</el-radio-button>
             <el-radio-button value="scenario">从场景中构建</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="场景集合">
+        <el-form-item label="扰动场景集">
           <el-select
             v-model="datasetBuildForm.scenario_set_id"
             class="full-width"
@@ -2077,7 +2336,7 @@ function notifyError(error: unknown) {
           </el-collapse-item>
         </el-collapse>
         <el-alert
-          title="构建会写入并覆盖当前 MILP 数据集的 build 产物；从单个场景构建的数据集，后续求解和导出也只处理该场景。"
+          title="构建会写入并覆盖当前 MILP 实例集的 build 产物；从单个场景构建的实例集，后续求解和导出也只处理该场景。"
           type="info"
           show-icon
           :closable="false"

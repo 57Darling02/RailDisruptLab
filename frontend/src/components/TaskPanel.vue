@@ -1,67 +1,90 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
 import {
   isTaskCancellable,
   isTaskFailed,
+  isTaskTerminal,
   taskDisplayLabel,
   taskDisplayStatus,
   taskTagType,
 } from '@/task-status'
 import type { Task } from '@/types'
 
-const ALL_TASKS = '__all__'
+type TaskOption = { label: string; value: string }
+type PageFilter = { label: string; value: string; labels: readonly string[] }
 
 const props = withDefaults(
   defineProps<{
-    title: string
     tasks: Task[]
+    projectOptions: TaskOption[]
+    pageOptions: TaskOption[]
+    pageFilters: readonly PageFilter[]
+    initialProjectId?: string
     emptyText?: string
   }>(),
   {
+    initialProjectId: '',
     emptyText: '暂无任务',
   },
 )
 
 const emit = defineEmits<{
   refresh: []
-  clean: []
+  clean: [projectId: string]
   cancel: [task: Task]
 }>()
 
 const logDialogVisible = ref(false)
 const selectedTask = ref<Task | null>(null)
-const selectedCategory = ref(ALL_TASKS)
+const selectedProjectId = ref(props.initialProjectId)
+const selectedPage = ref('')
 
-const categoryOptions = computed(() => {
-  const labels = new Set(props.tasks.map((task) => taskCategory(task)))
-  return [
-    { label: props.title, value: ALL_TASKS },
-    ...[...labels].sort().map((label) => ({ label, value: label })),
-  ]
-})
-const activeCategory = computed(() =>
-  categoryOptions.value.some((option) => option.value === selectedCategory.value)
-    ? selectedCategory.value
-    : ALL_TASKS,
-)
 const displayTasks = computed(() =>
   props.tasks
-    .filter(
-      (task) => activeCategory.value === ALL_TASKS || taskCategory(task) === activeCategory.value,
-    )
+    .filter((task) => matchesProject(task) && matchesPage(task))
     .slice()
-    .reverse(),
+    .sort(compareTasks),
 )
+
+watch(
+  () => props.initialProjectId,
+  (projectId) => {
+    selectedProjectId.value = projectId
+  },
+)
+
+function matchesProject(task: Task) {
+  return !selectedProjectId.value || task.group === selectedProjectId.value
+}
+
+function matchesPage(task: Task) {
+  const filter = props.pageFilters.find((item) => item.value === selectedPage.value)
+  if (!filter || filter.labels.length === 0) return true
+  return filter.labels.includes(String(task.label ?? ''))
+}
 
 function openLog(task: Task) {
   selectedTask.value = task
   logDialogVisible.value = true
 }
 
-function taskCategory(task: Task) {
-  return taskDisplayLabel(task)
+function compareTasks(left: Task, right: Task) {
+  const leftRunning = !isTaskTerminal(left)
+  const rightRunning = !isTaskTerminal(right)
+  if (leftRunning !== rightRunning) return leftRunning ? -1 : 1
+
+  const timeDelta = taskTime(right) - taskTime(left)
+  if (timeDelta !== 0) return timeDelta
+
+  return right.id - left.id
+}
+
+function taskTime(task: Task) {
+  if (!task.created_at) return 0
+  const time = Date.parse(task.created_at)
+  return Number.isFinite(time) ? time : 0
 }
 </script>
 
@@ -69,22 +92,40 @@ function taskCategory(task: Task) {
   <el-card class="task-panel" shadow="never">
     <template #header>
       <div class="task-panel-header">
-        <el-select v-model="selectedCategory" size="small" class="task-filter-select">
-          <el-option
-            v-for="option in categoryOptions"
-            :key="option.value"
-            :label="option.label"
-            :value="option.value"
-          />
-        </el-select>
+        <div class="task-panel-title">任务管理器</div>
         <div class="task-header-actions">
           <el-button link type="primary" @click="emit('refresh')">刷新</el-button>
-          <el-button link type="danger" :disabled="!tasks.length" @click="emit('clean')">
+          <el-button link type="danger" :disabled="!displayTasks.length" @click="emit('clean', selectedProjectId)">
             清理历史
           </el-button>
         </div>
       </div>
     </template>
+
+    <div class="task-filters">
+      <label class="task-filter">
+        <span>项目</span>
+        <el-select v-model="selectedProjectId" class="task-filter-select">
+          <el-option
+            v-for="option in projectOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+      </label>
+      <label class="task-filter">
+        <span>页面</span>
+        <el-select v-model="selectedPage" class="task-filter-select">
+          <el-option
+            v-for="option in pageOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+      </label>
+    </div>
 
     <el-scrollbar class="task-scroll" height="100%">
       <el-empty v-if="!displayTasks.length" :description="emptyText" :image-size="72" />
@@ -103,7 +144,7 @@ function taskCategory(task: Task) {
               {{ taskDisplayStatus(task) }}
             </el-tag>
           </div>
-          <div class="task-meta">{{ task.group || '-' }}</div>
+          <div class="task-meta">项目：{{ task.group || '-' }}</div>
           <div class="task-actions">
             <el-button link type="primary" @click="openLog(task)">日志</el-button>
             <el-button
@@ -130,7 +171,9 @@ function taskCategory(task: Task) {
 }
 
 .task-panel :deep(.el-card__body) {
+  display: flex;
   height: calc(100% - 58px);
+  flex-direction: column;
   padding: 0;
 }
 
@@ -143,14 +186,40 @@ function taskCategory(task: Task) {
   gap: 8px;
 }
 
+.task-panel-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
 .task-header-actions {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
+.task-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.task-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .task-filter-select {
-  width: 180px;
+  width: 100%;
+}
+
+.task-scroll {
+  flex: 1;
 }
 
 .task-list {

@@ -43,7 +43,6 @@ from core.vae_learning_graph import (
 def new_project(layout: ProjectLayout) -> None:
     for directory in (
         layout.source_dir,
-        layout.default_scenario_set,
         layout.datasets_dir,
         layout.model_dir,
     ):

@@ -18,6 +18,7 @@ const DISTURBANCE_LABEL = {
   speed_limit: '限速',
   interruption: '中断',
 } as const
+const TRAIN_SERIES_ID_PREFIX = 'train:'
 const props = withDefaults(
   defineProps<{
     rows: TimetableRowState[]
@@ -47,6 +48,21 @@ const chartOption = computed(() =>
 )
 const hasRows = computed(() => props.rows.length > 0 || props.planRows.length > 0)
 const fullscreenVisible = ref(false)
+const chartRef = ref<InstanceType<typeof VChart> | null>(null)
+const fullscreenChartRef = ref<InstanceType<typeof VChart> | null>(null)
+const trainTooltip = ref({
+  visible: false,
+  x: null as number | null,
+  y: null as number | null,
+  text: '',
+})
+const trainTooltipStyle = computed(() => {
+  if (trainTooltip.value.x == null || trainTooltip.value.y == null) return {}
+  return {
+    left: `${trainTooltip.value.x}px`,
+    top: `${trainTooltip.value.y}px`,
+  }
+})
 
 interface BuildInput {
   adjustedRows: TimetableRowState[]
@@ -125,15 +141,11 @@ function buildTimetableOption(input: BuildInput) {
       splitLine: { show: true, lineStyle: { color: '#f3f4f6' } },
     },
     yAxis: {
-      type: 'value',
+      type: 'category',
       name: '车站',
-      min: -0.5,
-      max: Math.max(stations.length - 0.5, 0.5),
-      interval: 1,
+      data: stations,
       axisTick: { show: false },
-      axisLabel: {
-        formatter: (value: number) => stations[Math.round(value)] ?? '',
-      },
+      axisLabel: { interval: 0 },
       splitLine: { show: false },
     },
     series: [
@@ -147,7 +159,7 @@ function buildTimetableOption(input: BuildInput) {
 
 interface ChartPoint {
   value: [number, number]
-  trainId?: string
+  trainId: string
   detail?: string
 }
 
@@ -298,12 +310,15 @@ function lineSeriesByTrain({
     if (!trainFilter(trainId, trainRows)) continue
     const color = colorForTrain(trainId, trainRows)
     const lineType = lineTypeForTrain(trainId, trainRows)
+    const name = seriesName(namePrefix, color)
     series.push({
-      name: seriesName(namePrefix, color),
+      id: trainSeriesId(trainId, name),
+      name,
       type: 'line',
       data: trainLineData(trainId, trainRows, stationIndex, segmentFilter),
       connectNulls: false,
       showSymbol: false,
+      triggerEvent: 'line',
       lineStyle: { width: 1.15, type: lineType, color },
       emphasis: { focus: 'series' },
       z,
@@ -320,6 +335,16 @@ function seriesName(prefix: string, color: string) {
     return '调整计划'
   }
   return prefix
+}
+
+function trainSeriesId(trainId: string, scope: string) {
+  return `${TRAIN_SERIES_ID_PREFIX}${encodeURIComponent(trainId)}|${encodeURIComponent(scope)}`
+}
+
+function trainIdFromSeriesId(seriesId: unknown) {
+  if (typeof seriesId !== 'string' || !seriesId.startsWith(TRAIN_SERIES_ID_PREFIX)) return ''
+  const [trainId = ''] = seriesId.slice(TRAIN_SERIES_ID_PREFIX.length).split('|')
+  return decodeURIComponent(trainId)
 }
 
 function groupRowsByTrain(rows: TimetableRowState[], stationIndex: Map<string, number>) {
@@ -343,29 +368,49 @@ function trainLineData(
   segmentFilter: (current: TimetableRowState, next: TimetableRowState, trainId: string) => boolean,
 ): (ChartPoint | null)[] {
   const data: (ChartPoint | null)[] = []
-  for (let index = 0; index < trainRows.length - 1; index += 1) {
-    const current = trainRows[index]
+  for (let index = 0; index < trainRows.length; index += 1) {
+    const row = trainRows[index]
     const next = trainRows[index + 1]
-    if (!current || !next) continue
-    if (!segmentFilter(current, next, trainId)) continue
-    const dep = parseTime(current.departure_time)
-    const arr = parseTime(next.arrival_time)
-    const currentY = stationIndex.get(current.station)
-    const nextY = stationIndex.get(next.station)
-    if (dep == null || arr == null || currentY == null || nextY == null) continue
-    data.push({
-      value: [dep, currentY],
-      trainId,
-      detail: `${trainId} ${current.station} 发车 ${secondsToHms(dep)}`,
-    })
-    data.push({
-      value: [arr, nextY],
-      trainId,
-      detail: `${trainId} ${next.station} 到达 ${secondsToHms(arr)}`,
-    })
-    data.push(null)
+    if (!row) continue
+
+    const arrivalPoint = timetablePoint(trainId, row, stationIndex, '到达')
+    const departurePoint = timetablePoint(trainId, row, stationIndex, '出发')
+    if (arrivalPoint && departurePoint) {
+      data.push(arrivalPoint, departurePoint)
+    }
+
+    if (!next) continue
+    const nextArrivalPoint = timetablePoint(trainId, next, stationIndex, '到达')
+    const canConnectToNext = Boolean(departurePoint) && Boolean(nextArrivalPoint)
+    if (canConnectToNext && segmentFilter(row, next, trainId) && departurePoint && nextArrivalPoint) {
+      if (!departurePointIsLast(data, departurePoint)) data.push(departurePoint)
+      data.push(nextArrivalPoint)
+    } else {
+      data.push(null)
+    }
   }
   return data
+}
+
+function timetablePoint(
+  trainId: string,
+  row: TimetableRowState,
+  stationIndex: Map<string, number>,
+  event: '到达' | '出发',
+): ChartPoint | null {
+  const time = parseTime(event === '到达' ? row.arrival_time : row.departure_time)
+  const y = stationIndex.get(row.station)
+  if (time == null || y == null) return null
+  return {
+    value: [time, y],
+    trainId,
+    detail: `车次：${trainId}`,
+  }
+}
+
+function departurePointIsLast(data: (ChartPoint | null)[], point: ChartPoint) {
+  const last = data.at(-1)
+  return Boolean(last && last.value[0] === point.value[0] && last.value[1] === point.value[1])
 }
 
 function stationLineSeries(stations: string[], extent: { min: number; max: number }) {
@@ -374,8 +419,9 @@ function stationLineSeries(stations: string[], extent: { min: number; max: numbe
     type: 'custom',
     legendHoverLink: false,
     silent: true,
+    encode: { x: [0, 1], y: 2 },
     data: stations.map((station, index) => ({
-      value: [extent.min, extent.max, index, station],
+      value: [extent.min, extent.max, index],
     })),
     renderItem: (_params: CustomRenderParams, api: CustomRenderApi) => {
       const start = api.coord([Number(api.value(0)), Number(api.value(2))])
@@ -541,11 +587,89 @@ function secondsToHms(value: number) {
 function formatTooltip(params: { data?: ChartPoint | DisturbanceRect; name?: string; value?: unknown }) {
   const data = params.data
   if (data && 'detail' in data && data.detail) return data.detail
+  if (data && 'trainId' in data) return `车次：${data.trainId}`
   if (Array.isArray(params.value)) {
     const [time, y] = params.value as [number, number]
     return `${Number(y).toFixed(0)}<br/>${secondsToHms(time)}`
   }
   return params.name ?? ''
+}
+
+function showTrainTooltip(params: unknown) {
+  const payload = objectRecord(params)
+  if (payload?.componentType !== 'series') {
+    hideTrainTooltip()
+    return
+  }
+  const trainId = trainIdFromPayload(payload)
+  const pointer = chartPointer(payload.event)
+  if (!trainId) {
+    hideTrainTooltip()
+    return
+  }
+  trainTooltip.value = {
+    visible: true,
+    x: pointer ? pointer.x + 12 : null,
+    y: pointer ? pointer.y + 12 : null,
+    text: `${trainId}`,
+  }
+}
+
+function trainIdFromPayload(payload: Record<string, unknown>) {
+  const fromId = trainIdFromSeriesId(payload.seriesId)
+  if (fromId) return fromId
+  const seriesIndex = integerValue(payload.seriesIndex)
+  if (seriesIndex == null) return ''
+  return trainIdFromSeries(seriesIndex)
+}
+
+function trainIdFromSeries(seriesIndex: number) {
+  const option = objectRecord(chartOption.value)
+  const series = option?.series
+  if (!Array.isArray(series)) return ''
+  return trainIdFromSeriesId(objectRecord(series[seriesIndex])?.id)
+}
+
+function hideTrainTooltip() {
+  trainTooltip.value.visible = false
+}
+
+function chartPointer(eventPayload: unknown) {
+  const event = objectRecord(eventPayload)
+  const nativeEvent = objectRecord(event?.event)
+  const x = firstNumber(nativeEvent?.clientX, event?.clientX)
+  const y = firstNumber(nativeEvent?.clientY, event?.clientY)
+  if (x != null && y != null) return { x, y }
+  return chartLocalPointer(event, fullscreenVisible.value ? fullscreenChartRef.value : chartRef.value)
+}
+
+function chartLocalPointer(event: Record<string, unknown> | null, chart: InstanceType<typeof VChart> | null) {
+  const offsetX = firstNumber(event?.zrX, event?.offsetX)
+  const offsetY = firstNumber(event?.zrY, event?.offsetY)
+  const rect = chart?.root?.getBoundingClientRect()
+  if (offsetX == null || offsetY == null || !rect) return null
+  return { x: rect.left + offsetX, y: rect.top + offsetY }
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function integerValue(value: unknown): number | null {
+  const number = numberValue(value)
+  return number == null ? null : Math.trunc(number)
+}
+
+function firstNumber(...values: unknown[]) {
+  for (const value of values) {
+    const number = numberValue(value)
+    if (number != null) return number
+  }
+  return null
 }
 </script>
 
@@ -554,8 +678,26 @@ function formatTooltip(params: { data?: ChartPoint | DisturbanceRect; name?: str
     <div v-if="hasRows" class="chart-toolbar">
       <el-button size="small" @click="fullscreenVisible = true">全屏查看</el-button>
     </div>
-    <VChart v-if="hasRows" :option="chartOption" autoresize class="timetable-chart" />
-    <el-empty v-else description="暂无可展示的运行图数据" :image-size="72" />
+    <VChart
+      v-if="hasRows"
+      ref="chartRef"
+      :option="chartOption"
+      autoresize
+      class="timetable-chart"
+      @mouseover="showTrainTooltip"
+      @mousemove="showTrainTooltip"
+      @mouseout="hideTrainTooltip"
+      @globalout="hideTrainTooltip"
+    />
+    <div
+      v-if="trainTooltip.visible"
+      class="train-tooltip"
+      :class="{ 'is-fixed': trainTooltip.x != null && trainTooltip.y != null }"
+      :style="trainTooltipStyle"
+    >
+      {{ trainTooltip.text }}
+    </div>
+    <el-empty v-else-if="!hasRows" description="暂无可展示的运行图数据" :image-size="72" />
     <el-dialog
       v-model="fullscreenVisible"
       :title="title"
@@ -563,7 +705,16 @@ function formatTooltip(params: { data?: ChartPoint | DisturbanceRect; name?: str
       append-to-body
       destroy-on-close
     >
-      <VChart :option="chartOption" autoresize class="fullscreen-chart" />
+      <VChart
+        ref="fullscreenChartRef"
+        :option="chartOption"
+        autoresize
+        class="fullscreen-chart"
+        @mouseover="showTrainTooltip"
+        @mousemove="showTrainTooltip"
+        @mouseout="hideTrainTooltip"
+        @globalout="hideTrainTooltip"
+      />
     </el-dialog>
   </div>
 </template>
@@ -589,5 +740,25 @@ function formatTooltip(params: { data?: ChartPoint | DisturbanceRect; name?: str
 .fullscreen-chart {
   width: 100%;
   height: calc(100vh - 96px);
+}
+
+.train-tooltip {
+  position: absolute;
+  top: 42px;
+  right: 12px;
+  z-index: 3000;
+  padding: 7px 10px;
+  border-radius: 4px;
+  color: #fff;
+  background: rgb(0 0 0 / 78%);
+  font-size: 13px;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+}
+
+.train-tooltip.is-fixed {
+  position: fixed;
+  inset: auto auto auto auto;
 }
 </style>

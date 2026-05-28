@@ -72,23 +72,16 @@ export const api = {
       method: 'DELETE',
     }),
   getProject: (projectId: string) => request<ProjectState>(`/projects/${projectId}`),
-  uploadSource: (projectId: string, file: File) => {
-    const data = new FormData()
-    data.append('file', file)
-    return request<JsonObject>(`/projects/${projectId}/source`, { method: 'POST', body: data })
-  },
-  sourceDownloadUrl: (projectId: string, filename: string) =>
-    `${API_PREFIX}/projects/${projectId}/source/${encodeURIComponent(filename)}`,
-  deleteSource: (projectId: string, filename: string) =>
-    request<TaskResponse>(`/projects/${projectId}/source/${encodeURIComponent(filename)}`, {
-      method: 'DELETE',
-    }),
   listScenarioSets: (projectId: string) =>
     request<ScenarioSet[]>(`/projects/${projectId}/scenario-sets`),
   createScenarioSet: (projectId: string, scenarioSetId: string, existOk = false) =>
     request<TaskResponse>(`/projects/${projectId}/scenario-sets`, {
       method: 'POST',
       ...jsonBody({ scenario_set_id: scenarioSetId, exist_ok: existOk }),
+    }),
+  deleteScenarioSet: (projectId: string, scenarioSetId: string) =>
+    request<JsonObject>(`/projects/${projectId}/scenario-sets/${scenarioSetId}`, {
+      method: 'DELETE',
     }),
   listScenarios: (projectId: string, scenarioSetId: string) =>
     request<ScenarioSummary[]>(`/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios`),
@@ -120,6 +113,23 @@ export const api = {
         method: 'DELETE',
       },
     ),
+  activatePlan: (
+    projectId: string,
+    timetableFile: File,
+    mileageFile: File,
+    timetableSheetName: string,
+    mileageSheetName: string,
+  ) => {
+    const data = new FormData()
+    data.append('timetable_file', timetableFile)
+    data.append('mileage_file', mileageFile)
+    data.append('timetable_sheet_name', timetableSheetName)
+    data.append('mileage_sheet_name', mileageSheetName)
+    return request<TaskResponse>(`/projects/${projectId}/plan/activate`, {
+      method: 'POST',
+      body: data,
+    })
+  },
   submitPrepare: (projectId: string, payload: object) =>
     request<TaskResponse>(`/projects/${projectId}/tasks/prepare`, {
       method: 'POST',
@@ -134,6 +144,10 @@ export const api = {
     request<TaskResponse>(`/projects/${projectId}/datasets`, {
       method: 'POST',
       ...jsonBody({ dataset_id: datasetId, exist_ok: existOk }),
+    }),
+  deleteDataset: (projectId: string, datasetId: string) =>
+    request<JsonObject>(`/projects/${projectId}/datasets/${datasetId}`, {
+      method: 'DELETE',
     }),
   submitBuild: (
     projectId: string,
@@ -244,4 +258,8 @@ export const api = {
     request<ModelDetail>(`/projects/${projectId}/models/${modelId}/detail`),
   listModelFiles: (projectId: string, modelId: string) =>
     request<ModelCheckpoint[]>(`/projects/${projectId}/models/${modelId}/files`),
+  deleteModel: (projectId: string, modelId: string) =>
+    request<JsonObject>(`/projects/${projectId}/models/${modelId}`, {
+      method: 'DELETE',
+    }),
 }

@@ -92,10 +92,6 @@ class ProjectLayout:
         return self.root / "scenario_sets"
 
     @property
-    def default_scenario_set(self) -> Path:
-        return self.scenario_sets_dir / "default"
-
-    @property
     def datasets_dir(self) -> Path:
         return self.root / "datasets"
 

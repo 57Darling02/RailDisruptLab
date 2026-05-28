@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import uvicorn
@@ -11,6 +12,8 @@ from core.project_layout import REPO_ROOT
 FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
+TASK_PARALLEL_ENV = "R2G_TASK_PARALLEL"
+TASK_PARALLEL = 8
 
 
 def main() -> None:
@@ -18,6 +21,7 @@ def main() -> None:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
+    os.environ.setdefault(TASK_PARALLEL_ENV, str(TASK_PARALLEL))
 
     if not (FRONTEND_DIST / "index.html").is_file():
         print(

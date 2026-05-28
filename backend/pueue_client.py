@@ -18,6 +18,7 @@ class PueueError(RuntimeError):
 
 
 DEFAULT_GROUP_PARALLEL = 4
+TASK_PARALLEL_ENV = "R2G_TASK_PARALLEL"
 
 
 class PueueClient:
@@ -44,6 +45,7 @@ class PueueClient:
         return {
             "ok": True,
             "config": to_posix(self.config_path),
+            "parallel": configured_parallel(),
             "groups": sorted(status.get("groups", {}).keys()),
         }
 
@@ -95,8 +97,9 @@ class PueueClient:
         task_id = result.stdout.strip().splitlines()[-1].strip()
         return self.get_task(task_id) or {"id": int(task_id), "group": group, "command": command}
 
-    def ensure_group(self, group: str, parallel: int = DEFAULT_GROUP_PARALLEL) -> None:
+    def ensure_group(self, group: str, parallel: Optional[int] = None) -> None:
         group = sanitize_id(group)
+        parallel = parallel if parallel is not None else configured_parallel()
         status = self.status()
         groups = status.get("groups", {})
         if not isinstance(groups, dict):
@@ -309,3 +312,14 @@ def tail_text(path: Path, *, lines: Optional[int] = None) -> str:
 
     text = b"".join(reversed(chunks)).decode("utf-8", errors="replace")
     return "\n".join(text.splitlines()[-lines:])
+
+
+def configured_parallel() -> int:
+    value = os.environ.get(TASK_PARALLEL_ENV, "").strip()
+    if not value:
+        return DEFAULT_GROUP_PARALLEL
+    try:
+        parallel = int(value)
+    except ValueError:
+        return DEFAULT_GROUP_PARALLEL
+    return max(1, parallel)

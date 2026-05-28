@@ -39,6 +39,7 @@ defineEmits<{
   reloadModels: [visible: boolean]
   train: []
   retrain: []
+  deleteModel: [modelId: string]
   refreshModel: []
   openTaskLog: [task: Task]
   generate: [checkpoint: ModelCheckpoint]
@@ -223,10 +224,10 @@ function escapeRegExp(value: string) {
       <el-card shadow="never">
         <div class="toolbar-row">
           <div class="inline-control">
-            <span>模型：</span>
+            <span>扰动生成模型：</span>
             <el-select
               :model-value="selectedModelId"
-              placeholder="选择模型"
+              placeholder="选择扰动生成模型"
               class="toolbar-select"
               @update:model-value="$emit('update:selectedModelId', $event)"
               @visible-change="$emit('reloadModels', $event)"
@@ -236,15 +237,28 @@ function escapeRegExp(value: string) {
                 :key="item.model_id"
                 :label="item.model_id"
                 :value="item.model_id"
-              />
+              >
+                <div class="select-option-row">
+                  <span class="select-option-main">{{ item.model_id }}</span>
+                  <el-button
+                    class="select-option-delete"
+                    link
+                    type="danger"
+                    aria-label="删除扰动生成模型"
+                    @click.stop.prevent="$emit('deleteModel', item.model_id)"
+                  >
+                    x
+                  </el-button>
+                </div>
+              </el-option>
             </el-select>
+            <el-button @click="$emit('train')">新增</el-button>
           </div>
-          <el-button type="primary" @click="$emit('train')">训练新模型</el-button>
         </div>
         <el-alert
           v-if="pendingModelId"
           class="dialog-section"
-          :title="`模型 ${pendingModelId} 正在训练，产物状态会随任务更新。`"
+          :title="`扰动生成模型 ${pendingModelId} 正在训练，产物状态会随任务更新。`"
           type="info"
           show-icon
           :closable="false"
@@ -264,7 +278,7 @@ function escapeRegExp(value: string) {
           </div>
         </template>
 
-        <el-empty v-if="!selectedModelId" description="请选择或训练模型" />
+        <el-empty v-if="!selectedModelId" description="请选择或训练扰动生成模型" />
         <template v-else>
           <div class="model-overview">
             <div class="model-overview-main">

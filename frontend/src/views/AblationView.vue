@@ -36,9 +36,6 @@ const comparedDatasets = computed(() => {
   const selected = new Set([baselineDatasetId.value, ...candidateDatasetIds.value])
   return props.datasets.filter((item) => selected.has(item.dataset_id))
 })
-const pageTitle = computed(() =>
-  props.page === 'ablation-scenarios' ? '场景集消融实验台' : '数据集消融实验台',
-)
 const scenarioItems = computed(() => scenarioSetVisualizations.value)
 const baselineVisualization = computed(() =>
   scenarioItems.value.find((item) => item.scenario_set_id === baselineScenarioSetId.value) ??
@@ -504,12 +501,6 @@ function datasetQualityMessages(item: DatasetSummary) {
   <section class="page-layout">
     <div class="page-stack">
       <el-card shadow="never">
-        <template #header>
-          <div class="card-header">
-            <span>{{ pageTitle }}</span>
-          </div>
-        </template>
-
         <template v-if="page === 'ablation-scenarios'">
           <div class="toolbar-row analysis-toolbar">
             <div class="inline-control">
@@ -548,7 +539,7 @@ function datasetQualityMessages(item: DatasetSummary) {
               </el-select>
             </div>
             <el-button type="primary" :loading="scenarioCompareLoading" @click="compareScenarioSets">
-              开始对比
+              开始分析
             </el-button>
           </div>
 
@@ -710,7 +701,7 @@ function datasetQualityMessages(item: DatasetSummary) {
               </el-select>
             </div>
             <el-button type="primary" :loading="datasetCompareLoading" @click="compareDatasets">
-              开始对比
+              开始分析
             </el-button>
           </div>
 

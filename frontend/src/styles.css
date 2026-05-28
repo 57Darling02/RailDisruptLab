@@ -6,8 +6,16 @@ body,
 }
 
 body {
+  --r2g-radius: 12px;
+  --el-border-radius-base: var(--r2g-radius);
+  --el-card-border-radius: var(--r2g-radius);
+  --el-dialog-border-radius: var(--r2g-radius);
   overflow: hidden;
   background: var(--el-bg-color-page);
+}
+
+.el-card {
+  --el-card-border-radius: var(--r2g-radius);
 }
 
 .common-layout {
@@ -48,15 +56,11 @@ body {
   min-height: 0;
 }
 
-.header-title {
-  font-size: 16px;
-  font-weight: 600;
-}
-
 .header-actions {
   display: flex;
   gap: 8px;
   align-items: center;
+  margin-left: auto;
 }
 
 .project-select {
@@ -107,6 +111,68 @@ body {
   gap: 12px;
 }
 
+.dashboard-summary-row {
+  align-items: stretch;
+}
+
+.dashboard-summary-col {
+  display: flex;
+}
+
+.dashboard-summary-col > .el-card,
+.dashboard-summary-col > .dashboard-stat-grid {
+  flex: 1;
+}
+
+.dashboard-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.plan-status-card {
+  height: 100%;
+  border-color: transparent;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.plan-status-card.is-active {
+  background: var(--el-color-success-light-9);
+  border-color: var(--el-color-success-light-5);
+}
+
+.plan-status-card.is-inactive {
+  background: var(--el-color-danger-light-9);
+  border-color: var(--el-color-danger-light-5);
+}
+
+.plan-status-card.is-clickable {
+  cursor: pointer;
+}
+
+.plan-status-card.is-clickable:hover {
+  border-color: var(--el-color-danger);
+  box-shadow: var(--el-box-shadow-light);
+  transform: translateY(-1px);
+}
+
+.compact-result {
+  --el-result-padding: 0;
+}
+
+.compact-result .el-result__icon svg {
+  width: 52px;
+  height: 52px;
+}
+
+.compact-result .el-result__title p {
+  font-size: 20px;
+  font-weight: 700;
+}
+
 .toolbar-row {
   display: flex;
   align-items: center;
@@ -117,13 +183,61 @@ body {
 .inline-control {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
+}
+
+.inline-control > span,
+.control-label {
+  flex: 0 0 auto;
+  color: var(--el-text-color-primary);
+  font-size: 15px;
   font-weight: 600;
+  line-height: 32px;
 }
 
 .toolbar-select {
-  width: 280px;
+  width: min(320px, 42vw);
+}
+
+.select-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.select-option-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.select-option-delete {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.primary-empty-panel {
+  display: flex;
+  min-height: 420px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+}
+
+.primary-empty-title {
+  margin-bottom: 16px;
+  color: var(--el-text-color-primary);
+  font-size: 24px;
+  font-weight: 700;
 }
 
 .activation-result {

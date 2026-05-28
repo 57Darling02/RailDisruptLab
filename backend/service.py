@@ -9,10 +9,12 @@ from typing import Any, Dict, List, Optional, Union
 from backend.analysis.dataset import read_dataset_solve_analysis
 from backend.analysis.scenario_set import read_scenario_set_visualization
 from backend.analysis.timetable import read_case_timetable, read_plan_timetable
+from backend.lifecycle import delete_dataset, delete_model, delete_scenario_set, ensure_no_active_reference
 from backend.pueue_client import PueueClient
 from backend.repository import ProjectRepository
 from backend.scenarios import read_scenario_options
 from backend.task_contracts import TASK_DEFAULTS, normalize_project_id, normalize_task_params
+from backend.task_resources import ensure_no_active_conflict
 from core.project_layout import PROJECTS_ROOT, REPO_ROOT, sanitize_id, to_posix
 
 
@@ -61,6 +63,27 @@ class RailGraphBackend:
     def save_source_file(self, project_id: str, filename: str, content: bytes) -> str:
         return to_posix(self.repository.save_source_file(project_id, filename, content))
 
+    def activate_plan(
+        self,
+        project_id: str,
+        *,
+        timetable_filename: str,
+        timetable_content: bytes,
+        mileage_filename: str,
+        mileage_content: bytes,
+        timetable_sheet_name: str = TASK_DEFAULTS["prepare"]["timetable_sheet_name"],
+        mileage_sheet_name: str = TASK_DEFAULTS["prepare"]["mileage_sheet_name"],
+    ) -> Dict[str, object]:
+        timetable_path = self.repository.save_source_file(project_id, timetable_filename, timetable_content)
+        mileage_path = self.repository.save_source_file(project_id, mileage_filename, mileage_content)
+        return self.prepare(
+            project_id,
+            timetable_filename=timetable_path.name,
+            mileage_filename=mileage_path.name,
+            timetable_sheet_name=timetable_sheet_name,
+            mileage_sheet_name=mileage_sheet_name,
+        )
+
     def read_case_timetable(self, project_id: str, dataset_id: str, case_id: str) -> Dict[str, object]:
         return read_case_timetable(self.repository.layout(project_id), dataset_id, case_id)
 
@@ -81,6 +104,17 @@ class RailGraphBackend:
 
     def list_model_files(self, project_id: str, model_id: str) -> List[Dict[str, object]]:
         return self.repository.list_model_files(project_id, model_id)
+
+    def delete_model(self, project_id: str, model_id: str) -> Dict[str, object]:
+        project_id = normalize_project_id(project_id)
+        model_id = sanitize_id(model_id)
+        ensure_no_active_reference(
+            self.tasks.list_tasks(group=project_id),
+            field="model_id",
+            value=model_id,
+            action_labels=("train", "generation"),
+        )
+        return delete_model(self.repository.layout(project_id), model_id)
 
     def list_tasks(self, project_id: Optional[str] = None) -> List[Dict[str, object]]:
         return self.tasks.list_tasks(group=project_id)
@@ -120,6 +154,25 @@ class RailGraphBackend:
             {"scenario_set_id": scenario_set_id, "exist_ok": exist_ok},
             label="scenario_set_create",
         )
+
+    def delete_scenario_set(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
+        project_id = normalize_project_id(project_id)
+        scenario_set_id = sanitize_id(scenario_set_id)
+        ensure_no_active_reference(
+            self.tasks.list_tasks(group=project_id),
+            field="scenario_set_id",
+            value=scenario_set_id,
+            action_labels=(
+                "scenario_set_create",
+                "normal_generate",
+                "scenario_add",
+                "scenario_delete",
+                "build",
+                "train",
+                "generation",
+            ),
+        )
+        return delete_scenario_set(self.repository.layout(project_id), scenario_set_id)
 
     def add_scenario(
         self,
@@ -209,6 +262,17 @@ class RailGraphBackend:
             {"dataset_id": dataset_id, "exist_ok": exist_ok},
             label="dataset_create",
         )
+
+    def delete_dataset(self, project_id: str, dataset_id: str) -> Dict[str, object]:
+        project_id = normalize_project_id(project_id)
+        dataset_id = sanitize_id(dataset_id)
+        ensure_no_active_reference(
+            self.tasks.list_tasks(group=project_id),
+            field="dataset_id",
+            value=dataset_id,
+            action_labels=("dataset_create", "build", "solve", "export_timetable"),
+        )
+        return delete_dataset(self.repository.layout(project_id), dataset_id)
 
     def build(
         self,
@@ -381,6 +445,11 @@ class RailGraphBackend:
     ) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
         params = normalize_task_params(action, params)
+        ensure_no_active_conflict(
+            self.tasks.list_tasks(group=project_id),
+            action=action,
+            params=params,
+        )
         task_input = self._write_task_input(project_id, action, params)
         return self.tasks.submit_runner(project_id, task_input, label=label)
 

@@ -14,6 +14,7 @@ defineEmits<{
   'update:selectedDatasetId': [value: string]
   reloadDatasets: [visible: boolean]
   createDataset: []
+  deleteDataset: [datasetId: string]
   refreshArtifacts: []
   buildDataset: []
   solveAll: []
@@ -30,11 +31,11 @@ defineEmits<{
       <el-card shadow="never">
         <div class="toolbar-row">
           <div class="inline-control">
-            <span>MILP 数据集：</span>
+            <span>MILP 实例集：</span>
             <el-select
               :model-value="selectedDatasetId"
               filterable
-              placeholder="选择 MILP 数据集"
+              placeholder="选择 MILP 实例集"
               class="toolbar-select"
               @update:model-value="$emit('update:selectedDatasetId', $event)"
               @visible-change="$emit('reloadDatasets', $event)"
@@ -44,24 +45,49 @@ defineEmits<{
                 :key="item.dataset_id"
                 :label="item.dataset_id"
                 :value="item.dataset_id"
-              />
+              >
+                <div class="select-option-row">
+                  <span class="select-option-main">{{ item.dataset_id }}</span>
+                  <el-button
+                    class="select-option-delete"
+                    link
+                    type="danger"
+                    aria-label="删除 MILP 实例集"
+                    @click.stop.prevent="$emit('deleteDataset', item.dataset_id)"
+                  >
+                    x
+                  </el-button>
+                </div>
+              </el-option>
             </el-select>
-            <el-button circle @click="$emit('createDataset')">+</el-button>
+            <el-button @click="$emit('createDataset')">新增</el-button>
           </div>
         </div>
       </el-card>
 
+      <div v-if="!datasets.length" class="primary-empty-panel">
+        <el-empty :image-size="120">
+          <template #description>
+            <div class="primary-empty-title">请先新建MILP实例集</div>
+          </template>
+          <el-button type="primary" size="large" @click="$emit('createDataset')">
+            新建MILP实例集
+          </el-button>
+        </el-empty>
+      </div>
+
+      <div v-else class="page-stack">
       <el-card shadow="never">
         <template #header>
           <div class="card-header">
-            <span>MILP 数据集信息</span>
+            <span>MILP 实例集信息</span>
             <el-button @click="$emit('refreshArtifacts')">刷新</el-button>
           </div>
         </template>
-        <el-empty v-if="!selectedDatasetId" description="请选择或新增 MILP 数据集" />
+        <el-empty v-if="!selectedDatasetId" description="请选择或新增 MILP 实例集" />
         <template v-else>
           <el-descriptions :column="2" border size="small">
-            <el-descriptions-item label="MILP 数据集 ID">
+            <el-descriptions-item label="MILP 实例集 ID">
               {{ selectedDatasetId }}
             </el-descriptions-item>
             <el-descriptions-item label="场景数">
@@ -150,6 +176,7 @@ defineEmits<{
           </el-table>
         </el-scrollbar>
       </el-card>
+      </div>
     </div>
   </section>
 </template>

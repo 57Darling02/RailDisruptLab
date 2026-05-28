@@ -23,6 +23,7 @@ defineEmits<{
   'update:selectedScenarioSetId': [value: string]
   reloadScenarioSets: [visible: boolean]
   createScenarioSet: []
+  deleteScenarioSet: [scenarioSetId: string]
   normalGenerate: []
   createScenario: []
   deleteScenario: [scenarioId: string]
@@ -167,34 +168,61 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
 <template>
   <section class="page-layout">
     <div class="page-stack">
-      <el-card
-        v-loading="loading"
-        element-loading-text="正在加载场景集合数据..."
-        shadow="never"
-      >
-        <template #header>
-          <div class="card-header">
-            <div class="inline-control">
-              <span>场景集合：</span>
-              <el-select
-                :model-value="selectedScenarioSetId"
-                placeholder="选择场景集合"
-                class="toolbar-select"
-                @update:model-value="$emit('update:selectedScenarioSetId', $event)"
-                @visible-change="$emit('reloadScenarioSets', $event)"
+      <el-card shadow="never">
+        <div class="toolbar-row">
+          <div class="inline-control">
+            <span>扰动场景集：</span>
+            <el-select
+              :model-value="selectedScenarioSetId"
+              placeholder="选择扰动场景集"
+              class="toolbar-select"
+              @update:model-value="$emit('update:selectedScenarioSetId', $event)"
+              @visible-change="$emit('reloadScenarioSets', $event)"
+            >
+              <el-option
+                v-for="item in scenarioSets"
+                :key="item.scenario_set_id"
+                :label="`${item.scenario_set_id} (${item.case_count})`"
+                :value="item.scenario_set_id"
               >
-                <el-option
-                  v-for="item in scenarioSets"
-                  :key="item.scenario_set_id"
-                  :label="`${item.scenario_set_id} (${item.case_count})`"
-                  :value="item.scenario_set_id"
-                />
-              </el-select>
-              <el-button circle @click="$emit('createScenarioSet')">+</el-button>
-            </div>
+                <div class="select-option-row">
+                  <span class="select-option-main">
+                    {{ item.scenario_set_id }} ({{ item.case_count }})
+                  </span>
+                  <el-button
+                    class="select-option-delete"
+                    link
+                    type="danger"
+                    aria-label="删除扰动场景集"
+                    @click.stop.prevent="$emit('deleteScenarioSet', item.scenario_set_id)"
+                  >
+                    x
+                  </el-button>
+                </div>
+              </el-option>
+            </el-select>
+            <el-button @click="$emit('createScenarioSet')">新增</el-button>
           </div>
-        </template>
+        </div>
+      </el-card>
 
+      <div v-if="!scenarioSets.length" class="primary-empty-panel">
+        <el-empty :image-size="120">
+          <template #description>
+            <div class="primary-empty-title">请先新建扰动场景集</div>
+          </template>
+          <el-button type="primary" size="large" @click="$emit('createScenarioSet')">
+            新建扰动场景集
+          </el-button>
+        </el-empty>
+      </div>
+
+      <div
+        v-else
+        v-loading="loading"
+        class="page-stack"
+        element-loading-text="正在加载扰动场景集数据..."
+      >
         <el-row class="scenario-stat-row" :gutter="16">
           <el-col :span="6">
             <el-card shadow="never">
@@ -279,7 +307,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
           <template #header>
             <div class="card-header">
               <div>
-                <span>当前场景集合内的场景</span>
+                <span>当前扰动场景集内的场景</span>
                 <span v-if="selectedScenarioSetId" class="scenario-set-context">
                   {{ selectedScenarioSetId }}
                 </span>
@@ -336,7 +364,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
             </el-table>
           </el-scrollbar>
         </el-card>
-      </el-card>
+      </div>
     </div>
   </section>
 </template>
