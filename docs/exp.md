@@ -1,4 +1,4 @@
-# RailGraph2Gurobi 实验平台流程
+# RailDisruptLab 实验平台流程
 
 本项目的主要入口是可视化界面。CLI 保留为 backend 调度 core 的机器接口和必要的调试入口，不作为主要用户操作方式。
 

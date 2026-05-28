@@ -6,16 +6,16 @@ body,
 }
 
 body {
-  --r2g-radius: 12px;
-  --el-border-radius-base: var(--r2g-radius);
-  --el-card-border-radius: var(--r2g-radius);
-  --el-dialog-border-radius: var(--r2g-radius);
+  --rdl-radius: 12px;
+  --el-border-radius-base: var(--rdl-radius);
+  --el-card-border-radius: var(--rdl-radius);
+  --el-dialog-border-radius: var(--rdl-radius);
   overflow: hidden;
   background: var(--el-bg-color-page);
 }
 
 .el-card {
-  --el-card-border-radius: var(--r2g-radius);
+  --el-card-border-radius: var(--rdl-radius);
 }
 
 .common-layout {

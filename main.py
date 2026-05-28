@@ -12,12 +12,12 @@ from core.project_layout import REPO_ROOT
 FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
-TASK_PARALLEL_ENV = "R2G_TASK_PARALLEL"
+TASK_PARALLEL_ENV = "RDL_TASK_PARALLEL"
 TASK_PARALLEL = 8
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the RailGraph2Gurobi backend.")
+    parser = argparse.ArgumentParser(description="Run the RailDisruptLab backend.")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()

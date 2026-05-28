@@ -38,7 +38,7 @@ from core.workflow.service import (
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     if len(argv) >= 1 and argv[0] in {"newproject", "deleteproject"}:
-        parser = argparse.ArgumentParser(description="Manage a RailGraph2Gurobi project sandbox.")
+        parser = argparse.ArgumentParser(description="Manage a RailDisruptLab project sandbox.")
         parser.add_argument("command", choices=["newproject", "deleteproject"])
         parser.add_argument("projectid")
         parser.add_argument("--force", action="store_true")

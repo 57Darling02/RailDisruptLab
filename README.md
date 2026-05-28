@@ -1,6 +1,6 @@
-# RailGraph2Gurobi
+# RailDisruptLab
 
-RailGraph2Gurobi 是一个按 project 沙箱组织的铁路扰动 MILP 实验平台。
+RailDisruptLab 是一个按 project 沙箱组织的铁路扰动 MILP 实验平台。
 
 当前主入口是 FastAPI + Vue 可视化界面；CLI 保留为 backend 调度 core 的机器接口和开发调试入口。
 
@@ -61,7 +61,7 @@ context.json + scenario_sets/<scenario_set_id>/
 
 ```bash
 conda env create -f environment.yml
-conda activate r2g
+conda activate rdl
 ```
 
 启动后端：

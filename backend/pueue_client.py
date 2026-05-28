@@ -18,7 +18,7 @@ class PueueError(RuntimeError):
 
 
 DEFAULT_GROUP_PARALLEL = 4
-TASK_PARALLEL_ENV = "R2G_TASK_PARALLEL"
+TASK_PARALLEL_ENV = "RDL_TASK_PARALLEL"
 
 
 class PueueClient:

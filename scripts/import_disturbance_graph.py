@@ -25,7 +25,7 @@ def _require_yaml() -> Any:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Import a disturbance graph JSON as a RailGraph2Gurobi config.")
+    parser = argparse.ArgumentParser(description="Import a disturbance graph JSON as a RailDisruptLab config.")
     parser.add_argument("--graph", required=True, help="Source disturbance graph JSON.")
     parser.add_argument("--base-config", required=True, help="Config that provides solver/analyze defaults.")
     parser.add_argument("--output-config", required=True, help="Output YAML config.")

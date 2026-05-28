@@ -1628,7 +1628,7 @@ function notifyError(error: unknown) {
   <div class="common-layout">
     <el-container>
       <el-aside width="220px" class="app-aside">
-        <div class="brand">RailGraph2Gurobi</div>
+        <div class="brand">RailDisruptLab</div>
         <el-menu :default-active="activePage" @select="selectPage">
           <el-menu-item index="dashboard">仪表盘</el-menu-item>
           <el-menu-item index="scenarios">构建扰动场景</el-menu-item>

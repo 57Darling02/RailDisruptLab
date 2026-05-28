@@ -35,7 +35,7 @@ def _require_yaml() -> Any:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Batch decode VAE generated math graphs and import them as RailGraph2Gurobi configs."
+        description="Batch decode VAE generated math graphs and import them as RailDisruptLab configs."
     )
     parser.add_argument("--generated-graphs", required=True, help="Generated graph JSON file or directory.")
     parser.add_argument("--glob", default="*.json", help="Glob used when --generated-graphs is a directory.")

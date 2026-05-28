@@ -125,8 +125,8 @@ class GenerationRequest(BaseModel):
 
 
 backend = RailGraphBackend()
-api = FastAPI(title="RailGraph2Gurobi API")
-app = FastAPI(title="RailGraph2Gurobi")
+api = FastAPI(title="RailDisruptLab API")
+app = FastAPI(title="RailDisruptLab")
 
 
 @app.on_event("startup")
