@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { ScrollbarInstance, UploadFile } from 'element-plus'
+import type { ScrollbarInstance, UploadFile, UploadUserFile } from 'element-plus'
 
 import { api, ApiError } from '@/api/client'
 import FieldLabelTip from '@/components/FieldLabelTip.vue'
@@ -172,6 +172,8 @@ const projectDialogVisible = ref(false)
 const newProjectId = ref('')
 
 const prepareDialogVisible = ref(false)
+const prepareTimetableFiles = ref<UploadUserFile[]>([])
+const prepareMileageFiles = ref<UploadUserFile[]>([])
 const prepareForm = ref({
   timetable_file: null as File | null,
   mileage_file: null as File | null,
@@ -294,6 +296,7 @@ const doneTaskCount = computed(() => projectTasks.value.filter(isTaskSuccessful)
 const failedTaskCount = computed(() => projectTasks.value.filter(isTaskFailed).length)
 
 watch(selectedProjectId, async (_projectId, previousProjectId) => {
+  resetPrepareForm()
   if (previousProjectId) {
     selectedScenarioSetId.value = ''
     selectedDatasetId.value = ''
@@ -502,6 +505,7 @@ async function removeSelectedProject() {
 }
 
 function openPrepareDialog() {
+  resetPrepareForm()
   prepareDialogVisible.value = true
 }
 
@@ -521,8 +525,7 @@ async function submitPrepare() {
     trackTask(response.task)
     planTimetable.value = null
     prepareDialogVisible.value = false
-    prepareForm.value.timetable_file = null
-    prepareForm.value.mileage_file = null
+    resetPrepareForm()
   })
 }
 
@@ -1567,6 +1570,17 @@ async function scrollMainToTop() {
   mainScrollbar.value?.setScrollTop(0)
 }
 
+function resetPrepareForm() {
+  prepareForm.value = {
+    timetable_file: null,
+    mileage_file: null,
+    timetable_sheet_name: 'Sheet1',
+    mileage_sheet_name: 'Sheet1',
+  }
+  prepareTimetableFiles.value = []
+  prepareMileageFiles.value = []
+}
+
 function setPrepareFile(kind: 'timetable_file' | 'mileage_file', file: UploadFile) {
   if (file.raw) prepareForm.value[kind] = file.raw
 }
@@ -1781,6 +1795,7 @@ function notifyError(error: unknown) {
       <el-form label-width="140px">
         <el-form-item label="时刻表文件">
           <el-upload
+            v-model:file-list="prepareTimetableFiles"
             :auto-upload="false"
             :limit="1"
             :on-change="setTimetableFile"
@@ -1791,6 +1806,7 @@ function notifyError(error: unknown) {
         </el-form-item>
         <el-form-item label="里程表文件">
           <el-upload
+            v-model:file-list="prepareMileageFiles"
             :auto-upload="false"
             :limit="1"
             :on-change="setMileageFile"
