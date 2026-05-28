@@ -1,16 +1,16 @@
 # RailDisruptLab
 
-RailDisruptLab 是一个按 project 沙箱组织的铁路扰动 MILP 实验平台。
+RailDisruptLab 是一个面向铁路运行扰动场景的实验平台，用于构造扰动场景、生成 MILP 实例、调度求解任务、训练扰动生成模型，并在 Web 界面中完成可视化分析。
 
-当前主入口是 FastAPI + Vue 可视化界面；CLI 保留为 backend 调度 core 的机器接口和开发调试入口。
+项目以 FastAPI + Vue 作为主要交互入口。CLI 保留为 backend 调度 core 的机器接口和开发调试入口。
 
 ## 架构
 
-- `core`：铁路原计划、场景消费、MILP、求解、模型训练和生成解码的原子算法能力。
+- `core`：铁路原计划建模、扰动场景消费、MILP 构建、求解、模型训练和生成解码等原子算法能力。
 - `backend`：FastAPI、Pueue 任务队列、任务快照、日志、项目数据读取和场景构造。
-- `frontend`：交互、状态展示和图形化分析。
+- `frontend`：项目交互、任务监控、状态展示和图形化分析。
 
-核心约定是参数显式传递。项目运行不依赖 `build.yml`、`solve.yml`、`train.yml` 等隐藏配置文件；前端提交的参数由 backend 写入任务快照：
+每次实验操作都由 Web 表单或 API 请求显式提交参数。backend 会为任务保存一份输入快照，便于追踪、复现和查看日志：
 
 ```text
 var/tasks/<projectid>/<timestamp>_<action>/input.json
@@ -25,8 +25,7 @@ python -m backend.runner <input.json>
 ## 项目数据流
 
 仓库不提交任何 `projects/` 沙箱。启动 Web 后，通过右上角“新建”创建 project，
-再在页面表单中上传数据、选择参数并提交任务。所有参数由 backend 写入
-`var/tasks/<projectid>/<timestamp>_<action>/input.json`，不需要维护 demo 配置文件。
+再在页面表单中上传数据、选择参数并提交任务。每个 project 的输入、场景、实例、模型和分析产物都保存在独立目录中。
 
 ```text
 projects/<projectid>/
@@ -40,7 +39,7 @@ projects/<projectid>/
 主实验流程：
 
 ```text
-source files
+timetable / mileage files
   -> context.json
   -> scenario_sets/<scenario_set_id>/*.yml
   -> datasets/<dataset_id>/cases/<case_id>/<case_id>.lp
@@ -80,11 +79,10 @@ http://127.0.0.1:8000/api/docs
 首次使用：
 
 1. 在 Web 右上角新建 project。
-2. 在仪表盘上传时刻表和里程表。
-3. 点击“激活”原计划运行图，选择文件和 sheet 名称。
-4. 在场景集合页新建或批量生成场景。
-5. 在数据集页新建 MILP 数据集，选择场景或场景集合构建。
-6. 按需求解、导出时刻表、训练模型和生成新场景。
+2. 在仪表盘点击“原计划运行图”状态卡，上传时刻表和里程表并激活。
+3. 在“构建扰动场景”页新建或批量生成扰动场景集。
+4. 在“构建MILP实例”页新建实例集，并选择场景或场景集构建。
+5. 按需求解、导出时刻表、训练扰动生成模型和生成新场景。
 
 前端开发：
 
