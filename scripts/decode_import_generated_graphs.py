@@ -350,10 +350,6 @@ def _config_payload(
             "sol_path": "",
         },
         "analyze": {
-            "enable_metrics": defaults.analyze.enable_metrics,
-            "enable_plot": defaults.analyze.enable_plot,
-            "plot_grid": defaults.analyze.plot_grid,
-            "plot_title": defaults.analyze.plot_title,
             "adj_timetable_path": "",
             "adj_timetable_sheet_name": defaults.analyze.adjusted_timetable_sheet_name,
         },

@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 MATH_CONTEXT_GRAPH_TYPE = "vae_math_context_graph"
 MATH_LEARNING_SAMPLE_TYPE = "vae_math_learning_sample"
 MATH_GENERATED_GRAPH_TYPE = "vae_math_generated_graph"
-CONTEXT_FILENAME = "context.json"
+MATH_CONTEXT_FILENAME = "math_context.json"
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ class RailDisturbanceDataset(Dataset):
         self.graph_root = Path(graph_root)
         self.context_payload = _load_library_context(self.graph_root)
         if self.context_payload is None:
-            raise FileNotFoundError(f"Missing {CONTEXT_FILENAME}: {self.graph_root}")
+            raise FileNotFoundError(f"Missing {MATH_CONTEXT_FILENAME}: {self.graph_root}")
         self.files = list_learning_sample_files(self.graph_root)
         if num_instances is not None:
             self.files = self.files[:num_instances]
@@ -149,8 +149,8 @@ def list_context_graph_files(root: Union[str, Path]) -> List[Path]:
     root_path = Path(root)
     if root_path.is_file():
         candidates = [root_path]
-    elif (root_path / CONTEXT_FILENAME).is_file():
-        candidates = [root_path / CONTEXT_FILENAME]
+    elif (root_path / MATH_CONTEXT_FILENAME).is_file():
+        candidates = [root_path / MATH_CONTEXT_FILENAME]
     else:
         candidates = []
     return [path for path in candidates if path.is_file() and _is_math_context_graph(path)]
@@ -260,7 +260,7 @@ def _load_library_context(root: Path) -> Optional[Dict[str, object]]:
         if payload.get("graph_type") == MATH_CONTEXT_GRAPH_TYPE:
             return payload
         return None
-    context_path = root / CONTEXT_FILENAME
+    context_path = root / MATH_CONTEXT_FILENAME
     if context_path.is_file():
         return load_context_graph(context_path)
     return None

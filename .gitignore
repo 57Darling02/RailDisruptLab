@@ -1,70 +1,38 @@
-# Python bytecode and caches
+# Python caches
 __pycache__/
 *.py[cod]
-*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
-# Virtual environments
+# Python environments and packaging
 .venv/
 venv/
 env/
 ENV/
-
-# Build and packaging artifacts
-build/
-dist/
 *.egg-info/
 .eggs/
-pip-wheel-metadata/
+build/
+dist/
 
-# Test and coverage
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
+# Frontend dependencies and build output
+node_modules/
+frontend/node_modules/
+frontend/dist/
 
-# Type checker / linter caches
-.mypy_cache/
-.ruff_cache/
-.pyre/
+# Runtime task and experiment outputs
+var/
+outputs/
+*.log
+*.tmp
 
-# Notebook and IPython
-.ipynb_checkpoints/
-
-# Local IDE/editor files
+# Local editor and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS files
 .DS_Store
 Thumbs.db
 
-# Project runtime outputs
-outputs/
-/projects/*
-!/projects/demo/
-!/projects/demo/conf/
-!/projects/demo/conf/**
-!/projects/demo/scenario_sets/
-/projects/demo/scenario_sets/*
-!/projects/demo/scenario_sets/default/
-!/projects/demo/scenario_sets/default/**
-!/projects/demo/source/
-!/projects/demo/source/.gitkeep
-/projects/demo/source/*
-!/projects/demo/source/.gitkeep
-/projects/demo/context.json
-/projects/demo/datasets/
-/projects/demo/model/
-/projects/demo/logs/
-/projects/demo/imports/
-/projects/demo/cases/
-
-# Optional local data dumps/logs
-*.log
-*.tmp
-
-test_*.py
-*_test.py
-*.test.py
+# Project sandboxes are runtime data.
+/projects/

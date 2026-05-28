@@ -298,8 +298,6 @@ def load_config_payload(payload: Dict[str, object], owner_path: Path, yaml: Any 
     lp_default_path = output_dir / f"{case_name}.lp"
     solution_default_path = output_dir / f"{case_name}.sol"
     adjusted_default_path = output_dir / "adjusted_timetable.xlsx"
-    metrics_default_path = output_dir / "analysis_metrics.xlsx"
-    plot_default_path = output_dir / "timetable_plot.png"
 
     scenarios_cfg = load_scenarios_for_config(build_cfg.get("scenarios", {}) or {}, config_path, yaml)
     if "interruptions" in scenarios_cfg:
@@ -330,9 +328,63 @@ def load_config_payload(payload: Dict[str, object], owner_path: Path, yaml: Any 
         analyze_cfg.get("adj_timetable_sheet_name", analyze_cfg.get("adjusted_timetable_sheet_name")),
         "Sheet1",
     )
-    metrics_output_path = _path_or_default(analyze_cfg.get("metrics_output_path"), metrics_default_path, config_path)
-    plot_output_path = _path_or_default(analyze_cfg.get("plot_output_path"), plot_default_path, config_path)
 
+    scenarios = parse_scenario_config(scenarios_cfg, base_context)
+
+    objective_mode_raw = str(_solve_value("objective_mode", "abs")).strip()
+    cancellation_default = False
+    objective_mode = objective_mode_raw
+    if objective_mode_raw == "cal_delay_plus_cancel":
+        # Compatibility alias: old mixed mode now maps to
+        # abs objective + independent cancellation switch.
+        objective_mode = "abs"
+        cancellation_default = True
+
+    return AppConfig(
+        project=ProjectConfig(name=case_name, output_dir=output_dir, base_context_path=base_context_path),
+        input=InputConfig(
+            timetable_path=base_context.source_timetable_path,
+            mileage_path=base_context.source_mileage_path,
+            timetable_sheet_name=base_context.timetable_sheet_name,
+            mileage_sheet_name=base_context.mileage_sheet_name,
+        ),
+        solver=SolverConfig(
+            objective_delay_weight=float(_solve_value("objective_delay_weight", 1.0)),
+            objective_mode=objective_mode,
+            cancellation_enabled=_bool_or_default(
+                _solve_value("cancellation_enabled", cancellation_default),
+                cancellation_default,
+            ),
+            cancellation_penalty_weight=float(
+                _solve_value("cancellation_penalty_weight", 1000.0)
+            ),
+            arr_arr_headway_seconds=int(_solve_value("arr_arr_headway_seconds", 180)),
+            dep_dep_headway_seconds=int(_solve_value("dep_dep_headway_seconds", 180)),
+            dwell_seconds_at_stops=int(_solve_value("dwell_seconds_at_stops", 120)),
+            big_m=int(_solve_value("big_m", 100000)),
+            tolerance_delay_seconds=int(
+                _solve_value(
+                    "cancellation_threshold_seconds",
+                    _solve_value("tolerance_delay_seconds", 2 * 3600),
+                )
+            ),
+        ),
+        scenarios=scenarios,
+        build=BuildConfig(lp_path=lp_default_path),
+        solve=SolveConfig(lp_path=solve_lp_path, solution_path=solution_default_path),
+        export_timetable=ExportTimetableConfig(
+            solution_path=export_solution_path,
+            timetable_path=adjusted_default_path,
+        ),
+        analyze=AnalyzeConfig(
+            adjusted_timetable_path=adjusted_timetable_path,
+            adjusted_timetable_sheet_name=adjusted_timetable_sheet_name,
+        ),
+        base_context=base_context,
+    )
+
+
+def parse_scenario_config(scenarios_cfg: Dict[str, object], base_context: BaseContext) -> ScenarioConfig:
     delays = []
     for item in scenarios_cfg.get("delays", []):
         anchor = _resolve_event_anchor(item, base_context)
@@ -376,70 +428,7 @@ def load_config_payload(payload: Dict[str, object], owner_path: Path, yaml: Any 
                 limit_speed=limit_speed,
             )
         )
-
-    objective_mode_raw = str(_solve_value("objective_mode", "abs")).strip()
-    cancellation_default = False
-    objective_mode = objective_mode_raw
-    if objective_mode_raw == "cal_delay_plus_cancel":
-        # Compatibility alias: old mixed mode now maps to
-        # abs objective + independent cancellation switch.
-        objective_mode = "abs"
-        cancellation_default = True
-
-    return AppConfig(
-        project=ProjectConfig(name=case_name, output_dir=output_dir, base_context_path=base_context_path),
-        input=InputConfig(
-            timetable_path=base_context.source_timetable_path,
-            mileage_path=base_context.source_mileage_path,
-            timetable_sheet_name=base_context.timetable_sheet_name,
-            mileage_sheet_name=base_context.mileage_sheet_name,
-        ),
-        solver=SolverConfig(
-            objective_delay_weight=float(_solve_value("objective_delay_weight", 1.0)),
-            objective_mode=objective_mode,
-            cancellation_enabled=_bool_or_default(
-                _solve_value("cancellation_enabled", cancellation_default),
-                cancellation_default,
-            ),
-            cancellation_penalty_weight=float(
-                _solve_value("cancellation_penalty_weight", 1000.0)
-            ),
-            arr_arr_headway_seconds=int(_solve_value("arr_arr_headway_seconds", 180)),
-            dep_dep_headway_seconds=int(_solve_value("dep_dep_headway_seconds", 180)),
-            dwell_seconds_at_stops=int(_solve_value("dwell_seconds_at_stops", 120)),
-            big_m=int(_solve_value("big_m", 100000)),
-            tolerance_delay_seconds=int(
-                _solve_value(
-                    "cancellation_threshold_seconds",
-                    _solve_value("tolerance_delay_seconds", 2 * 3600),
-                )
-            ),
-        ),
-        scenarios=ScenarioConfig(
-            delays=delays,
-            speed_limits=speed_limits,
-        ),
-        build=BuildConfig(lp_path=lp_default_path),
-        solve=SolveConfig(lp_path=solve_lp_path, solution_path=solution_default_path),
-        export_timetable=ExportTimetableConfig(
-            solution_path=export_solution_path,
-            timetable_path=adjusted_default_path,
-        ),
-        analyze=AnalyzeConfig(
-            enable_metrics=bool(analyze_cfg.get("enable_metrics", False)),
-            enable_plot=bool(analyze_cfg.get("enable_plot", False)),
-            plot_grid=bool(analyze_cfg.get("plot_grid", False)),
-            plot_title=str(analyze_cfg.get("plot_title", "Train Timetable")),
-            plan_timetable_path=base_context.source_timetable_path,
-            plan_timetable_sheet_name=base_context.timetable_sheet_name,
-            adjusted_timetable_path=adjusted_timetable_path,
-            adjusted_timetable_sheet_name=adjusted_timetable_sheet_name,
-            metrics_output_path=metrics_output_path,
-            plot_output_path=plot_output_path,
-            plot_timetable_path=adjusted_timetable_path,
-        ),
-        base_context=base_context,
-    )
+    return ScenarioConfig(delays=delays, speed_limits=speed_limits)
 
 
 def load_timetable(path: Path, sheet_name: str) -> RawTable:

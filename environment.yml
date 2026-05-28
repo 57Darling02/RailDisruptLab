@@ -1,0 +1,24 @@
+name: r2g
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pueue=4.0.4
+  - fastapi=0.136.3
+  - uvicorn=0.48.0
+  - uvicorn-standard=0.48.0
+  - python-multipart=0.0.29
+  - pyyaml=6.0.3
+  - openpyxl=3.1.5
+  - matplotlib-base=3.10.9
+  - numpy=2.2.6
+  - scipy=1.15.2
+  - pandas=2.3.3
+  - tqdm=4.67.3
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu118
+      - gurobipy==10.0.3
+      - torch==2.5.1+cu118
+      - torchvision==0.20.1+cu118
+      - torchaudio==2.5.1+cu118

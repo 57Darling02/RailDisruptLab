@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from core.types import EventKey, TranslatedData
 
@@ -134,24 +134,47 @@ def export_adjusted_timetable(
     translated: TranslatedData,
     values: Dict[str, float],
     output_path: Path,
-) -> None:
+) -> List[Dict[str, object]]:
     try:
         from openpyxl import Workbook
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("Missing dependency: openpyxl") from exc
 
-    event_id = {event_key: f"e{idx}" for idx, event_key in enumerate(translated.event_keys, start=1)}
-    legacy_event_time = _build_legacy_event_time_map(values)
-    canceled_train_ids = _build_canceled_train_ids(
-        translated,
-        _build_cancellation_map(values, event_id),
-    )
+    rows = adjusted_timetable_rows(translated, values)
 
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Sheet1"
     worksheet.append(["train_id", "station", "arrival_time", "departure_time", "is_canceled"])
 
+    for row in rows:
+        worksheet.append(
+            [
+                row["train_id"],
+                row["station"],
+                row["arrival_time"],
+                row["departure_time"],
+                int(bool(row["is_canceled"])),
+            ]
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
+    return rows
+
+
+def adjusted_timetable_rows(
+    translated: TranslatedData,
+    values: Dict[str, float],
+) -> List[Dict[str, object]]:
+    event_id = {event_key: f"e{idx}" for idx, event_key in enumerate(translated.event_keys, start=1)}
+    legacy_event_time = _build_legacy_event_time_map(values)
+    canceled_train_ids = _build_canceled_train_ids(
+        translated,
+        _build_cancellation_map(values, event_id),
+    )
+    rows: List[Dict[str, object]] = []
+    row_number = 1
     for train_id in translated.train_ids:
         is_canceled = train_id in canceled_train_ids
         for station in translated.train_routes[train_id]:
@@ -165,7 +188,15 @@ def export_adjusted_timetable(
                 dep = _time_of(values, event_id, legacy_event_time, dep_key)
             if arr is None and dep is None:
                 continue
-            worksheet.append([train_id, station, arr, dep, int(is_canceled)])
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output_path)
+            rows.append(
+                {
+                    "train_id": train_id,
+                    "station": station,
+                    "arrival_time": arr,
+                    "departure_time": dep,
+                    "is_canceled": is_canceled,
+                    "row_number": row_number,
+                }
+            )
+            row_number += 1
+    return rows

@@ -10,6 +10,7 @@ from typing import Dict, List, Tuple
 MATH_CONTEXT_GRAPH_TYPE = "vae_math_context_graph"
 MATH_LEARNING_SAMPLE_TYPE = "vae_math_learning_sample"
 MATH_GENERATED_GRAPH_TYPE = "vae_math_generated_graph"
+MATH_CONTEXT_FILENAME = "math_context.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -175,7 +176,7 @@ def _target_copy_sources(root: Path) -> List[Dict[str, object]]:
             return [_target_copy_sample(context, payload)]
         raise ValueError(f"Unsupported graph_type: {payload.get('graph_type')}")
 
-    context_path = root / "context.json"
+    context_path = root / MATH_CONTEXT_FILENAME
     sample_dir = root / "samples"
     if context_path.is_file() and sample_dir.is_dir():
         context = json.loads(context_path.read_text(encoding="utf-8"))
@@ -190,7 +191,7 @@ def _target_copy_sources(root: Path) -> List[Dict[str, object]]:
 
 
 def _load_context_for_sample(sample_path: Path, sample: Dict[str, object]) -> Dict[str, object]:
-    context_ref = Path(str(sample.get("context_ref", "context.json")))
+    context_ref = Path(str(sample.get("context_ref", MATH_CONTEXT_FILENAME)))
     if context_ref.is_absolute():
         context_path = context_ref
     else:

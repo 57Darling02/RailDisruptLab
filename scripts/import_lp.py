@@ -61,9 +61,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--lp-root", default="tests/lp", help="Root folder containing *.lp files.")
     parser.add_argument("--base-config", required=True, help="Template config used as base.")
     parser.add_argument("--generated-config-root", default="tests/generated_configs_lp", help="Generated yaml root.")
-    parser.add_argument("--output-root", default="projects/demo/imports/lp/cases", help="Per-case output root.")
-    parser.add_argument("--summary-csv", default="projects/demo/imports/lp/import_lp_summary.csv", help="Import summary CSV.")
-    parser.add_argument("--summary-json", default="projects/demo/imports/lp/import_lp_summary.json", help="Import summary JSON.")
+    parser.add_argument("--output-root", default="outputs/imports/lp/cases", help="Per-case output root.")
+    parser.add_argument("--summary-csv", default="outputs/imports/lp/import_lp_summary.csv", help="Import summary CSV.")
+    parser.add_argument("--summary-json", default="outputs/imports/lp/import_lp_summary.json", help="Import summary JSON.")
     parser.add_argument("--limit", type=int, default=0, help="Only process first N lp files (0 = all).")
     parser.add_argument("--clean", action="store_true", help="Clean generated config/output roots before importing.")
     parser.add_argument(
@@ -163,8 +163,6 @@ def _build_case_config(
     payload.pop("export_timetable", None)
 
     analyze = dict(payload.get("analyze", {}))
-    analyze.setdefault("plot_grid", False)
-    analyze.setdefault("plot_title", "Train Timetable")
     analyze["adj_timetable_path"] = ""
     analyze.setdefault("adj_timetable_sheet_name", "Sheet1")
     payload["analyze"] = analyze
@@ -207,11 +205,6 @@ def _build_inference_config(
             mileage_path=base_context.source_mileage_path,
             timetable_sheet_name=base_context.timetable_sheet_name,
             mileage_sheet_name=base_context.mileage_sheet_name,
-        ),
-        analyze=replace(
-            loaded.analyze,
-            plan_timetable_path=base_context.source_timetable_path,
-            plan_timetable_sheet_name=base_context.timetable_sheet_name,
         ),
         scenarios=ScenarioConfig(delays=[], speed_limits=[]),
         base_context=base_context,
@@ -734,4 +727,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

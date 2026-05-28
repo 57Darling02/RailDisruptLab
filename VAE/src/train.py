@@ -7,26 +7,30 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Dict, List
 
 DEFAULT_OUTPUT_DIR = Path("projects/demo/model/default")
-DEFAULT_CONFIG_PATH = "projects/demo/conf/train/default.yml"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the math rail-disturbance VAE.")
-    parser.add_argument("config", nargs="?", default=DEFAULT_CONFIG_PATH, help="Training YAML config path.")
-    parser.add_argument("--graphs-root", default="", help="Override config data.graphs_root.")
-    parser.add_argument("--output-dir", default="", help="Override config output.dir.")
-    cli_args = parser.parse_args()
-    args = _load_train_config(cli_args.config)
-    if cli_args.graphs_root:
-        args.graphs_root = cli_args.graphs_root
-    if cli_args.output_dir:
-        args.output_dir = cli_args.output_dir
-    if not str(args.graphs_root).strip():
-        raise ValueError("config.train.data.graphs_root is required unless --graphs-root is provided.")
-    return args
+    parser.add_argument("--graphs-root", required=True, help="Training graph library directory.")
+    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Model output directory.")
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--hidden-dim", type=int, default=64)
+    parser.add_argument("--latent-dim", type=int, default=16)
+    parser.add_argument("--message-passing-steps", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=800)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=0.0003)
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--log-every", type=int, default=1)
+    parser.add_argument("--count-weight", type=float, default=1.0)
+    parser.add_argument("--anchor-weight", type=float, default=1.0)
+    parser.add_argument("--param-weight", type=float, default=2.0)
+    parser.add_argument("--kl-weight", type=float, default=0.0015)
+    return parser.parse_args()
 
 
 def main() -> None:
@@ -52,7 +56,10 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     _prepare_output_dir(output_dir, allowed_root=Path("projects"))
-    logger = _TrainingLogger(output_dir / "training.log")
+    logger = _TrainingLogger(
+        output_dir / "training.log",
+        loss_history_path=output_dir / "loss_history.jsonl",
+    )
     config_payload = vars(args).copy()
     config_payload["created_at"] = datetime.now().isoformat(timespec="seconds")
     config_payload["run_dir"] = str(output_dir.resolve()).replace("\\", "/")
@@ -66,18 +73,19 @@ def main() -> None:
         encoding="utf-8",
     )
     logger.log("Training started")
-    logger.log(f"config={args.config}")
     logger.log(f"graphs_root={args.graphs_root}")
     logger.log(f"run_dir={output_dir}")
     logger.log(f"samples={len(dataset)} epochs={args.epochs} batch_size={args.batch_size} device={device}")
     logger.log(f"training_config={output_dir / 'training_config.json'}")
     logger.log(f"schema_summary={output_dir / 'schema_summary.json'}")
     logger.log(f"history={output_dir / 'history.json'}")
+    logger.log(f"loss_history={output_dir / 'loss_history.jsonl'}")
     logger.log(f"best_checkpoint={output_dir / 'best_model.pt'}")
     logger.log(f"last_checkpoint={output_dir / 'last_model.pt'}")
 
     history: List[Dict[str, float]] = []
     best_metrics: Dict[str, float] | None = None
+    global_step = 0
     try:
         for epoch in range(1, args.epochs + 1):
             model.train()
@@ -121,7 +129,9 @@ def main() -> None:
                 for key, value in batch_average.items():
                     epoch_metrics[key] = epoch_metrics.get(key, 0.0) + value
                 steps += 1
+                global_step += 1
                 logger.progress(
+                    global_step=global_step,
                     epoch=epoch,
                     epochs=args.epochs,
                     step=steps,
@@ -183,60 +193,6 @@ def _save_checkpoint(model, path: Path, metrics: Dict[str, float]) -> None:
     )
 
 
-def _load_train_config(path_text: str) -> argparse.Namespace:
-    path = Path(path_text)
-    if not path.exists():
-        raise FileNotFoundError(f"Training config not found: {path}")
-    yaml = _require_yaml()
-    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(payload, dict):
-        raise ValueError(f"Training config must be a YAML object: {path}")
-    if isinstance(payload.get("train"), dict):
-        payload = payload["train"]
-    data = _section(payload, "data")
-    model = _section(payload, "model")
-    optimization = _section(payload, "optimization")
-    loss_weights = _section(payload, "loss_weights")
-    output = _section(payload, "output")
-    graphs_root = str(data.get("graphs_root", "")).strip()
-    return argparse.Namespace(
-        config=str(path),
-        graphs_root=graphs_root,
-        limit=int(data.get("limit", 0)),
-        hidden_dim=int(model.get("hidden_dim", 64)),
-        latent_dim=int(model.get("latent_dim", 32)),
-        message_passing_steps=int(model.get("message_passing_steps", 2)),
-        epochs=int(optimization.get("epochs", 3)),
-        batch_size=int(optimization.get("batch_size", 1)),
-        lr=float(optimization.get("lr", 1e-3)),
-        seed=int(optimization.get("seed", 1)),
-        device=str(optimization.get("device", "auto")),
-        log_every=int(optimization.get("log_every", 1)),
-        count_weight=float(loss_weights.get("count", 1.0)),
-        anchor_weight=float(loss_weights.get("anchor", 1.0)),
-        param_weight=float(loss_weights.get("param", 1.0)),
-        kl_weight=float(loss_weights.get("kl", 1e-3)),
-        output_dir=str(output.get("dir", DEFAULT_OUTPUT_DIR)),
-    )
-
-
-def _section(payload: Dict[str, object], name: str) -> Dict[str, object]:
-    value = payload.get(name, {})
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError(f"config.{name} must be a YAML object.")
-    return value
-
-
-def _require_yaml() -> Any:
-    try:
-        import yaml
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("Missing dependency: pyyaml") from exc
-    return yaml
-
-
 def _prepare_output_dir(path: Path, *, allowed_root: Path) -> None:
     resolved = path.resolve()
     root = allowed_root.resolve()
@@ -250,7 +206,9 @@ def _prepare_output_dir(path: Path, *, allowed_root: Path) -> None:
         "training_config.json",
         "schema_summary.json",
         "history.json",
+        "loss_history.jsonl",
         "training_summary.json",
+        "train_config.yml",
         "best_model.pt",
         "last_model.pt",
     ):
@@ -293,14 +251,16 @@ def _schema_summary(sample) -> Dict[str, object]:
 
 
 class _TrainingLogger:
-    def __init__(self, log_path: Path):
+    def __init__(self, log_path: Path, *, loss_history_path: Path):
         self.log_path = log_path
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.file = self.log_path.open("w", encoding="utf-8")
+        self.loss_file = loss_history_path.open("w", encoding="utf-8")
         self.last_progress_len = 0
 
     def close(self) -> None:
         self.file.close()
+        self.loss_file.close()
 
     def log(self, message: str) -> None:
         self._clear_progress_line()
@@ -312,6 +272,7 @@ class _TrainingLogger:
     def progress(
         self,
         *,
+        global_step: int,
         epoch: int,
         epochs: int,
         step: int,
@@ -321,12 +282,33 @@ class _TrainingLogger:
         log_every: int,
     ) -> None:
         line = _progress_line(epoch, epochs, step, total_steps, metrics, elapsed)
+        self._write_loss_point(global_step, epoch, step, total_steps, metrics, elapsed)
         sys.stdout.write("\r" + line + " " * max(0, self.last_progress_len - len(line)))
         sys.stdout.flush()
         self.last_progress_len = len(line)
         if step == total_steps or step % log_every == 0:
             self.file.write(f"{_timestamp()} {line}\n")
             self.file.flush()
+
+    def _write_loss_point(
+        self,
+        global_step: int,
+        epoch: int,
+        epoch_step: int,
+        total_steps: int,
+        metrics: Dict[str, float],
+        elapsed: float,
+    ) -> None:
+        payload: Dict[str, object] = {
+            "step": global_step,
+            "epoch": epoch,
+            "epoch_step": epoch_step,
+            "total_steps": total_steps,
+            "elapsed": elapsed,
+        }
+        payload.update({key: float(value) for key, value in metrics.items()})
+        self.loss_file.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        self.loss_file.flush()
 
     def epoch_end(self, epoch: int, epochs: int, metrics: Dict[str, float], elapsed: float) -> None:
         self._clear_progress_line()

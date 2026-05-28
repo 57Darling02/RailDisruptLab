@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Sequence, Union
 MATH_CONTEXT_GRAPH_TYPE = "vae_math_context_graph"
 MATH_LEARNING_SAMPLE_TYPE = "vae_math_learning_sample"
 MATH_GENERATED_GRAPH_TYPE = "vae_math_generated_graph"
+MATH_CONTEXT_FILENAME = "math_context.json"
 
 
 def load_json_graphs(root: Union[str, Path], graph_type: str = "") -> List[Dict[str, object]]:
@@ -17,8 +18,8 @@ def load_json_graphs(root: Union[str, Path], graph_type: str = "") -> List[Dict[
     if root_path.is_file():
         candidates = [root_path]
     else:
-        if (root_path / "context.json").is_file() and (root_path / "samples").is_dir():
-            candidates = [root_path / "context.json"] + sorted((root_path / "samples").rglob("*.json"))
+        if (root_path / MATH_CONTEXT_FILENAME).is_file() and (root_path / "samples").is_dir():
+            candidates = [root_path / MATH_CONTEXT_FILENAME] + sorted((root_path / "samples").rglob("*.json"))
         elif (root_path / "samples").is_dir():
             graph_root = root_path / "samples"
             candidates = sorted(graph_root.rglob("*.json"))

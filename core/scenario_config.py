@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.project_layout import sanitize_id
+from core.types import ScenarioConfig
+
 
 SCENARIO_EXTENSIONS = {".yaml", ".yml"}
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +54,19 @@ def scenario_files(root: Path) -> List[Path]:
     )
 
 
+def scenario_file_by_id(root: Path, scenario_id: str) -> Optional[Path]:
+    clean_id = sanitize_id(scenario_id)
+    exact_matches = [root / f"{clean_id}{suffix}" for suffix in (".yml", ".yaml")]
+    existing_exact = [path for path in exact_matches if path.is_file()]
+    if existing_exact:
+        return existing_exact[0]
+
+    matches = [path for path in scenario_files(root) if sanitize_id(path.stem) == clean_id]
+    if len(matches) > 1:
+        raise ValueError(f"Scenario id is ambiguous in {root}: {clean_id}")
+    return matches[0] if matches else None
+
+
 def load_scenario_document(path: Path, yaml: Any) -> ScenarioDocument:
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
@@ -89,6 +105,36 @@ def scenario_document_from_payload(
         },
         path=path,
     )
+
+
+def scenario_config_to_yaml(name: str, scenarios: ScenarioConfig) -> Dict[str, object]:
+    return {
+        "name": sanitize_id(name),
+        "delays": [
+            {
+                "event_anchor_id": item.event_anchor_id,
+                "seconds": int(item.seconds),
+            }
+            for item in scenarios.delays
+        ],
+        "speed_limits": [
+            {
+                "section_anchor_id": item.section_anchor_id,
+                "start_time": seconds_to_hms(item.start_time),
+                "duration": int(item.duration),
+                "limit_speed": clean_number(item.limit_speed),
+            }
+            for item in scenarios.speed_limits
+        ],
+    }
+
+
+def scenario_document_to_yaml(name: str, doc: ScenarioDocument) -> Dict[str, object]:
+    return {
+        "name": sanitize_id(name),
+        "delays": copy.deepcopy(doc.scenarios.get("delays", []) or []),
+        "speed_limits": copy.deepcopy(doc.scenarios.get("speed_limits", []) or []),
+    }
 
 
 def scenario_reference_path(value: object, owner_path: Path) -> Optional[Path]:
@@ -156,3 +202,13 @@ def _project_name(payload: Dict[str, object]) -> str:
 def _clean_name(value: object) -> str:
     text = str(value or "").strip()
     return text or "case"
+
+
+def seconds_to_hms(seconds: int) -> str:
+    total = max(0, min(24 * 3600 - 1, int(seconds)))
+    return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+
+
+def clean_number(value: float) -> object:
+    number = float(value)
+    return int(number) if number.is_integer() else number

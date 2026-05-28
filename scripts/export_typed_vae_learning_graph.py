@@ -17,7 +17,6 @@ from core.vae_learning_graph import (
     DEFAULT_EVENT_TOP_K,
     DEFAULT_MAX_SLOTS,
     DEFAULT_SECTION_ORDER_WINDOW,
-    DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
     relative_to_repo,
     scenario_to_typed_vae_learning_graph,
     summarize_math_context_graph,
@@ -26,13 +25,15 @@ from core.vae_learning_graph import (
     typed_learning_graph_to_math_learning_sample,
 )
 
+MATH_CONTEXT_FILENAME = "math_context.json"
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export a compact math VAE graph library.")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--config", help="Source YAML config for single-graph export.")
     source.add_argument("--config-glob", help="Glob pattern for batch export.")
-    parser.add_argument("--output", help="Output sample JSON path for single-config export; context.json is written beside it.")
+    parser.add_argument("--output", help=f"Output sample JSON path for single-config export; {MATH_CONTEXT_FILENAME} is written beside it.")
     parser.add_argument("--output-dir", help="Output graph directory for batch export. Samples are written to <output-dir>/samples.")
     parser.add_argument("--profile-output", help="Optional dataset profile JSON path.")
     parser.add_argument("--no-profile", action="store_true", help="Do not write dataset profile JSON.")
@@ -40,7 +41,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--event-time-window", type=int, default=DEFAULT_EVENT_TIME_WINDOW)
     parser.add_argument("--event-top-k", type=int, default=DEFAULT_EVENT_TOP_K)
     parser.add_argument("--section-order-window", type=int, default=DEFAULT_SECTION_ORDER_WINDOW)
-    parser.add_argument("--speed-interruption-threshold", type=float, default=DEFAULT_SPEED_INTERRUPTION_THRESHOLD)
     return parser.parse_args()
 
 
@@ -61,7 +61,7 @@ def _export_single(args: argparse.Namespace) -> None:
     context = typed_learning_graph_to_math_context_graph(typed_graph)
     sample = typed_learning_graph_to_math_learning_sample(
         typed_graph,
-        context_ref="context.json",
+        context_ref=MATH_CONTEXT_FILENAME,
         sample_id=config_path.stem,
     )
 
@@ -100,7 +100,7 @@ def _export_batch(args: argparse.Namespace) -> None:
     output_dir = _resolve(args.output_dir)
     sample_dir = output_dir / "samples"
     sample_dir.mkdir(parents=True, exist_ok=True)
-    context_path = output_dir / "context.json"
+    context_path = output_dir / MATH_CONTEXT_FILENAME
     used_names: Dict[str, int] = {}
     profile_source_graph: Dict[str, object] | None = None
     shared_context: Dict[str, object] | None = None
@@ -121,7 +121,7 @@ def _export_batch(args: argparse.Namespace) -> None:
 
         sample = typed_learning_graph_to_math_learning_sample(
             typed_graph,
-            context_ref="context.json",
+            context_ref=MATH_CONTEXT_FILENAME,
             sample_id=config_path.stem,
         )
         file_name = _graph_file_name(config_path, used_names)
@@ -157,7 +157,6 @@ def _build_typed_graph(config_path: Path, args: argparse.Namespace) -> Dict[str,
         event_time_window=args.event_time_window,
         event_top_k=args.event_top_k,
         section_order_window=args.section_order_window,
-        speed_interruption_threshold=args.speed_interruption_threshold,
     )
 
 
@@ -194,7 +193,7 @@ def _default_profile_path(output_path: Path) -> Path:
 
 def _context_path_for_sample(sample_path: Path) -> Path:
     root = sample_path.parent.parent if sample_path.parent.name == "samples" else sample_path.parent
-    return root / "context.json"
+    return root / MATH_CONTEXT_FILENAME
 
 
 def _export_profile(args: argparse.Namespace) -> Dict[str, object]:
@@ -203,7 +202,6 @@ def _export_profile(args: argparse.Namespace) -> Dict[str, object]:
         "event_time_window": int(args.event_time_window),
         "event_top_k": int(args.event_top_k),
         "section_order_window": int(args.section_order_window),
-        "speed_interruption_threshold": float(args.speed_interruption_threshold),
     }
 
 

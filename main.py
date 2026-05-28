@@ -2,225 +2,33 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
-from analysis.io import timetable_from_base_context
-from analysis.scenario_report import build_case_scenario_report_data
-from core.builder import build_model
-from core.exporter import export_lp
-from core.loader import load_config
-from core.postprocess import export_adjusted_timetable
-from core.solver import load_solution_values, solve_lp
+import uvicorn
+
+from core.project_layout import REPO_ROOT
 
 
-def _to_hms(seconds: int) -> str:
-    seconds = max(0, int(seconds))
-    hour = seconds // 3600
-    minute = (seconds % 3600) // 60
-    return f"{hour:02d}:{minute:02d}"
+FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8000
 
 
-def _scenario_config_to_payload(scenarios) -> dict:
-    return {
-        "delays": [
-            {
-                "train_id": item.train_id,
-                "station": item.station,
-                "event_type": item.event_type,
-                "seconds": item.seconds,
-            }
-            for item in scenarios.delays
-        ],
-        "speed_limits": [
-            {
-                "start_station": item.start_station,
-                "end_station": item.end_station,
-                "limit_speed": item.limit_speed,
-                "start_time": f"{item.start_time // 3600:02d}:{(item.start_time % 3600) // 60:02d}:{item.start_time % 60:02d}",
-                "end_time": f"{item.end_time // 3600:02d}:{(item.end_time % 3600) // 60:02d}:{item.end_time % 60:02d}",
-            }
-            for item in scenarios.speed_limits
-            if item.limit_speed > 0
-        ],
-        "interruptions": [
-            {
-                "start_station": item.start_station,
-                "end_station": item.end_station,
-                "start_time": f"{item.start_time // 3600:02d}:{(item.start_time % 3600) // 60:02d}:{item.start_time % 60:02d}",
-                "end_time": f"{item.end_time // 3600:02d}:{(item.end_time % 3600) // 60:02d}:{item.end_time % 60:02d}",
-            }
-            for item in scenarios.speed_limits
-            if item.limit_speed == 0
-        ],
-    }
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the RailGraph2Gurobi backend.")
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    args = parser.parse_args()
 
-
-def _build_scenario_note(config) -> str:
-    parts = []
-
-    for delay in config.scenarios.delays:
-        parts.append(
-            f"delay: train={delay.train_id}, station={delay.station}, event={delay.event_type}, +{delay.seconds}s"
+    if not (FRONTEND_DIST / "index.html").is_file():
+        print(
+            "Frontend dist not found. The backend API will still start, but '/' has no built UI yet.\n"
+            "Build it with: pnpm --dir frontend build\n"
+            "For development, run the Vue dev server separately: pnpm --dir frontend dev",
+            file=sys.stderr,
         )
 
-    for speed_limit in config.scenarios.speed_limits:
-        if speed_limit.limit_speed == 0:
-            continue
-        parts.append(
-            "speed_limit: "
-            f"segment={speed_limit.start_station}->{speed_limit.end_station}, "
-            f"limit={speed_limit.limit_speed:g}km/h, "
-            f"window={_to_hms(speed_limit.start_time)}-{_to_hms(speed_limit.end_time)}"
-        )
-
-    for interruption in (item for item in config.scenarios.speed_limits if item.limit_speed == 0):
-        parts.append(
-            "interruption: "
-            f"segment={interruption.start_station}->{interruption.end_station}, "
-            f"window={_to_hms(interruption.start_time)}-{_to_hms(interruption.end_time)}"
-        )
-
-    if not parts:
-        return "Scenarios: none"
-
-    max_items = 6
-    shown = parts[:max_items]
-    if len(parts) > max_items:
-        shown.append(f"...(+{len(parts) - max_items} more)")
-
-    return "Scenarios: " + " | ".join(shown)
-
-
-def _load_translated(config_path: Path):
-    config = load_config(config_path)
-    return config, config.base_context.translated
-
-
-def cmd_build(config_path: Path) -> int:
-    config, translated = _load_translated(config_path)
-    model = build_model(translated, config)
-    export_lp(model, config.build.lp_path)
-    print(f"Model exported: {config.build.lp_path}")
-    print(f"Trains: {len(translated.train_ids)}")
-    print(f"Events: {len(translated.event_keys)}")
-    print(f"Constraints: {len(model.constraints)}")
-    return 0
-
-
-def cmd_solve(config_path: Path) -> int:
-    config = load_config(config_path)
-    result = solve_lp(config.solve.lp_path, config.solve.solution_path)
-    print(f"Objective: {result.objective:g}")
-    if result.timed_out:
-        print(f"Warning: time limit reached, MIP gap = {result.mip_gap:.4%}")
-    print(f"Solution exported: {config.solve.solution_path}")
-    return 0
-
-
-def cmd_export_timetable(config_path: Path) -> int:
-    config, translated = _load_translated(config_path)
-    values = load_solution_values(config.export_timetable.solution_path)
-    export_adjusted_timetable(translated, values, config.export_timetable.timetable_path)
-    print(f"Adjusted timetable exported: {config.export_timetable.timetable_path}")
-    return 0
-
-
-def cmd_analyze(config_path: Path) -> int:
-    config = load_config(config_path)
-    if not config.analyze.enable_metrics and not config.analyze.enable_plot:
-        print("Analysis skipped: both analyze.enable_metrics and analyze.enable_plot are false.")
-        return 0
-
-    if config.analyze.enable_metrics:
-        from analysis.metrics import analyze_timetable
-
-        metrics_path = analyze_timetable(
-            config.analyze.plan_timetable_path,
-            config.analyze.adjusted_timetable_path,
-            config.analyze.metrics_output_path,
-            plan_sheet_name=config.analyze.plan_timetable_sheet_name,
-            adjusted_sheet_name=config.analyze.adjusted_timetable_sheet_name,
-            plan_df=timetable_from_base_context(config.base_context),
-        )
-        print(f"Metrics exported: {metrics_path}")
-
-    if config.analyze.enable_plot:
-        from analysis.plot import plot_timetable
-
-        _config_for_plot, translated = _load_translated(config_path)
-        scenario_overlay = build_case_scenario_report_data(
-            case_id=config.project.name,
-            scenarios=_scenario_config_to_payload(config.scenarios),
-            config=config,
-            translated=translated,
-        )["scenario_rows"]
-
-        plot_path = plot_timetable(
-            config.analyze.plot_timetable_path,
-            config.analyze.plot_output_path,
-            show_grid=config.analyze.plot_grid,
-            title=config.analyze.plot_title,
-            subtitle=_build_scenario_note(config),
-            sheet_name=config.analyze.adjusted_timetable_sheet_name,
-            scenario_overlay=scenario_overlay,
-            station_order=config.base_context.station_order,
-        )
-        print(f"Plot exported: {plot_path}")
-    return 0
-
-
-def cmd_run(config_path: Path) -> int:
-    cmd_build(config_path)
-    cmd_solve(config_path)
-    cmd_export_timetable(config_path)
-    cmd_analyze(config_path)
-    return 0
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="RailGraph2Gurobi command line.")
-    parser.add_argument("--config", default="", help="Path to a case YAML configuration file.")
-    sub = parser.add_subparsers(dest="command")
-
-    def _add_config_arg(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--config", default=argparse.SUPPRESS, help="Path to YAML configuration file.")
-
-    p_build = sub.add_parser("build", help="Build and export LP.")
-    _add_config_arg(p_build)
-
-    p_solve = sub.add_parser("solve", help="Solve LP and export .sol.")
-    _add_config_arg(p_solve)
-
-    p_export = sub.add_parser("export-timetable", help="Export adjusted timetable from .sol.")
-    _add_config_arg(p_export)
-
-    p_analyze = sub.add_parser("analyze", help="Run metrics and plotting analysis.")
-    _add_config_arg(p_analyze)
-
-    p_run = sub.add_parser("run", help="Run build, solve, export-timetable, analyze.")
-    _add_config_arg(p_run)
-
-    parser.set_defaults(command="run")
-    return parser.parse_args()
+    uvicorn.run("backend.app:app", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    config_value = getattr(args, "config", "")
-    if not config_value:
-        print("Pipeline failed: --config is required for the low-level main.py entry.", file=sys.stderr)
-        raise SystemExit(1)
-    config_path = Path(config_value)
-    try:
-        if args.command == "build":
-            raise SystemExit(cmd_build(config_path))
-        if args.command == "solve":
-            raise SystemExit(cmd_solve(config_path))
-        if args.command == "export-timetable":
-            raise SystemExit(cmd_export_timetable(config_path))
-        if args.command == "analyze":
-            raise SystemExit(cmd_analyze(config_path))
-        raise SystemExit(cmd_run(config_path))
-    except Exception as exc:  # pragma: no cover
-        print(f"Pipeline failed: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+    main()

@@ -33,9 +33,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--solutions-root", default="tests/solutions", help="Root folder containing *.sol files.")
     parser.add_argument("--base-config", required=True, help="Template config used as base.")
     parser.add_argument("--generated-config-root", default="tests/generated_configs", help="Generated yaml root.")
-    parser.add_argument("--output-root", default="projects/demo/imports/solutions/cases", help="Per-case output root.")
-    parser.add_argument("--summary-csv", default="projects/demo/imports/solutions/import_summary.csv", help="Import summary CSV.")
-    parser.add_argument("--summary-json", default="projects/demo/imports/solutions/import_summary.json", help="Import summary JSON.")
+    parser.add_argument("--output-root", default="outputs/imports/solutions/cases", help="Per-case output root.")
+    parser.add_argument("--summary-csv", default="outputs/imports/solutions/import_summary.csv", help="Import summary CSV.")
+    parser.add_argument("--summary-json", default="outputs/imports/solutions/import_summary.json", help="Import summary JSON.")
     parser.add_argument("--limit", type=int, default=0, help="Only process first N sol files (0 = all).")
     parser.add_argument("--clean", action="store_true", help="Clean generated config/output roots before importing.")
     return parser.parse_args()
@@ -99,8 +99,6 @@ def _build_case_config(
     payload.pop("export_timetable", None)
 
     analyze = dict(payload.get("analyze", {}))
-    analyze.setdefault("plot_grid", False)
-    analyze.setdefault("plot_title", "Train Timetable")
     analyze["adj_timetable_path"] = ""
     analyze.setdefault("adj_timetable_sheet_name", "Sheet1")
     payload["analyze"] = analyze

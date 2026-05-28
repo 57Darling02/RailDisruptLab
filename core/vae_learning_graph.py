@@ -9,10 +9,11 @@ from typing import Any, Dict, List, Tuple
 from core.disturbance_graph import (
     DAY_SECONDS,
     GRAPH_TYPE as DISTURBANCE_GRAPH_TYPE,
+    disturbance_graph_from_scenario,
     scenario_to_disturbance_graph,
     validate_disturbance_graph,
 )
-from core.types import AppConfig, BaseContext, EventAnchor, SectionAnchor
+from core.types import AppConfig, BaseContext, EventAnchor, ScenarioConfig, SectionAnchor
 
 SCHEMA_VERSION = 1
 GRAPH_TYPE = "typed_vae_learning_graph"
@@ -83,7 +84,6 @@ def scenario_to_typed_vae_learning_graph(
     event_time_window: int = DEFAULT_EVENT_TIME_WINDOW,
     event_top_k: int = DEFAULT_EVENT_TOP_K,
     section_order_window: int = DEFAULT_SECTION_ORDER_WINDOW,
-    speed_interruption_threshold: float = DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
 ) -> Dict[str, object]:
     target_graph = scenario_to_disturbance_graph(config)
     return semantic_disturbance_graph_to_typed_learning_graph(
@@ -95,7 +95,30 @@ def scenario_to_typed_vae_learning_graph(
         event_time_window=event_time_window,
         event_top_k=event_top_k,
         section_order_window=section_order_window,
-        speed_interruption_threshold=speed_interruption_threshold,
+    )
+
+
+def scenario_config_to_typed_vae_learning_graph(
+    scenarios: ScenarioConfig,
+    base_context: BaseContext,
+    *,
+    base_context_path: str = "",
+    source_config_path: str = "",
+    max_slots: int = DEFAULT_MAX_SLOTS,
+    event_time_window: int = DEFAULT_EVENT_TIME_WINDOW,
+    event_top_k: int = DEFAULT_EVENT_TOP_K,
+    section_order_window: int = DEFAULT_SECTION_ORDER_WINDOW,
+) -> Dict[str, object]:
+    target_graph = disturbance_graph_from_scenario(scenarios, base_context_path=base_context_path)
+    return semantic_disturbance_graph_to_typed_learning_graph(
+        target_graph,
+        base_context,
+        base_context_path=base_context_path,
+        source_config_path=source_config_path,
+        max_slots=max_slots,
+        event_time_window=event_time_window,
+        event_top_k=event_top_k,
+        section_order_window=section_order_window,
     )
 
 
@@ -109,7 +132,6 @@ def semantic_disturbance_graph_to_typed_learning_graph(
     event_time_window: int = DEFAULT_EVENT_TIME_WINDOW,
     event_top_k: int = DEFAULT_EVENT_TOP_K,
     section_order_window: int = DEFAULT_SECTION_ORDER_WINDOW,
-    speed_interruption_threshold: float = DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
 ) -> Dict[str, object]:
     validate_disturbance_graph(graph, base_context)
     context_pools, event_index, section_index = _context_pools(base_context)
@@ -131,7 +153,7 @@ def semantic_disturbance_graph_to_typed_learning_graph(
         "generation_tasks": _generation_tasks(max_slots),
         "targets": _targets_from_disturbance_graph(graph, event_index, section_index, max_slots),
         "derived_relations": derive_disturbance_relation_features(graph, base_context),
-        "decode_contract": _decode_contract(max_slots, speed_interruption_threshold),
+        "decode_contract": _decode_contract(max_slots),
     }
 
 
@@ -239,7 +261,7 @@ def typed_learning_graph_to_math_context_graph(graph: Dict[str, object]) -> Dict
 def typed_learning_graph_to_math_learning_sample(
     graph: Dict[str, object],
     *,
-    context_ref: str = "context.json",
+    context_ref: str = "math_context.json",
     sample_id: str = "",
 ) -> Dict[str, object]:
     if not isinstance(graph, dict):
@@ -1082,10 +1104,9 @@ def _generation_tasks(max_slots: int) -> List[Dict[str, object]]:
     ]
 
 
-def _decode_contract(max_slots: int, speed_interruption_threshold: float) -> Dict[str, object]:
+def _decode_contract(max_slots: int) -> Dict[str, object]:
     return {
         "day_seconds": DAY_SECONDS,
-        "speed_interruption_threshold": float(speed_interruption_threshold),
         "speed_limit_max": DEFAULT_SPEED_LIMIT_MAX,
         "generated_graph_type": GENERATED_GRAPH_TYPE,
         "tasks": {

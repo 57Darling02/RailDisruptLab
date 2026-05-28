@@ -11,11 +11,24 @@ DAY_SECONDS = 24 * 3600
 
 
 def scenario_to_disturbance_graph(config: AppConfig) -> Dict[str, object]:
+    return disturbance_graph_from_scenario(
+        config.scenarios,
+        base_context_path=str(config.project.base_context_path).replace("\\", "/"),
+        base_context=config.base_context,
+    )
+
+
+def disturbance_graph_from_scenario(
+    scenarios: ScenarioConfig,
+    *,
+    base_context_path: str,
+    base_context: BaseContext | None = None,
+) -> Dict[str, object]:
     disturbances: List[Dict[str, object]] = []
     role_edges: List[Dict[str, str]] = []
     next_id = 1
 
-    for delay in config.scenarios.delays:
+    for delay in scenarios.delays:
         disturbance_id = _disturbance_id(next_id)
         next_id += 1
         disturbances.append(
@@ -33,7 +46,7 @@ def scenario_to_disturbance_graph(config: AppConfig) -> Dict[str, object]:
             }
         )
 
-    for speed_limit in config.scenarios.speed_limits:
+    for speed_limit in scenarios.speed_limits:
         disturbance_id = _disturbance_id(next_id)
         next_id += 1
         disturbances.append(
@@ -56,11 +69,12 @@ def scenario_to_disturbance_graph(config: AppConfig) -> Dict[str, object]:
     graph: Dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "graph_type": GRAPH_TYPE,
-        "base_context_path": str(config.project.base_context_path).replace("\\", "/"),
+        "base_context_path": base_context_path.replace("\\", "/"),
         "disturbances": disturbances,
         "role_edges": role_edges,
     }
-    validate_disturbance_graph(graph, config.base_context)
+    if base_context is not None:
+        validate_disturbance_graph(graph, base_context)
     return graph
 
 

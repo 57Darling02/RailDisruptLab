@@ -44,24 +44,8 @@ class DatasetLayout:
     root: Path
 
     @property
-    def dataset_json(self) -> Path:
-        return self.root / "dataset.json"
-
-    @property
     def cases_dir(self) -> Path:
         return self.root / "cases"
-
-    @property
-    def build_csv(self) -> Path:
-        return self.root / "build.csv"
-
-    @property
-    def solve_csv(self) -> Path:
-        return self.root / "solve.csv"
-
-    @property
-    def analyze_csv(self) -> Path:
-        return self.root / "analyze.csv"
 
 
 @dataclass(frozen=True)
@@ -78,19 +62,15 @@ class ModelLayout:
 
     @property
     def context_graph(self) -> Path:
-        return self.graph_dir / "context.json"
+        return self.graph_dir / "math_context.json"
 
     @property
-    def train_config(self) -> Path:
-        return self.root / "train_config.yml"
+    def graph_progress(self) -> Path:
+        return self.graph_dir / "graph_progress.json"
 
     @property
     def best_model(self) -> Path:
         return self.root / "best_model.pt"
-
-    @property
-    def generation_dir(self) -> Path:
-        return self.root / "generated"
 
 
 @dataclass(frozen=True)
@@ -124,30 +104,8 @@ class ProjectLayout:
         return self.root / "model"
 
     @property
-    def conf_dir(self) -> Path:
-        return self.root / "conf"
-
-    @property
     def context_json(self) -> Path:
         return self.root / "context.json"
-
-    @property
-    def prepare_config(self) -> Path:
-        return self.conf_dir / "prepare.yml"
-
-    @property
-    def solve_config(self) -> Path:
-        return self.conf_dir / "solve.yml"
-
-    @property
-    def analyze_config(self) -> Path:
-        return self.conf_dir / "analyze.yml"
-
-    def normal_generate_config(self, config_id: str) -> Path:
-        return self.conf_dir / "normal_generate" / f"{sanitize_id(config_id)}.yml"
-
-    def train_config(self, config_id: str) -> Path:
-        return self.conf_dir / "train" / f"{sanitize_id(config_id)}.yml"
 
     def scenario_set(self, scenario_set_id: str) -> ScenarioSetLayout:
         return ScenarioSetLayout(self.scenario_sets_dir / sanitize_id(scenario_set_id))
