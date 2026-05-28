@@ -97,6 +97,10 @@ class RailGraphBackend:
     def cancel_task(self, task_id: Union[str, int]) -> Dict[str, object]:
         return self.tasks.cancel(task_id)
 
+    def clean_tasks(self, project_id: Optional[str] = None, *, successful_only: bool = False) -> Dict[str, object]:
+        group = normalize_project_id(project_id) if project_id else None
+        return self.tasks.clean(group=group, successful_only=successful_only)
+
     def create_project(self, project_id: str) -> Dict[str, object]:
         return self.submit_task(project_id, "newproject", {}, label="newproject")
 

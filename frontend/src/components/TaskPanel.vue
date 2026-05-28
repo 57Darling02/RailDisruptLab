@@ -26,6 +26,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   refresh: []
+  clean: []
   cancel: [task: Task]
 }>()
 
@@ -76,7 +77,12 @@ function taskCategory(task: Task) {
             :value="option.value"
           />
         </el-select>
-        <el-button link type="primary" @click="emit('refresh')">刷新</el-button>
+        <div class="task-header-actions">
+          <el-button link type="primary" @click="emit('refresh')">刷新</el-button>
+          <el-button link type="danger" :disabled="!tasks.length" @click="emit('clean')">
+            清理历史
+          </el-button>
+        </div>
       </div>
     </template>
 
@@ -135,6 +141,12 @@ function taskCategory(task: Task) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.task-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .task-filter-select {

@@ -17,6 +17,9 @@ class PueueError(RuntimeError):
     pass
 
 
+DEFAULT_GROUP_PARALLEL = 4
+
+
 class PueueClient:
     def __init__(
         self,
@@ -92,7 +95,7 @@ class PueueClient:
         task_id = result.stdout.strip().splitlines()[-1].strip()
         return self.get_task(task_id) or {"id": int(task_id), "group": group, "command": command}
 
-    def ensure_group(self, group: str, parallel: int = 1) -> None:
+    def ensure_group(self, group: str, parallel: int = DEFAULT_GROUP_PARALLEL) -> None:
         group = sanitize_id(group)
         status = self.status()
         groups = status.get("groups", {})
@@ -161,6 +164,17 @@ class PueueClient:
             }
         return task
 
+    def clean(self, group: Optional[str] = None, *, successful_only: bool = False) -> Dict[str, object]:
+        args = ["clean"]
+        if successful_only:
+            args.append("--successful-only")
+        if group:
+            args.extend(["--group", sanitize_id(group)])
+        before = len(self.list_tasks(group=group))
+        self._run(args)
+        after = len(self.list_tasks(group=group))
+        return {"removed": max(before - after, 0), "remaining": after}
+
     def _task_log_path(self, task_id: Union[str, int]) -> Path:
         return self.config_path.parent / "task_logs" / f"{int(task_id)}.log"
 
@@ -205,8 +219,8 @@ class PueueClient:
 client:
   read_local_logs: true
 daemon:
-  default_parallel_tasks: 1
-""".format(pueue_dir=to_posix(pueue_dir))
+  default_parallel_tasks: {default_parallel}
+""".format(pueue_dir=to_posix(pueue_dir), default_parallel=DEFAULT_GROUP_PARALLEL)
         self.config_path.write_text(config, encoding="utf-8")
 
     def _start_daemon(self) -> None:

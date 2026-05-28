@@ -970,6 +970,24 @@ async function cancelTask(task: Task) {
   })
 }
 
+async function cleanTasks() {
+  try {
+    await ElMessageBox.confirm('清理当前项目已结束的历史任务？运行中和排队中的任务不会被清理。', '清理历史任务', {
+      type: 'warning',
+      confirmButtonText: '清理',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  await run('清理历史任务', async () => {
+    const result = await api.cleanTasks(selectedProjectId.value || undefined)
+    await refreshTasks(false)
+    const removed = Number(result.removed ?? 0)
+    return `已清理 ${removed} 个历史任务`
+  })
+}
+
 async function openTrainDialog(mode: 'create' | 'retrain' = 'create') {
   trainDialogMode.value = mode
   if (mode === 'retrain' && selectedModelId.value) {
@@ -1544,6 +1562,7 @@ function notifyError(error: unknown) {
               :title="activeTaskTitle"
               :tasks="activeTasks"
               @refresh="refreshTasks"
+              @clean="cleanTasks"
               @cancel="cancelTask"
             />
           </el-aside>

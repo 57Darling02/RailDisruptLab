@@ -211,6 +211,13 @@ export const api = {
     }),
   listTasks: (projectId?: string) =>
     request<Task[]>(projectId ? `/tasks?project_id=${encodeURIComponent(projectId)}` : '/tasks'),
+  cleanTasks: (projectId?: string, successfulOnly = false) => {
+    const query = new URLSearchParams()
+    if (projectId) query.set('project_id', projectId)
+    if (successfulOnly) query.set('successful_only', 'true')
+    const suffix = query.toString() ? `?${query}` : ''
+    return request<JsonObject>(`/tasks${suffix}`, { method: 'DELETE' })
+  },
   getTask: (taskId: number) => request<Task>(`/tasks/${taskId}`),
   waitTask: (taskId: number) => request<Task>(`/tasks/${taskId}/wait`, { method: 'POST' }),
   getTaskLog: (taskId: number, lines = 120) =>
