@@ -4,7 +4,7 @@ import VChart from 'vue-echarts'
 import { ElMessage } from 'element-plus'
 
 import { api } from '@/api/client'
-import { chartDownloadToolbox } from '@/chart-options'
+import { barPercentLabel, barValueLabel, chartDownloadToolbox } from '@/chart-options'
 import type {
   DatasetSolveAnalysis,
   DatasetSolveErrorRow,
@@ -221,12 +221,13 @@ function buildScenarioCategoryOption(items: ScenarioSetVisualization[], mode: Sc
     },
     toolbox: chartDownloadToolbox('scenario-type-composition'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
-    grid: { top: 48, right: 18, bottom: 54, left: 48 },
+    grid: { top: 62, right: 18, bottom: 54, left: 48 },
     xAxis: categoryAxis(categories, { rotate: categories.length > 4 ? 24 : 0 }),
     yAxis: valueAxis('场景数', mode),
     series: items.map((item) => ({
       name: scenarioSetLabel(item),
       type: 'bar',
+      label: barValueLabel(),
       data: categories.map((category) =>
         modeValue(
           categoryCount(item, category),
@@ -252,12 +253,13 @@ function buildScenarioCoverageOption(items: ScenarioSetVisualization[], mode: Sc
     },
     toolbox: chartDownloadToolbox('scenario-coverage'),
     legend: legendConfig({ top: 0 }),
-    grid: { top: 48, right: 18, bottom: 54, left: 48 },
+    grid: { top: 62, right: 18, bottom: 54, left: 48 },
     xAxis: categoryAxis(metrics.map((item) => item.label)),
     yAxis: mode === 'absolute' ? percentAxis('覆盖率') : valueAxis('相对基准', mode),
     series: items.map((item) => ({
       name: scenarioSetLabel(item),
       type: 'bar',
+      label: mode === 'absolute' ? barPercentLabel() : barValueLabel(),
       data: metrics.map((metric) =>
         modeValue(
           coverageValue(item, metric.key),
@@ -284,12 +286,13 @@ function buildMetricByMetricOption(
     },
     toolbox: chartDownloadToolbox(`${group}-metrics`),
     legend: legendConfig({ top: 0, type: 'scroll' }),
-    grid: { top: 48, right: 18, bottom: 72, left: 56 },
+    grid: { top: 62, right: 18, bottom: 72, left: 56 },
     xAxis: categoryAxis(metrics, { rotate: metrics.length > 4 ? 24 : 0 }),
     yAxis: valueAxis('', mode),
     series: items.map((item) => ({
       name: scenarioSetLabel(item),
       type: 'bar',
+      label: barValueLabel(),
       data: metrics.map((metric) =>
         modeValue(
           metricValue(item.summary[group].cards, metric),
@@ -315,12 +318,13 @@ function buildAnchorCoverageOption(items: ScenarioSetVisualization[], mode: Scen
     },
     toolbox: chartDownloadToolbox('anchor-coverage'),
     legend: legendConfig({ top: 0 }),
-    grid: { top: 48, right: 18, bottom: 54, left: 56 },
+    grid: { top: 62, right: 18, bottom: 54, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
     yAxis: mode === 'absolute' ? percentAxis('覆盖率') : valueAxis('相对基准', mode),
     series: anchorLabels.map((label) => ({
       name: label,
       type: 'bar',
+      label: mode === 'absolute' ? barPercentLabel() : barValueLabel(),
       data: items.map((item) => {
         const value = item.summary.math_graph_metrics.anchor_coverage.find((row) => row.label === label)?.ratio ?? 0
         const baselineValue =
@@ -344,12 +348,13 @@ function buildDisturbanceCountOption(items: ScenarioSetVisualization[], mode: Sc
     },
     toolbox: chartDownloadToolbox('disturbance-count'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
-    grid: { top: 48, right: 18, bottom: 46, left: 48 },
+    grid: { top: 62, right: 18, bottom: 46, left: 48 },
     xAxis: categoryAxis(labels, { name: '单场景扰动数' }),
     yAxis: valueAxis('场景数', mode),
     series: items.map((item) => ({
       name: scenarioSetLabel(item),
       type: 'bar',
+      label: barValueLabel(),
       data: labels.map((label) => {
         const value = disturbanceCountValue(item, label)
         return modeValue(value, baseline ? disturbanceCountValue(baseline, label) : 0, mode)
@@ -524,12 +529,13 @@ function buildDatasetSolveMetricOption(items: DatasetSolveState[]) {
     },
     toolbox: chartDownloadToolbox('dataset-solve-metrics'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
-    grid: { top: 54, right: 18, bottom: 58, left: 56 },
+    grid: { top: 68, right: 18, bottom: 58, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
     yAxis: { type: 'value', name: '均值' },
     series: metrics.map((metric) => ({
       name: metric,
       type: 'bar',
+      label: barValueLabel(),
       data: items.map((item) => metricSummaryValue(item.summary_metrics, metric, 'mean')),
     })),
   }
@@ -546,12 +552,13 @@ function buildDatasetSolveErrorOption(rows: ReturnType<typeof summarizeDatasetEr
     },
     toolbox: chartDownloadToolbox('dataset-solve-errors'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
-    grid: { top: 54, right: 18, bottom: 58, left: 56 },
+    grid: { top: 68, right: 18, bottom: 58, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
     yAxis: { type: 'value', name: '平均相对误差' },
     series: metrics.map((metric) => ({
       name: metric,
       type: 'bar',
+      label: barValueLabel(),
       data: labels.map((datasetId) => {
         return rows.find((row) => row.dataset_id === datasetId && row.metric_label === metric)?.mean_relative_error ?? 0
       }),

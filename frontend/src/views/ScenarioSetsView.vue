@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import VChart from 'vue-echarts'
 
-import { chartDownloadToolbox } from '@/chart-options'
+import { barPercentLabel, chartDownloadToolbox } from '@/chart-options'
 import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
 import TimetableChart from '@/components/TimetableChart.vue'
 import type {
@@ -113,7 +113,7 @@ function buildCoverageBarOption(visualization: ScenarioSetVisualization | null) 
       formatter: (params: unknown) => formatCoverageTooltip(params, rows),
     },
     legend: { top: 0 },
-    grid: { top: 42, right: 18, bottom: 28, left: 48 },
+    grid: { top: 54, right: 18, bottom: 28, left: 48 },
     xAxis: { type: 'category', data: rows.map((row) => row.label) },
     yAxis: {
       type: 'value',
@@ -125,11 +125,13 @@ function buildCoverageBarOption(visualization: ScenarioSetVisualization | null) 
       {
         name: '时间覆盖率',
         type: 'bar',
+        label: barPercentLabel(),
         data: rows.map((row) => row.time_ratio),
       },
       {
         name: '空间覆盖率',
         type: 'bar',
+        label: barPercentLabel(),
         data: rows.map((row) => row.space_ratio),
       },
     ],
