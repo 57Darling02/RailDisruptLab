@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import VChart from 'vue-echarts'
 
+import { chartDownloadToolbox } from '@/chart-options'
 import type { TimetableDisturbance, TimetableRowState } from '@/types'
 
 const PLAN_NORMAL_COLOR = '#2563eb'
@@ -117,6 +118,7 @@ function buildTimetableOption(input: BuildInput) {
 
   return {
     animationDuration: 260,
+    toolbox: chartDownloadToolbox(fileNameFromTitle(input.title)),
     grid: { top: 68, right: 32, bottom: 72, left: 96 },
     legend: {
       top: 30,
@@ -155,6 +157,10 @@ function buildTimetableOption(input: BuildInput) {
     ],
     title: { text: input.title, left: 8, top: 6, textStyle: { fontSize: 13, fontWeight: 600 } },
   }
+}
+
+function fileNameFromTitle(title: string) {
+  return title.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/g, '') || 'timetable-chart'
 }
 
 interface ChartPoint {

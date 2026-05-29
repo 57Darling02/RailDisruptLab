@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import VChart from 'vue-echarts'
 
+import { chartDownloadToolbox } from '@/chart-options'
 import type {
   MetadataEntry,
   SchemaEdgeRow,
@@ -177,6 +178,7 @@ function epochLossSeries(points: ModelLossPoint[]) {
 function buildLossChartOption(data: LossSeriesDatum[]) {
   return {
     animationDuration: 300,
+    toolbox: chartDownloadToolbox('training-loss'),
     grid: { top: 24, right: 24, bottom: 36, left: 58 },
     tooltip: {
       trigger: 'axis',

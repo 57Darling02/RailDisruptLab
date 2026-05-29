@@ -4,6 +4,7 @@ import VChart from 'vue-echarts'
 import { ElMessage } from 'element-plus'
 
 import { api } from '@/api/client'
+import { chartDownloadToolbox } from '@/chart-options'
 import type {
   DatasetSolveAnalysis,
   DatasetSolveErrorRow,
@@ -218,7 +219,7 @@ function buildScenarioCategoryOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox('scenario-type-composition'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 48, right: 18, bottom: 54, left: 48 },
     xAxis: categoryAxis(categories, { rotate: categories.length > 4 ? 24 : 0 }),
@@ -249,7 +250,7 @@ function buildScenarioCoverageOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: percentFormatterForMode(mode),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox('scenario-coverage'),
     legend: legendConfig({ top: 0 }),
     grid: { top: 48, right: 18, bottom: 54, left: 48 },
     xAxis: categoryAxis(metrics.map((item) => item.label)),
@@ -281,7 +282,7 @@ function buildMetricByMetricOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox(`${group}-metrics`),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 48, right: 18, bottom: 72, left: 56 },
     xAxis: categoryAxis(metrics, { rotate: metrics.length > 4 ? 24 : 0 }),
@@ -312,7 +313,7 @@ function buildAnchorCoverageOption(items: ScenarioSetVisualization[], mode: Scen
       axisPointer: { type: 'shadow' },
       valueFormatter: percentFormatterForMode(mode),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox('anchor-coverage'),
     legend: legendConfig({ top: 0 }),
     grid: { top: 48, right: 18, bottom: 54, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -341,7 +342,7 @@ function buildDisturbanceCountOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox('disturbance-count'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 48, right: 18, bottom: 46, left: 48 },
     xAxis: categoryAxis(labels, { name: '单场景扰动数' }),
@@ -385,7 +386,7 @@ function buildTypeTimeOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox('type-time-structure'),
     legend: legendConfig({ top: 0, selectedMode: false }),
     grid: { top: 92, right: 18, bottom: 46, left: 48 },
     xAxis: categoryAxis(bins),
@@ -441,7 +442,7 @@ function buildTypeLocationOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox('type-location-structure'),
     legend: legendConfig({ top: 0, selectedMode: false }),
     grid: { top: 92, right: 18, bottom: 96, left: 48 },
     xAxis: categoryAxis(locations, { rotate: locations.length > 8 ? 35 : 0 }),
@@ -521,7 +522,7 @@ function buildDatasetSolveMetricOption(items: DatasetSolveState[]) {
       axisPointer: { type: 'shadow' },
       valueFormatter: (value: number) => formatChartNumber(Number(value)),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox('dataset-solve-metrics'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 54, right: 18, bottom: 58, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -543,7 +544,7 @@ function buildDatasetSolveErrorOption(rows: ReturnType<typeof summarizeDatasetEr
       axisPointer: { type: 'shadow' },
       valueFormatter: (value: number) => formatChartNumber(Number(value)),
     },
-    toolbox: chartToolbox(),
+    toolbox: chartDownloadToolbox('dataset-solve-errors'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 54, right: 18, bottom: 58, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -638,20 +639,6 @@ function legendConfig(options: Record<string, unknown> = {}) {
     ...options,
     formatter: truncateLegendName,
     tooltip: { show: true },
-  }
-}
-
-function chartToolbox() {
-  return {
-    right: 8,
-    top: 0,
-    feature: {
-      saveAsImage: {
-        title: '下载图片',
-        name: 'rail-disrupt-analysis',
-        pixelRatio: 2,
-      },
-    },
   }
 }
 

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import VChart from 'vue-echarts'
 
+import { chartDownloadToolbox } from '@/chart-options'
 import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
 import TimetableChart from '@/components/TimetableChart.vue'
 import type {
@@ -87,6 +88,7 @@ function buildTypePieOption(visualization: ScenarioSetVisualization | null) {
       value: item.count,
     })) ?? []
   return {
+    toolbox: chartDownloadToolbox('scenario-set-type-ratio'),
     tooltip: { trigger: 'item', formatter: '{b}<br/>{c} 个 ({d}%)' },
     legend: { bottom: 0, type: 'scroll' },
     series: [
@@ -104,6 +106,7 @@ function buildTypePieOption(visualization: ScenarioSetVisualization | null) {
 function buildCoverageBarOption(visualization: ScenarioSetVisualization | null) {
   const rows = visualization?.summary.coverage.rows ?? []
   return {
+    toolbox: chartDownloadToolbox('scenario-set-coverage'),
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
