@@ -171,6 +171,7 @@ const tasks = ref<Task[]>([])
 const taskNow = ref(Date.now())
 const activePage = ref<PageKey>('dashboard')
 const busy = ref(false)
+const submittingTask = ref(false)
 const mainScrollbar = ref<ScrollbarInstance>()
 
 const projectDialogVisible = ref(false)
@@ -795,16 +796,15 @@ function openNormalGenerateDialog() {
 
 async function submitNormalGenerate() {
   if (!selectedScenarioSetId.value) return
-  await run('批量生成场景', async () => {
+  await submitBackgroundTask('批量生成场景', async () => {
     const response = await api.submitNormalGenerate(selectedProjectId.value, {
-        scenario_set_id: selectedScenarioSetId.value,
-        merge: true,
-        overwrite: true,
-        ...normalGenerateForm.value,
-      })
+      scenario_set_id: selectedScenarioSetId.value,
+      merge: true,
+      overwrite: true,
+      ...normalGenerateForm.value,
+    })
     trackTask(response.task)
     normalGenerateDialogVisible.value = false
-    await loadScenarioSetData(false)
   })
 }
 
@@ -821,7 +821,7 @@ async function submitBuild() {
     ElMessage.warning('请选择要构建的场景。')
     return
   }
-  await run('提交构建任务', async () => {
+  await submitBackgroundTask('构建 MILP 任务', async () => {
     const response = await api.submitBuild(
       selectedProjectId.value,
       scenarioSetId,
@@ -952,7 +952,7 @@ async function deleteDatasetById(datasetId: string) {
 async function submitSolve(caseId = '') {
   if (!selectedDatasetId.value) return
   const options = normalizedSolveOptions()
-  await run('提交求解任务', async () => {
+  await submitBackgroundTask('求解任务', async () => {
     const response = await api.submitSolve(
       selectedProjectId.value,
       selectedDatasetId.value,
@@ -970,7 +970,7 @@ async function submitSolve(caseId = '') {
 
 async function submitExportTimetable(caseId = '') {
   if (!selectedDatasetId.value) return
-  await run('提交导出时刻表任务', async () => {
+  await submitBackgroundTask('导出时刻表任务', async () => {
     const response = await api.submitExportTimetable(
       selectedProjectId.value,
       selectedDatasetId.value,
@@ -1199,7 +1199,7 @@ async function submitTrain() {
       return
     }
   }
-  await run('提交训练任务', async () => {
+  await submitBackgroundTask('训练任务', async () => {
     const response = await api.submitTrain(selectedProjectId.value, { ...trainForm })
     trackTask(response.task)
     pendingModelId.value = trainForm.model_id
@@ -1237,7 +1237,7 @@ async function submitGeneration() {
     ElMessage.warning('请填写生成到的扰动场景集 ID。')
     return
   }
-  await run('提交生成任务', async () => {
+  await submitBackgroundTask('生成任务', async () => {
     const response = await api.submitGeneration(
       selectedProjectId.value,
       selectedModelId.value,
@@ -1630,6 +1630,19 @@ async function run(label: string, action: () => Promise<string | void>) {
     notifyError(error)
   } finally {
     busy.value = false
+  }
+}
+
+async function submitBackgroundTask(label: string, action: () => Promise<void>) {
+  if (submittingTask.value) return
+  submittingTask.value = true
+  try {
+    await action()
+    ElMessage.success(`${label}已提交`)
+  } catch (error) {
+    notifyError(error)
+  } finally {
+    submittingTask.value = false
   }
 }
 

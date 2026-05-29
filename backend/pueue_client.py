@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 
-from backend.task_resources import task_input_payload
+from backend.task_resources import RUNNING_TASK_STATUSES, task_input_payload
 from core.project_layout import REPO_ROOT, sanitize_id, to_posix
 
 
@@ -96,7 +96,7 @@ class PueueClient:
         add_args.extend(["--", command])
         result = self._run(add_args)
         task_id = result.stdout.strip().splitlines()[-1].strip()
-        return self.get_task(task_id) or {"id": int(task_id), "group": group, "command": command}
+        return self._submitted_task(task_id, group=group, command=command, label=label)
 
     def ensure_group(self, group: str, parallel: Optional[int] = None) -> None:
         group = sanitize_id(group)
@@ -122,6 +122,17 @@ class PueueClient:
         if not isinstance(tasks, dict):
             return []
         return [self._normalize_task(task) for _, task in sorted(tasks.items(), key=lambda item: int(item[0]))]
+
+    def list_active_tasks(self, group: Optional[str] = None) -> List[Dict[str, object]]:
+        payload = self.status(group=group)
+        tasks = payload.get("tasks", {})
+        if not isinstance(tasks, dict):
+            return []
+        return [
+            self._normalize_task(task)
+            for _, task in sorted(tasks.items(), key=lambda item: int(item[0]))
+            if self._status_name(task.get("status")) in RUNNING_TASK_STATUSES
+        ]
 
     def get_task(self, task_id: Union[str, int]) -> Optional[Dict[str, object]]:
         task_key = str(task_id)
@@ -268,12 +279,9 @@ daemon:
     @staticmethod
     def _normalize_task(task: Dict[str, object]) -> Dict[str, object]:
         status = task.get("status")
-        status_name = ""
         status_payload: object = status
-        if isinstance(status, str):
-            status_name = status
-        elif isinstance(status, dict) and status:
-            status_name = next(iter(status.keys()))
+        status_name = PueueClient._status_name(status)
+        if isinstance(status, dict) and status_name:
             status_payload = status.get(status_name)
 
         payload = task_input_payload(task)
@@ -297,6 +305,38 @@ daemon:
             "dependencies": task.get("dependencies", []),
             "priority": task.get("priority", 0),
         }
+
+    @staticmethod
+    def _submitted_task(task_id: str, *, group: str, command: str, label: str) -> Dict[str, object]:
+        payload = task_input_payload({"command": command})
+        action = str(payload.get("action") or label or "")
+        raw_params = payload.get("params", {})
+        params = raw_params if isinstance(raw_params, dict) else {}
+        created_at = payload.get("created_at")
+        return {
+            "id": int(task_id),
+            "group": group,
+            "label": label,
+            "display_name": task_display_name(action, params, fallback=label),
+            "command": command,
+            "original_command": command,
+            "path": None,
+            "status": "Queued",
+            "status_detail": "Queued",
+            "created_at": str(created_at) if created_at else None,
+            "started_at": None,
+            "finished_at": None,
+            "dependencies": [],
+            "priority": 0,
+        }
+
+    @staticmethod
+    def _status_name(status: object) -> str:
+        if isinstance(status, str):
+            return status
+        if isinstance(status, dict) and status:
+            return str(next(iter(status.keys())))
+        return str(status)
 
 
 def task_time(task: Dict[str, object], status_payload: object, *keys: str) -> Optional[str]:

@@ -109,7 +109,7 @@ class RailGraphBackend:
         project_id = normalize_project_id(project_id)
         model_id = sanitize_id(model_id)
         ensure_no_active_reference(
-            self.tasks.list_tasks(group=project_id),
+            self.tasks.list_active_tasks(group=project_id),
             field="model_id",
             value=model_id,
             action_labels=("train", "generation"),
@@ -159,7 +159,7 @@ class RailGraphBackend:
         project_id = normalize_project_id(project_id)
         scenario_set_id = sanitize_id(scenario_set_id)
         ensure_no_active_reference(
-            self.tasks.list_tasks(group=project_id),
+            self.tasks.list_active_tasks(group=project_id),
             field="scenario_set_id",
             value=scenario_set_id,
             action_labels=(
@@ -267,7 +267,7 @@ class RailGraphBackend:
         project_id = normalize_project_id(project_id)
         dataset_id = sanitize_id(dataset_id)
         ensure_no_active_reference(
-            self.tasks.list_tasks(group=project_id),
+            self.tasks.list_active_tasks(group=project_id),
             field="dataset_id",
             value=dataset_id,
             action_labels=("dataset_create", "build", "solve", "export_timetable"),
@@ -448,7 +448,7 @@ class RailGraphBackend:
         project_id = normalize_project_id(project_id)
         params = normalize_task_params(action, params)
         ensure_no_active_conflict(
-            self.tasks.list_tasks(group=project_id),
+            self.tasks.list_active_tasks(group=project_id),
             action=action,
             params=params,
         )
