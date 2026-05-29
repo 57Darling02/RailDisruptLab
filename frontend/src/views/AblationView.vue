@@ -211,7 +211,6 @@ async function compareDatasets() {
 
 function buildScenarioCategoryOption(items: ScenarioSetVisualization[], mode: ScenarioAnalysisMode) {
   const categories = unique(items.flatMap((item) => item.summary.category_ratios.map((row) => row.label)))
-  const labels = items.map(scenarioSetLabel)
   const baseline = baselineScenarioItem(items)
   return {
     tooltip: {
@@ -219,15 +218,15 @@ function buildScenarioCategoryOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 48, right: 18, bottom: 54, left: 48 },
-    xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
+    xAxis: categoryAxis(categories, { rotate: categories.length > 4 ? 24 : 0 }),
     yAxis: valueAxis('场景数', mode),
-    series: categories.map((category) => ({
-      name: category,
+    series: items.map((item) => ({
+      name: scenarioSetLabel(item),
       type: 'bar',
-      stack: mode === 'absolute' ? 'category' : undefined,
-      data: items.map((item) =>
+      data: categories.map((category) =>
         modeValue(
           categoryCount(item, category),
           baseline ? categoryCount(baseline, category) : 0,
@@ -250,6 +249,7 @@ function buildScenarioCoverageOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: percentFormatterForMode(mode),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0 }),
     grid: { top: 48, right: 18, bottom: 54, left: 48 },
     xAxis: categoryAxis(metrics.map((item) => item.label)),
@@ -281,6 +281,7 @@ function buildMetricByMetricOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 48, right: 18, bottom: 72, left: 56 },
     xAxis: categoryAxis(metrics, { rotate: metrics.length > 4 ? 24 : 0 }),
@@ -311,6 +312,7 @@ function buildAnchorCoverageOption(items: ScenarioSetVisualization[], mode: Scen
       axisPointer: { type: 'shadow' },
       valueFormatter: percentFormatterForMode(mode),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0 }),
     grid: { top: 48, right: 18, bottom: 54, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -339,6 +341,7 @@ function buildDisturbanceCountOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 48, right: 18, bottom: 46, left: 48 },
     xAxis: categoryAxis(labels, { name: '单场景扰动数' }),
@@ -382,6 +385,7 @@ function buildTypeTimeOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0, selectedMode: false }),
     grid: { top: 92, right: 18, bottom: 46, left: 48 },
     xAxis: categoryAxis(bins),
@@ -437,6 +441,7 @@ function buildTypeLocationOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0, selectedMode: false }),
     grid: { top: 92, right: 18, bottom: 96, left: 48 },
     xAxis: categoryAxis(locations, { rotate: locations.length > 8 ? 35 : 0 }),
@@ -516,6 +521,7 @@ function buildDatasetSolveMetricOption(items: DatasetSolveState[]) {
       axisPointer: { type: 'shadow' },
       valueFormatter: (value: number) => formatChartNumber(Number(value)),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 54, right: 18, bottom: 58, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -537,6 +543,7 @@ function buildDatasetSolveErrorOption(rows: ReturnType<typeof summarizeDatasetEr
       axisPointer: { type: 'shadow' },
       valueFormatter: (value: number) => formatChartNumber(Number(value)),
     },
+    toolbox: chartToolbox(),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 54, right: 18, bottom: 58, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -631,6 +638,20 @@ function legendConfig(options: Record<string, unknown> = {}) {
     ...options,
     formatter: truncateLegendName,
     tooltip: { show: true },
+  }
+}
+
+function chartToolbox() {
+  return {
+    right: 8,
+    top: 0,
+    feature: {
+      saveAsImage: {
+        title: '下载图片',
+        name: 'rail-disrupt-analysis',
+        pixelRatio: 2,
+      },
+    },
   }
 }
 
@@ -842,15 +863,10 @@ function datasetQualityMessages(item: DatasetSummary) {
               </div>
             </el-col>
             <el-col :span="4">
-              <div class="mode-switch">
-                <span>数值</span>
-                <el-switch
-                  v-model="scenarioAnalysisMode"
-                  active-value="relative"
-                  inactive-value="absolute"
-                  active-text="误差"
-                />
-              </div>
+              <el-radio-group v-model="scenarioAnalysisMode" class="mode-radio">
+                <el-radio-button value="absolute">数值</el-radio-button>
+                <el-radio-button value="relative">误差</el-radio-button>
+              </el-radio-group>
             </el-col>
             <el-col :span="4">
               <el-button class="full-width" type="primary" :loading="scenarioCompareLoading" @click="compareScenarioSets">
@@ -1070,15 +1086,10 @@ function datasetQualityMessages(item: DatasetSummary) {
               </div>
             </el-col>
             <el-col :span="4">
-              <div class="mode-switch">
-                <span>数值</span>
-                <el-switch
-                  v-model="datasetAnalysisMode"
-                  active-value="relative"
-                  inactive-value="absolute"
-                  active-text="误差"
-                />
-              </div>
+              <el-radio-group v-model="datasetAnalysisMode" class="mode-radio">
+                <el-radio-button value="absolute">数值</el-radio-button>
+                <el-radio-button value="relative">误差</el-radio-button>
+              </el-radio-group>
             </el-col>
             <el-col :span="4">
               <el-button class="full-width" type="primary" :loading="datasetCompareLoading" @click="compareDatasets">
@@ -1259,15 +1270,16 @@ function datasetQualityMessages(item: DatasetSummary) {
   width: 100%;
 }
 
-.mode-switch {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--el-text-color-primary);
-  font-size: 14px;
-  font-weight: 700;
-  white-space: nowrap;
+.mode-radio {
+  width: 100%;
+}
+
+.mode-radio :deep(.el-radio-button) {
+  flex: 1;
+}
+
+.mode-radio :deep(.el-radio-button__inner) {
+  width: 100%;
 }
 
 .analysis-warning-list {
