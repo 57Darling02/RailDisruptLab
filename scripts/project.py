@@ -137,6 +137,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     train.add_argument("--anchor-weight", type=float, default=1.0)
     train.add_argument("--param-weight", type=float, default=2.0)
     train.add_argument("--kl-weight", type=float, default=0.0015)
+    train.add_argument("--relation-weight", type=float, default=0.5)
 
     generation = sub.add_parser("generation", help="Generate and decode scenarios with a trained model.")
     generation.add_argument("model_id")
@@ -249,6 +250,7 @@ def main() -> None:
             anchor_weight=args.anchor_weight,
             param_weight=args.param_weight,
             kl_weight=args.kl_weight,
+            relation_weight=args.relation_weight,
         )
     elif args.command == "generation":
         generate_scenarios(

@@ -329,6 +329,7 @@ def train_model(
     anchor_weight: float = 1.0,
     param_weight: float = 2.0,
     kl_weight: float = 0.0015,
+    relation_weight: float = 0.5,
 ) -> None:
     scenario_set_id = sanitize_id(scenario_set_id)
     model_id = sanitize_id(model_id)
@@ -382,6 +383,8 @@ def train_model(
             str(param_weight),
             "--kl-weight",
             str(kl_weight),
+            "--relation-weight",
+            str(relation_weight),
         ]
     )
     print(f"Model trained: {model.root}")

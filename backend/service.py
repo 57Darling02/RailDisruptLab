@@ -380,6 +380,7 @@ class RailGraphBackend:
         anchor_weight: float = TASK_DEFAULTS["train"]["anchor_weight"],
         param_weight: float = TASK_DEFAULTS["train"]["param_weight"],
         kl_weight: float = TASK_DEFAULTS["train"]["kl_weight"],
+        relation_weight: float = TASK_DEFAULTS["train"]["relation_weight"],
     ) -> Dict[str, object]:
         return self.submit_task(
             project_id,
@@ -404,6 +405,7 @@ class RailGraphBackend:
                 "anchor_weight": anchor_weight,
                 "param_weight": param_weight,
                 "kl_weight": kl_weight,
+                "relation_weight": relation_weight,
             },
             label="train",
         )

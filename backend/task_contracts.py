@@ -90,6 +90,7 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "anchor_weight": 1.0,
         "param_weight": 2.0,
         "kl_weight": 0.0015,
+        "relation_weight": 0.5,
     },
     "generation": {
         "num_samples": 100,
@@ -274,6 +275,7 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             anchor_weight=float_param(params, "anchor_weight"),
             param_weight=float_param(params, "param_weight"),
             kl_weight=float_param(params, "kl_weight"),
+            relation_weight=float_param(params, "relation_weight"),
         )
     elif action == "generation":
         generate_scenarios(

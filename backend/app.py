@@ -109,6 +109,7 @@ class TrainRequest(BaseModel):
     anchor_weight: float = TASK_DEFAULTS["train"]["anchor_weight"]
     param_weight: float = TASK_DEFAULTS["train"]["param_weight"]
     kl_weight: float = TASK_DEFAULTS["train"]["kl_weight"]
+    relation_weight: float = TASK_DEFAULTS["train"]["relation_weight"]
 
 
 class GenerationRequest(BaseModel):
@@ -380,6 +381,7 @@ def submit_train(project_id: str, request: TrainRequest) -> Dict[str, object]:
             anchor_weight=request.anchor_weight,
             param_weight=request.param_weight,
             kl_weight=request.kl_weight,
+            relation_weight=request.relation_weight,
         )
     )
 

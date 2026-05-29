@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--anchor-weight", type=float, default=1.0)
     parser.add_argument("--param-weight", type=float, default=2.0)
     parser.add_argument("--kl-weight", type=float, default=0.0015)
+    parser.add_argument("--relation-weight", type=float, default=0.5)
     return parser.parse_args()
 
 
@@ -39,7 +40,7 @@ def main() -> None:
     import torch
 
     from src.data import RailDisturbanceDataset
-    from src.model import RailDisturbanceVAE, vae_loss
+    from src.model import ARCHITECTURE_VERSION, RailDisturbanceVAE, vae_loss
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -61,6 +62,7 @@ def main() -> None:
         loss_history_path=output_dir / "loss_history.jsonl",
     )
     config_payload = vars(args).copy()
+    config_payload["architecture_version"] = ARCHITECTURE_VERSION
     config_payload["created_at"] = datetime.now().isoformat(timespec="seconds")
     config_payload["run_dir"] = str(output_dir.resolve()).replace("\\", "/")
     config_payload["resolved_output_dir"] = str(output_dir.resolve()).replace("\\", "/")
@@ -69,7 +71,7 @@ def main() -> None:
         encoding="utf-8",
     )
     (output_dir / "schema_summary.json").write_text(
-        json.dumps(_schema_summary(first_sample), ensure_ascii=False, indent=2),
+        json.dumps(_schema_summary(first_sample, architecture_version=ARCHITECTURE_VERSION), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     logger.log("Training started")
@@ -112,6 +114,7 @@ def main() -> None:
                         count_weight=args.count_weight,
                         anchor_weight=args.anchor_weight,
                         param_weight=args.param_weight,
+                        relation_weight=args.relation_weight,
                     )
                     if not torch.isfinite(loss):
                         raise ValueError(f"Non-finite loss for sample: {sample.graph_path}")
@@ -217,8 +220,12 @@ def _prepare_output_dir(path: Path, *, allowed_root: Path) -> None:
             target.unlink()
 
 
-def _schema_summary(sample) -> Dict[str, object]:
+def _schema_summary(sample, *, architecture_version: int) -> Dict[str, object]:
     return {
+        "architecture_version": architecture_version,
+        "posterior_encoder": "joint_gnn(C + G_D + R)",
+        "decoder": "z_conditioned_heads(C embeddings, z) -> task_outputs",
+        "auxiliary_loss": "target_relation_smooth_l1",
         "pools": {
             str(pool_id): {
                 "size": rule.size,
@@ -314,7 +321,8 @@ class _TrainingLogger:
         self._clear_progress_line()
         line = (
             "epoch={epoch}/{epochs} done loss={loss:.6f} count={count_loss:.6f} "
-            "anchor={anchor_loss:.6f} param={param_loss:.6f} kl={kl:.6f} elapsed={elapsed:.1f}s"
+            "anchor={anchor_loss:.6f} param={param_loss:.6f} "
+            "relation={relation_loss:.6f} kl={kl:.6f} elapsed={elapsed:.1f}s"
         ).format(
             epoch=epoch,
             epochs=epochs,
@@ -322,6 +330,7 @@ class _TrainingLogger:
             count_loss=metrics.get("count_loss", 0.0),
             anchor_loss=metrics.get("anchor_loss", 0.0),
             param_loss=metrics.get("param_loss", 0.0),
+            relation_loss=metrics.get("relation_loss", 0.0),
             kl=metrics.get("kl", 0.0),
             elapsed=elapsed,
         )
@@ -351,7 +360,7 @@ def _progress_line(
     return (
         "epoch={epoch}/{epochs} [{bar}] {step}/{total_steps} "
         "loss={loss:.6f} count={count_loss:.6f} anchor={anchor_loss:.6f} "
-        "param={param_loss:.6f} kl={kl:.6f} elapsed={elapsed:.1f}s"
+        "param={param_loss:.6f} relation={relation_loss:.6f} kl={kl:.6f} elapsed={elapsed:.1f}s"
     ).format(
         epoch=epoch,
         epochs=epochs,
@@ -362,6 +371,7 @@ def _progress_line(
         count_loss=metrics.get("count_loss", 0.0),
         anchor_loss=metrics.get("anchor_loss", 0.0),
         param_loss=metrics.get("param_loss", 0.0),
+        relation_loss=metrics.get("relation_loss", 0.0),
         kl=metrics.get("kl", 0.0),
         elapsed=elapsed,
     )

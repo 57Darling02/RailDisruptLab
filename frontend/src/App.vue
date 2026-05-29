@@ -100,6 +100,7 @@ const DEFAULT_TRAIN_FORM: TrainForm = {
   anchor_weight: 1,
   param_weight: 2,
   kl_weight: 0.0015,
+  relation_weight: 0.5,
 }
 const DEFAULT_SPEED_INTERRUPTION_THRESHOLD = 20
 const DEVICE_OPTIONS = ['auto', 'cpu', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3']
@@ -122,6 +123,7 @@ const TRAIN_FIELD_TIPS = {
   anchor_weight: '扰动锚点位置预测损失权重。',
   param_weight: '扰动参数预测损失权重，例如延误秒数、限速速度等。',
   kl_weight: 'VAE KL 散度损失权重，控制潜空间正则强度。',
+  relation_weight: '扰动关系辅助损失权重，用于强化 target_relations 的时空关联学习。',
 } as const
 const GENERATION_FIELD_TIPS = {
   scenario_set_id: '扰动生成模型生成的场景会写入这个扰动场景集。',
@@ -2195,6 +2197,14 @@ function notifyError(error: unknown) {
                   <FieldLabelTip label="KL" :tip="TRAIN_FIELD_TIPS.kl_weight" />
                 </template>
                 <el-input-number v-model="trainForm.kl_weight" :min="0" :step="0.0005" />
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :md="6">
+              <el-form-item>
+                <template #label>
+                  <FieldLabelTip label="Relation" :tip="TRAIN_FIELD_TIPS.relation_weight" />
+                </template>
+                <el-input-number v-model="trainForm.relation_weight" :min="0" :step="0.1" />
               </el-form-item>
             </el-col>
           </el-row>

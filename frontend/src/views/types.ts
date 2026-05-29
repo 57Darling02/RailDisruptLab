@@ -75,6 +75,7 @@ export interface TrainForm {
   anchor_weight: number
   param_weight: number
   kl_weight: number
+  relation_weight: number
 }
 
 export type ModelCheckpointTagType = TaskTagType
