@@ -41,6 +41,7 @@ export interface DatasetRunForm {
   solveTimeLimit: number
   solveMipGap: number
   solveThreads: number
+  skipSolved: boolean
 }
 
 export interface DatasetBuildForm {

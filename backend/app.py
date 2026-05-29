@@ -80,6 +80,7 @@ class SolveRequest(BaseModel):
     time_limit: Optional[float] = None
     mip_gap: Optional[float] = None
     threads: Optional[int] = None
+    skip_solved: bool = TASK_DEFAULTS["solve"]["skip_solved"]
 
 
 class ExportTimetableRequest(BaseModel):
@@ -338,6 +339,7 @@ def submit_solve(project_id: str, request: SolveRequest) -> Dict[str, object]:
             time_limit=request.time_limit,
             mip_gap=request.mip_gap,
             threads=request.threads,
+            skip_solved=request.skip_solved,
         )
     )
 

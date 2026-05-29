@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import VChart from 'vue-echarts'
 
+import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
 import TimetableChart from '@/components/TimetableChart.vue'
 import type {
   ScenarioCoverageRow,
@@ -53,6 +54,12 @@ const coverageBarOption = computed(() => buildCoverageBarOption(props.visualizat
 const counts = computed(() => props.visualization?.summary.disturbance_counts)
 const scenarioById = computed(
   () => new Map(props.visualization?.scenarios.map((item) => [item.scenario_id, item]) ?? []),
+)
+const scenarioSetOptions = computed<EntityOption[]>(() =>
+  props.scenarioSets.map((item) => ({
+    label: `${item.scenario_set_id} (${item.case_count})`,
+    value: item.scenario_set_id,
+  })),
 )
 
 watch(
@@ -168,43 +175,17 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
 <template>
   <section class="page-layout">
     <div class="page-stack">
-      <el-card shadow="never">
-        <div class="toolbar-row">
-          <div class="inline-control">
-            <span>扰动场景集：</span>
-            <el-select
-              :model-value="selectedScenarioSetId"
-              placeholder="选择扰动场景集"
-              class="toolbar-select"
-              @update:model-value="$emit('update:selectedScenarioSetId', $event)"
-              @visible-change="$emit('reloadScenarioSets', $event)"
-            >
-              <el-option
-                v-for="item in scenarioSets"
-                :key="item.scenario_set_id"
-                :label="`${item.scenario_set_id} (${item.case_count})`"
-                :value="item.scenario_set_id"
-              >
-                <div class="select-option-row">
-                  <span class="select-option-main">
-                    {{ item.scenario_set_id }} ({{ item.case_count }})
-                  </span>
-                  <el-button
-                    class="select-option-delete"
-                    link
-                    type="danger"
-                    aria-label="删除扰动场景集"
-                    @click.stop.prevent="$emit('deleteScenarioSet', item.scenario_set_id)"
-                  >
-                    x
-                  </el-button>
-                </div>
-              </el-option>
-            </el-select>
-            <el-button @click="$emit('createScenarioSet')">新增</el-button>
-          </div>
-        </div>
-      </el-card>
+      <EntityToolbar
+        label="扰动场景集"
+        :model-value="selectedScenarioSetId"
+        :options="scenarioSetOptions"
+        placeholder="选择扰动场景集"
+        delete-label="删除扰动场景集"
+        @update:model-value="$emit('update:selectedScenarioSetId', $event)"
+        @visible-change="$emit('reloadScenarioSets', $event)"
+        @add="$emit('createScenarioSet')"
+        @delete="$emit('deleteScenarioSet', $event)"
+      />
 
       <div v-if="!scenarioSets.length" class="primary-empty-panel">
         <el-empty :image-size="120">

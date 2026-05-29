@@ -66,6 +66,7 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "time_limit": 120.0,
         "mip_gap": 0.0,
         "threads": 0,
+        "skip_solved": False,
     },
     "export_timetable": {
         "case_id": "",
@@ -242,6 +243,7 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             time_limit=float_param(params, "time_limit"),
             mip_gap=float_param(params, "mip_gap"),
             threads=int_param(params, "threads"),
+            skip_solved=bool_param(params, "skip_solved"),
         )
     elif action == "export_timetable":
         export_dataset_timetables(

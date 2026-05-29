@@ -61,11 +61,14 @@ type ScenarioSpeedLimitForm = {
 
 const SHORT_TASK_WAIT_MS = 12000
 const SHORT_TASK_POLL_MS = 500
+const TASK_POLL_MS = 2500
+const TASK_DURATION_TICK_MS = 1000
 const DEFAULT_DATASET_RUN_FORM: DatasetRunForm = {
   solveLimit: 0,
   solveTimeLimit: 120,
   solveMipGap: 0,
   solveThreads: 0,
+  skipSolved: false,
 }
 const DEFAULT_DATASET_BUILD_FORM: DatasetBuildForm = {
   objective_delay_weight: 1,
@@ -99,6 +102,7 @@ const DEFAULT_TRAIN_FORM: TrainForm = {
   kl_weight: 0.0015,
 }
 const DEFAULT_SPEED_INTERRUPTION_THRESHOLD = 20
+const DEVICE_OPTIONS = ['auto', 'cpu', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3']
 const TRAIN_FIELD_TIPS = {
   model_id: '本次训练产物的扰动生成模型目录 ID，用于后续选择 checkpoint 生成场景。',
   scenario_set_id: '训练样本来源，固定使用一个完整扰动场景集。',
@@ -113,7 +117,7 @@ const TRAIN_FIELD_TIPS = {
   batch_size: '每次优化使用的样本数量。',
   lr: '优化器学习率。',
   seed: '随机种子，用于复现实验。',
-  device: '训练设备，auto 会优先使用 CUDA。',
+  device: '训练设备，auto 会优先使用 CUDA；指定 GPU 卡号可填写 cuda:0、cuda:1，CPU 填 cpu。',
   count_weight: '扰动数量预测损失权重。',
   anchor_weight: '扰动锚点位置预测损失权重。',
   param_weight: '扰动参数预测损失权重，例如延误秒数、限速速度等。',
@@ -123,7 +127,7 @@ const GENERATION_FIELD_TIPS = {
   scenario_set_id: '扰动生成模型生成的场景会写入这个扰动场景集。',
   num_samples: '本次从扰动生成模型采样并解码出的场景数量。',
   seed: '生成随机种子，用于复现采样结果。',
-  device: '生成使用的设备，auto 会优先使用 CUDA。',
+  device: '生成使用的设备，auto 会优先使用 CUDA；指定 GPU 卡号可填写 cuda:0、cuda:1，CPU 填 cpu。',
   speed_interruption_threshold:
     '生成解码时，低于该速度阈值的限速会被转成 limit_speed=0；后续 build 会按中断建模。',
   overwrite: '开启后会覆盖同名扰动场景集。',
@@ -164,6 +168,7 @@ const selectedProjectId = ref('')
 const project = ref<ProjectState | null>(null)
 const planTimetable = ref<PlanTimetableState | null>(null)
 const tasks = ref<Task[]>([])
+const taskNow = ref(Date.now())
 const activePage = ref<PageKey>('dashboard')
 const busy = ref(false)
 const mainScrollbar = ref<ScrollbarInstance>()
@@ -208,7 +213,6 @@ const datasetCreateDialogVisible = ref(false)
 const datasetCreateMode = ref<DatasetCreateMode>('scenario_set')
 const newDatasetId = ref('')
 const datasetCreateScenarioSetId = ref('')
-const datasetCreateSuffix = ref('')
 const datasetBuildDialogVisible = ref(false)
 const datasetBuildForm = ref({
   scenario_set_id: '',
@@ -245,9 +249,15 @@ const generationForm = ref({
 })
 
 let pollHandle = 0
+let durationTickHandle = 0
 
 const hasProject = computed(() => Boolean(selectedProjectId.value && project.value?.exists))
 const originalGraphActive = computed(() => Boolean(project.value?.has_context))
+const trainModelPrefix = computed(() => {
+  const scenarioSetId = trainForm.scenario_set_id.trim()
+  return scenarioSetId ? `train_${scenarioSetId}` : ''
+})
+const generationScenarioSetPrefix = computed(() => selectedModelId.value.trim())
 const scenarioSets = computed(() => project.value?.scenario_sets ?? [])
 const datasets = computed(() => project.value?.datasets ?? [])
 const models = computed(() => project.value?.models ?? [])
@@ -290,6 +300,7 @@ const taskPageOptions = computed(() => [
   ...PAGE_TASK_FILTERS.map((item) => ({ label: item.label, value: item.value })),
 ])
 const visibleTasks = computed(() => tasks.value)
+const hasRunningTasks = computed(() => tasks.value.some((task) => !isTaskTerminal(task)))
 const projectTasks = computed(() => tasks.value.filter((task) => task.group === selectedProjectId.value))
 const runningTaskCount = computed(() => projectTasks.value.filter((task) => !isTaskTerminal(task)).length)
 const doneTaskCount = computed(() => projectTasks.value.filter(isTaskSuccessful).length)
@@ -322,19 +333,14 @@ watch(selectedDatasetId, async () => {
 watch(datasetCreateMode, (mode) => {
   if (mode === 'scenario_set' && !datasetCreateScenarioSetId.value) {
     datasetCreateScenarioSetId.value = selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
-    if (!datasetCreateSuffix.value) datasetCreateSuffix.value = nextTimestampSuffix()
     syncDatasetCreateId()
   }
   if (mode === 'empty' && !newDatasetId.value) {
-    newDatasetId.value = nextDatasetId()
+    newDatasetId.value = ''
   }
 })
 
 watch(datasetCreateScenarioSetId, () => {
-  if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
-})
-
-watch(datasetCreateSuffix, () => {
   if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
 })
 
@@ -357,16 +363,25 @@ watch(generationScenarioSetSuffix, () => {
   if (generationDialogVisible.value) syncGenerationScenarioSetId()
 })
 
+watch(hasRunningTasks, (hasRunning) => {
+  if (hasRunning) {
+    startDurationTick()
+  } else {
+    stopDurationTick()
+  }
+})
+
 onMounted(async () => {
   await bootstrap()
   pollHandle = window.setInterval(() => {
-    void refreshTasks(false)
-    if (selectedProjectId.value) void loadSelectedProject(false)
-  }, 2500)
+    void pollTasks()
+  }, TASK_POLL_MS)
+  if (hasRunningTasks.value) startDurationTick()
 })
 
 onUnmounted(() => {
   window.clearInterval(pollHandle)
+  stopDurationTick()
 })
 
 async function bootstrap() {
@@ -464,6 +479,25 @@ async function refreshTasks(showMessage = true) {
   } catch (error) {
     if (showMessage) notifyError(error)
   }
+}
+
+async function pollTasks() {
+  taskNow.value = Date.now()
+  await refreshTasks(false)
+  if (selectedProjectId.value) await loadSelectedProject(false)
+}
+
+function startDurationTick() {
+  if (durationTickHandle) return
+  durationTickHandle = window.setInterval(() => {
+    taskNow.value = Date.now()
+  }, TASK_DURATION_TICK_MS)
+}
+
+function stopDurationTick() {
+  if (!durationTickHandle) return
+  window.clearInterval(durationTickHandle)
+  durationTickHandle = 0
 }
 
 async function createProject() {
@@ -853,7 +887,7 @@ async function createDataset() {
   if (!datasetId) {
     ElMessage.warning(
       importScenarioSet
-        ? '请先选择扰动场景集并填写 MILP 实例集后缀。'
+        ? '请先选择要引入的扰动场景集。'
         : '请填写 MILP 实例集 ID。',
     )
     return
@@ -927,6 +961,7 @@ async function submitSolve(caseId = '') {
       caseId,
       options.solveMipGap,
       options.solveThreads,
+      caseId ? false : options.skipSolved,
     )
     trackTask(response.task)
     solveDialogVisible.value = false
@@ -972,6 +1007,7 @@ function normalizedSolveOptions(): DatasetRunForm {
     solveThreads: Math.floor(
       nonNegativeNumber(datasetRunForm.value.solveThreads, DEFAULT_DATASET_RUN_FORM.solveThreads),
     ),
+    skipSolved: Boolean(datasetRunForm.value.skipSolved),
   }
 }
 
@@ -1004,9 +1040,7 @@ async function reloadDatasetsOnOpen(visible: boolean) {
 async function openDatasetCreateDialog() {
   datasetCreateMode.value = scenarioSets.value.length ? 'scenario_set' : 'empty'
   datasetCreateScenarioSetId.value = selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
-  datasetCreateSuffix.value = nextTimestampSuffix()
-  newDatasetId.value =
-    datasetCreateMode.value === 'scenario_set' ? '' : nextDatasetId()
+  newDatasetId.value = ''
   if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
   datasetCreateDialogVisible.value = true
 }
@@ -1014,7 +1048,6 @@ async function openDatasetCreateDialog() {
 function resetDatasetCreateForm() {
   newDatasetId.value = ''
   datasetCreateScenarioSetId.value = ''
-  datasetCreateSuffix.value = ''
   datasetCreateMode.value = 'scenario_set'
 }
 
@@ -1023,9 +1056,7 @@ function defaultBuildOptions(): DatasetBuildForm {
 }
 
 function syncDatasetCreateId() {
-  const prefix = datasetCreateScenarioSetId.value.trim()
-  const suffix = datasetCreateSuffix.value.trim()
-  newDatasetId.value = prefix && suffix ? `${prefix}_${suffix}` : prefix || suffix
+  newDatasetId.value = datasetCreateScenarioSetId.value.trim()
 }
 
 async function openDatasetBuildDialog() {
@@ -1138,7 +1169,7 @@ function resetTrainForm(mode: 'create' | 'retrain' = trainDialogMode.value) {
     scenario_set_id: scenarioSetId,
   })
   if (mode === 'create') {
-    trainModelSuffix.value = nextModelSuffix()
+    trainModelSuffix.value = ''
     syncTrainModelId()
   } else {
     trainModelSuffix.value = ''
@@ -1146,7 +1177,7 @@ function resetTrainForm(mode: 'create' | 'retrain' = trainDialogMode.value) {
 }
 
 function syncTrainModelId() {
-  const prefix = trainForm.scenario_set_id.trim()
+  const prefix = trainModelPrefix.value
   const suffix = trainModelSuffix.value.trim()
   trainForm.model_id = prefix && suffix ? `${prefix}_${suffix}` : prefix || suffix
 }
@@ -1190,8 +1221,9 @@ function openGenerationDialog(file: ModelCheckpoint) {
 }
 
 function syncGenerationScenarioSetId() {
+  const prefix = generationScenarioSetPrefix.value
   const suffix = generationScenarioSetSuffix.value.trim()
-  generationForm.value.scenario_set_id = suffix ? `generated_${suffix}` : 'generated'
+  generationForm.value.scenario_set_id = prefix && suffix ? `${prefix}_${suffix}` : prefix || suffix
 }
 
 async function submitGeneration() {
@@ -1536,16 +1568,8 @@ function stringConfigValue(value: unknown) {
   return typeof value === 'string' ? value : ''
 }
 
-function nextModelSuffix() {
-  return nextTimestampSuffix()
-}
-
 function nextTimestampSuffix() {
   return new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
-}
-
-function nextDatasetId() {
-  return `milp_${nextTimestampSuffix()}`
 }
 
 function nextScenarioId() {
@@ -1770,6 +1794,7 @@ function notifyError(error: unknown) {
           <el-aside v-if="hasProject" width="340px" class="task-aside">
             <TaskPanel
               :tasks="visibleTasks"
+              :now="taskNow"
               :project-options="taskProjectOptions"
               :page-options="taskPageOptions"
               :initial-project-id="selectedProjectId"
@@ -1999,9 +2024,9 @@ function notifyError(error: unknown) {
                 <el-input
                   v-if="trainDialogMode === 'create'"
                   v-model="trainModelSuffix"
-                  placeholder="默认使用当前时间戳"
+                  placeholder="请输入模型后缀"
                 >
-                  <template #prepend>{{ trainForm.scenario_set_id || '请选择扰动场景集' }}_</template>
+                  <template #prepend>{{ trainModelPrefix || '请选择扰动场景集' }}_</template>
                 </el-input>
                 <el-input v-else v-model="trainForm.model_id" disabled />
               </el-form-item>
@@ -2107,7 +2132,20 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="设备" :tip="TRAIN_FIELD_TIPS.device" />
                 </template>
-                <el-input v-model="trainForm.device" />
+                <el-select
+                  v-model="trainForm.device"
+                  filterable
+                  allow-create
+                  default-first-option
+                  class="full-width"
+                >
+                  <el-option
+                    v-for="device in DEVICE_OPTIONS"
+                    :key="device"
+                    :label="device"
+                    :value="device"
+                  />
+                </el-select>
               </el-form-item>
             </el-col>
           </el-row>
@@ -2171,7 +2209,7 @@ function notifyError(error: unknown) {
             v-model="generationScenarioSetSuffix"
             placeholder="默认使用当前时间戳"
           >
-            <template #prepend>generated_</template>
+            <template #prepend>{{ generationScenarioSetPrefix }}_</template>
           </el-input>
         </el-form-item>
         <el-form-item>
@@ -2190,7 +2228,20 @@ function notifyError(error: unknown) {
           <template #label>
             <FieldLabelTip label="设备" :tip="GENERATION_FIELD_TIPS.device" />
           </template>
-          <el-input v-model="generationForm.device" />
+          <el-select
+            v-model="generationForm.device"
+            filterable
+            allow-create
+            default-first-option
+            class="full-width"
+          >
+            <el-option
+              v-for="device in DEVICE_OPTIONS"
+              :key="device"
+              :label="device"
+              :value="device"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -2246,12 +2297,10 @@ function notifyError(error: unknown) {
           </el-form-item>
           <el-form-item label="MILP 实例集 ID">
             <el-input
-              v-model="datasetCreateSuffix"
-              placeholder="默认使用当前时间戳"
+              :model-value="newDatasetId"
+              disabled
               @keydown.enter.prevent="createDataset"
-            >
-              <template #prepend>{{ datasetCreateScenarioSetId || '请选择扰动场景集' }}_</template>
-            </el-input>
+            />
           </el-form-item>
         </template>
         <el-form-item v-else label="MILP 实例集 ID">
@@ -2373,6 +2422,9 @@ function notifyError(error: unknown) {
         <el-form-item v-if="!solveTargetCaseId" label="数量上限">
           <el-input-number v-model="datasetRunForm.solveLimit" :min="0" />
           <span class="form-hint">0 表示全部</span>
+        </el-form-item>
+        <el-form-item v-if="!solveTargetCaseId" label="已有解则跳过">
+          <el-switch v-model="datasetRunForm.skipSolved" />
         </el-form-item>
         <el-form-item label="单次限时秒数">
           <el-input-number v-model="datasetRunForm.solveTimeLimit" :min="0" />

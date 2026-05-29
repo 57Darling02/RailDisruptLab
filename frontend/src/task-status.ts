@@ -45,6 +45,7 @@ export function taskDisplayStatus(task: Task) {
 }
 
 export function taskDisplayLabel(task: Task | string | null | undefined) {
+  if (typeof task !== 'string' && task?.display_name) return task.display_name
   const label = typeof task === 'string' ? task : task?.label
   if (!label) return '任务'
   return (

@@ -10,6 +10,7 @@ import {
   taskDisplayStatus,
   taskTagType,
 } from '@/task-status'
+import { formatTaskDuration, formatTaskTime, taskSortTime } from '@/task-time'
 import type { Task } from '@/types'
 
 type TaskOption = { label: string; value: string }
@@ -23,10 +24,12 @@ const props = withDefaults(
     pageFilters: readonly PageFilter[]
     initialProjectId?: string
     emptyText?: string
+    now?: number
   }>(),
   {
     initialProjectId: '',
     emptyText: '暂无任务',
+    now: () => Date.now(),
   },
 )
 
@@ -75,16 +78,10 @@ function compareTasks(left: Task, right: Task) {
   const rightRunning = !isTaskTerminal(right)
   if (leftRunning !== rightRunning) return leftRunning ? -1 : 1
 
-  const timeDelta = taskTime(right) - taskTime(left)
+  const timeDelta = taskSortTime(right) - taskSortTime(left)
   if (timeDelta !== 0) return timeDelta
 
   return right.id - left.id
-}
-
-function taskTime(task: Task) {
-  if (!task.created_at) return 0
-  const time = Date.parse(task.created_at)
-  return Number.isFinite(time) ? time : 0
 }
 </script>
 
@@ -134,7 +131,7 @@ function taskTime(task: Task) {
           <div class="task-item-main">
             <div class="task-title">
               <span>#{{ task.id }}</span>
-              <span>{{ taskDisplayLabel(task) }}</span>
+              <el-text truncated>{{ taskDisplayLabel(task) }}</el-text>
             </div>
             <el-tag
               size="small"
@@ -144,7 +141,15 @@ function taskTime(task: Task) {
               {{ taskDisplayStatus(task) }}
             </el-tag>
           </div>
-          <div class="task-meta">项目：{{ task.group || '-' }}</div>
+          <div class="task-meta">
+            <div class="task-meta-row">
+              <span>项目：{{ task.group || '-' }}</span>
+              <span v-if="task.started_at || task.finished_at">耗时：{{ formatTaskDuration(task, now) }}</span>
+            </div>
+            <span>提交：{{ formatTaskTime(task.created_at) }}</span>
+            <span v-if="task.started_at">开始：{{ formatTaskTime(task.started_at) }}</span>
+            <span v-if="task.finished_at">结束：{{ formatTaskTime(task.finished_at) }}</span>
+          </div>
           <div class="task-actions">
             <el-button link type="primary" @click="openLog(task)">日志</el-button>
             <el-button
@@ -244,16 +249,19 @@ function taskTime(task: Task) {
   font-weight: 600;
 }
 
-.task-title span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .task-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin-top: 4px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+
+.task-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .task-actions {

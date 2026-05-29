@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 
+from backend.task_resources import task_input_payload
 from core.project_layout import REPO_ROOT, sanitize_id, to_posix
 
 
@@ -133,9 +134,6 @@ class PueueClient:
         local_log = self._task_log_path(task_id)
         if local_log.is_file():
             return tail_text(local_log, lines=lines)
-        task = self.get_task(task_id)
-        if task is not None and str(task.get("status", "")) in {"Queued", "Running", "Paused", "Stashed"}:
-            return ""
 
         args = ["log"]
         if lines is None:
@@ -278,19 +276,84 @@ daemon:
             status_name = next(iter(status.keys()))
             status_payload = status.get(status_name)
 
+        payload = task_input_payload(task)
+        action = str(payload.get("action") or task.get("label") or "")
+        raw_params = payload.get("params", {})
+        params = raw_params if isinstance(raw_params, dict) else {}
+
         return {
             "id": task.get("id"),
             "group": task.get("group"),
             "label": task.get("label"),
+            "display_name": task_display_name(action, params, fallback=str(task.get("label") or "")),
             "command": task.get("command"),
             "original_command": task.get("original_command"),
             "path": task.get("path"),
             "status": status_name or str(status),
             "status_detail": status_payload,
             "created_at": task.get("created_at"),
+            "started_at": task_time(task, status_payload, "started_at", "start_at", "start"),
+            "finished_at": task_time(task, status_payload, "finished_at", "end_at", "end"),
             "dependencies": task.get("dependencies", []),
             "priority": task.get("priority", 0),
         }
+
+
+def task_time(task: Dict[str, object], status_payload: object, *keys: str) -> Optional[str]:
+    for key in keys:
+        value = task.get(key)
+        if value:
+            return str(value)
+    if isinstance(status_payload, dict):
+        for key in keys:
+            value = status_payload.get(key)
+            if value:
+                return str(value)
+    return None
+
+
+def task_display_name(action: str, params: Dict[str, object], *, fallback: str) -> str:
+    if action == "newproject":
+        return "创建项目"
+    if action == "deleteproject":
+        return "删除项目"
+    if action == "source_delete":
+        return titled(params, "filename", "删除源文件")
+    if action == "prepare":
+        return "激活原计划运行图"
+    if action == "scenario_set_create":
+        return titled(params, "scenario_set_id", "创建扰动场景集")
+    if action == "normal_generate":
+        return titled(params, "scenario_set_id", "批量生成场景")
+    if action == "scenario_add":
+        return titled(params, ("scenario_set_id", "scenario_id"), "新增场景")
+    if action == "scenario_delete":
+        return titled(params, ("scenario_set_id", "scenario_id"), "删除场景")
+    if action == "dataset_create":
+        return titled(params, "dataset_id", "创建 MILP 实例集")
+    if action == "build":
+        return titled(params, ("dataset_id", "scenario_id"), "构建 MILP")
+    if action == "solve":
+        return titled(params, ("dataset_id", "case_id"), "求解")
+    if action == "export_timetable":
+        return titled(params, ("dataset_id", "case_id"), "导出时刻表")
+    if action == "train":
+        return titled(params, "model_id", "训练模型")
+    if action == "generation":
+        return titled(params, ("scenario_set_id", "model_id"), "生成场景")
+    return fallback
+
+
+def titled(params: Dict[str, object], keys: Union[str, Sequence[str]], action_label: str) -> str:
+    location = task_location(params, keys)
+    return f"{action_label}-{location}" if location else action_label
+
+
+def task_location(params: Dict[str, object], keys: Union[str, Sequence[str]]) -> str:
+    if isinstance(keys, str):
+        keys = (keys,)
+    parts = [str(params.get(key, "") or "").strip() for key in keys]
+    return "/".join(part for part in parts if part)
 
 
 def tail_text(path: Path, *, lines: Optional[int] = None) -> str:

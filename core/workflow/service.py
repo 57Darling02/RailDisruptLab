@@ -215,16 +215,24 @@ def solve_dataset(
     time_limit: float = 120.0,
     mip_gap: float = 0.0,
     threads: int = 0,
+    skip_solved: bool = False,
 ) -> None:
     dataset = layout.dataset(dataset_id)
     case_dirs = [dataset_case_dir(dataset, case_id)] if case_id else limit_items(dataset_case_dirs(dataset), limit)
     records = [
-        solve_case(case_dir, index, time_limit=time_limit, mip_gap=mip_gap, threads=threads)
+        solve_case(
+            case_dir,
+            index,
+            time_limit=time_limit,
+            mip_gap=mip_gap,
+            threads=threads,
+            skip_solved=skip_solved and not case_id,
+        )
         for index, case_dir in enumerate(case_dirs, start=1)
     ]
 
     fail_if_records_failed(records, "solve")
-    ok_count = sum(1 for record in records if record.get("status") in {"ok", "timeout"})
+    ok_count = sum(1 for record in records if record.get("status") in {"ok", "timeout", "skipped"})
     print(f"Solve finished: {ok_count}/{len(records)} case(s)")
 
 
@@ -235,6 +243,7 @@ def solve_case(
     time_limit: float = 120.0,
     mip_gap: float = 0.0,
     threads: int = 0,
+    skip_solved: bool = False,
 ) -> Dict[str, object]:
     started = datetime.now()
     case_id = sanitize_id(case_dir.name)
@@ -245,27 +254,31 @@ def solve_case(
         "time_limit": max(0.0, float(time_limit or 0.0)),
         "mip_gap": max(0.0, float(mip_gap or 0.0)),
         "threads": max(0, int(threads or 0)),
+        "skip_solved": bool(skip_solved),
     }
     try:
         if not lp_path.is_file():
             raise FileNotFoundError(f"LP not found: {lp_path}")
-        result = solve_lp(
-            lp_path,
-            sol_path,
-            quiet=True,
-            threads=int(solver_config["threads"]),
-            time_limit=float(solver_config["time_limit"]),
-            mip_gap=float(solver_config["mip_gap"]),
-        )
-        write_solution_csv(sol_path.with_suffix(".sol.csv"), result.values)
-        record.update(
-            {
-                "status": "timeout" if result.timed_out else "ok",
-                "objective": round(result.objective, 4),
-                "mip_gap": round(result.mip_gap, 6),
-                "num_nodes": int(round(result.node_count)),
-            }
-        )
+        if skip_solved and sol_path.is_file() and sol_path.with_suffix(".sol.csv").is_file():
+            record.update({"status": "skipped", "reason": "solution_exists"})
+        else:
+            result = solve_lp(
+                lp_path,
+                sol_path,
+                quiet=True,
+                threads=int(solver_config["threads"]),
+                time_limit=float(solver_config["time_limit"]),
+                mip_gap=float(solver_config["mip_gap"]),
+            )
+            write_solution_csv(sol_path.with_suffix(".sol.csv"), result.values)
+            record.update(
+                {
+                    "status": "timeout" if result.timed_out else "ok",
+                    "objective": round(result.objective, 4),
+                    "mip_gap": round(result.mip_gap, 6),
+                    "num_nodes": int(round(result.node_count)),
+                }
+            )
     except GurobiSolveError as exc:
         record.update(
             {

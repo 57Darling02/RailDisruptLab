@@ -173,6 +173,7 @@ export const api = {
     caseId = '',
     mipGap?: number,
     threads?: number,
+    skipSolved = false,
   ) =>
     request<TaskResponse>(`/projects/${projectId}/tasks/solve`, {
       method: 'POST',
@@ -183,6 +184,7 @@ export const api = {
         time_limit: timeLimit ?? null,
         mip_gap: mipGap ?? null,
         threads: threads ?? null,
+        skip_solved: skipSolved,
       }),
     }),
   submitExportTimetable: (projectId: string, datasetId: string, limit = 0, caseId = '') =>

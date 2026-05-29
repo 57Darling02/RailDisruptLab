@@ -11,6 +11,7 @@ import type {
 import type { ModelCheckpoint, ModelDetail, ModelLossPoint, ModelSummary, Task } from '@/types'
 import { taskOutcome } from '@/task-status'
 import type { TaskTagType } from '@/task-status'
+import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
 
 const props = defineProps<{
   selectedModelId: string
@@ -66,6 +67,12 @@ const lossChartOption = computed(() => buildLossChartOption(epochLossPoints.valu
 const latestLoss = computed(() => lossPoints.value.at(-1))
 const latestEpochLoss = computed(() => epochLossPoints.value.at(-1))
 const selectedTrainTask = computed(() => findModelTrainTask(props.tasks, props.selectedModelId))
+const modelOptions = computed<EntityOption[]>(() =>
+  props.models.map((item) => ({
+    label: item.model_id,
+    value: item.model_id,
+  })),
+)
 const trainProgress = computed(() => modelTrainingProgress())
 const graphProgress = computed(() => props.modelDetail?.graph_progress ?? {})
 const graphSampleProgress = computed(() => graphProgress.value.sample_graphs ?? {})
@@ -221,49 +228,25 @@ function escapeRegExp(value: string) {
 <template>
   <section class="page-layout">
     <div class="page-stack">
-      <el-card shadow="never">
-        <div class="toolbar-row">
-          <div class="inline-control">
-            <span>扰动生成模型：</span>
-            <el-select
-              :model-value="selectedModelId"
-              placeholder="选择扰动生成模型"
-              class="toolbar-select"
-              @update:model-value="$emit('update:selectedModelId', $event)"
-              @visible-change="$emit('reloadModels', $event)"
-            >
-              <el-option
-                v-for="item in models"
-                :key="item.model_id"
-                :label="item.model_id"
-                :value="item.model_id"
-              >
-                <div class="select-option-row">
-                  <span class="select-option-main">{{ item.model_id }}</span>
-                  <el-button
-                    class="select-option-delete"
-                    link
-                    type="danger"
-                    aria-label="删除扰动生成模型"
-                    @click.stop.prevent="$emit('deleteModel', item.model_id)"
-                  >
-                    x
-                  </el-button>
-                </div>
-              </el-option>
-            </el-select>
-            <el-button @click="$emit('train')">新增</el-button>
-          </div>
-        </div>
-        <el-alert
-          v-if="pendingModelId"
-          class="dialog-section"
-          :title="`扰动生成模型 ${pendingModelId} 正在训练，产物状态会随任务更新。`"
-          type="info"
-          show-icon
-          :closable="false"
-        />
-      </el-card>
+      <EntityToolbar
+        label="扰动生成模型"
+        :model-value="selectedModelId"
+        :options="modelOptions"
+        placeholder="选择扰动生成模型"
+        delete-label="删除扰动生成模型"
+        @update:model-value="$emit('update:selectedModelId', $event)"
+        @visible-change="$emit('reloadModels', $event)"
+        @add="$emit('train')"
+        @delete="$emit('deleteModel', $event)"
+      />
+      <el-alert
+        v-if="pendingModelId"
+        class="dialog-section"
+        :title="`扰动生成模型 ${pendingModelId} 正在训练，产物状态会随任务更新。`"
+        type="info"
+        show-icon
+        :closable="false"
+      />
 
       <el-card shadow="never">
         <template #header>

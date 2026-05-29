@@ -4,12 +4,15 @@ export interface Task {
   id: number
   group?: string
   label?: string
+  display_name?: string
   command?: string
   original_command?: string
   path?: string
   status: string
   status_detail?: unknown
   created_at?: string
+  started_at?: string | null
+  finished_at?: string | null
   dependencies?: unknown[]
   priority?: number
 }

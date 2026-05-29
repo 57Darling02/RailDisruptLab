@@ -10,9 +10,10 @@ import {
   taskDisplayStatus,
   taskTagType,
 } from '@/task-status'
+import { formatTaskDuration, formatTaskTime } from '@/task-time'
 import type { Task } from '@/types'
 
-const DEFAULT_UPDATE_INTERVAL_SEC = 1
+const RUNNING_LOG_POLL_MS = 1000
 
 const props = withDefaults(
   defineProps<{
@@ -33,7 +34,7 @@ const loading = ref(false)
 const log = ref('')
 const liveTask = ref<Task | null>(null)
 const logView = ref<HTMLElement | null>(null)
-const updateIntervalSec = ref(DEFAULT_UPDATE_INTERVAL_SEC)
+const now = ref(Date.now())
 let pollHandle = 0
 
 const visible = computed({
@@ -43,7 +44,7 @@ const visible = computed({
 const activeTask = computed(() => liveTask.value ?? props.task)
 const command = computed(() => activeTask.value?.command || activeTask.value?.original_command || '-')
 const activeTaskId = computed(() => activeTask.value?.id ?? props.task?.id ?? null)
-const isManualUpdate = computed(() => updateIntervalSec.value === 0)
+const activeTaskRunning = computed(() => Boolean(activeTask.value) && !isTaskTerminal(activeTask.value as Task))
 
 watch(
   () => [props.modelValue, props.task?.id] as const,
@@ -60,11 +61,6 @@ watch(
   { immediate: true },
 )
 
-watch(updateIntervalSec, () => {
-  stopLogPolling()
-  if (props.modelValue && activeTaskId.value != null) startLogPolling(activeTaskId.value)
-})
-
 onUnmounted(stopLogPolling)
 
 async function refreshCurrentLog() {
@@ -73,6 +69,7 @@ async function refreshCurrentLog() {
 }
 
 async function refreshLog(taskId: number, options: { showLoading?: boolean } = {}) {
+  now.value = Date.now()
   if (options.showLoading) {
     loading.value = true
     log.value = ''
@@ -100,10 +97,10 @@ async function readTask(taskId: number) {
 }
 
 function startLogPolling(taskId: number) {
-  if (isManualUpdate.value || (activeTask.value && isTaskTerminal(activeTask.value))) return
+  if (!activeTaskRunning.value) return
   pollHandle = window.setInterval(() => {
     void refreshLog(taskId)
-  }, updateIntervalSec.value * 1000)
+  }, RUNNING_LOG_POLL_MS)
 }
 
 function stopLogPolling() {
@@ -130,9 +127,12 @@ function notifyError(error: unknown) {
 
 <template>
   <el-dialog v-model="visible" :title="title" width="860px" destroy-on-close>
-    <el-descriptions v-if="activeTask" :column="1" border size="small">
+    <el-descriptions v-if="activeTask" :column="3" border size="small">
       <el-descriptions-item label="任务">
         #{{ activeTask.id }} {{ taskDisplayLabel(activeTask) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="项目">
+        {{ activeTask.group || '-' }}
       </el-descriptions-item>
       <el-descriptions-item label="状态">
         <el-tag
@@ -143,26 +143,28 @@ function notifyError(error: unknown) {
           {{ taskDisplayStatus(activeTask) }}
         </el-tag>
       </el-descriptions-item>
-      <el-descriptions-item label="命令">
+      <el-descriptions-item label="提交时间">
+        {{ formatTaskTime(activeTask.created_at) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="开始时间">
+        {{ formatTaskTime(activeTask.started_at) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="结束时间">
+        {{ formatTaskTime(activeTask.finished_at) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="耗时">
+        {{ formatTaskDuration(activeTask, now) }}
+      </el-descriptions-item>
+      <el-descriptions-item label="命令" :span="3">
         <pre class="task-command">{{ command }}</pre>
       </el-descriptions-item>
     </el-descriptions>
 
     <el-divider content-position="left">日志</el-divider>
     <div class="log-toolbar">
-      <div class="log-interval-control">
-        <span>更新间隔</span>
-        <el-slider
-          v-model="updateIntervalSec"
-          :min="0"
-          :max="10"
-          :step="1"
-          :format-tooltip="(value: number) => (value === 0 ? '手动更新' : `${value}s`)"
-        />
-        <span class="log-interval-value">
-          {{ isManualUpdate ? '手动更新' : `${updateIntervalSec}s` }}
-        </span>
-      </div>
+      <span class="log-refresh-note">
+        {{ activeTaskRunning ? '运行中，自动每 1s 刷新' : '任务已结束，可手动刷新' }}
+      </span>
       <el-button :loading="loading" @click="refreshCurrentLog">刷新</el-button>
     </div>
     <pre ref="logView" v-loading="loading" class="task-log-view">{{ log || '暂无日志输出' }}</pre>
@@ -184,33 +186,15 @@ function notifyError(error: unknown) {
   color: var(--el-text-color-regular);
 }
 
-.log-toolbar,
-.log-interval-control {
+.log-toolbar {
   display: flex;
   align-items: center;
   gap: 12px;
-}
-
-.log-toolbar {
   justify-content: space-between;
   margin-bottom: 10px;
 }
 
-.log-interval-control {
-  flex: 1;
-  min-width: 0;
-}
-
-.log-interval-control span:first-child {
-  white-space: nowrap;
-}
-
-.log-interval-control :deep(.el-slider) {
-  max-width: 280px;
-}
-
-.log-interval-value {
-  width: 72px;
+.log-refresh-note {
   color: var(--el-text-color-secondary);
   font-size: 13px;
 }

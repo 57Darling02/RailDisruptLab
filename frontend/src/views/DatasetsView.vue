@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
+import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
 import type { ArtifactGroup } from '@/views/types'
 import type { DatasetSummary } from '@/types'
 
-defineProps<{
+const props = defineProps<{
   selectedDatasetId: string
   selectedDataset: DatasetSummary | null
   datasets: DatasetSummary[]
@@ -23,47 +26,29 @@ defineEmits<{
   exportTimetable: [caseId: string]
   openTimetable: [group: ArtifactGroup]
 }>()
+
+const datasetOptions = computed<EntityOption[]>(() =>
+  props.datasets.map((item) => ({
+    label: item.dataset_id,
+    value: item.dataset_id,
+  })),
+)
 </script>
 
 <template>
   <section class="page-layout">
     <div class="page-stack">
-      <el-card shadow="never">
-        <div class="toolbar-row">
-          <div class="inline-control">
-            <span>MILP 实例集：</span>
-            <el-select
-              :model-value="selectedDatasetId"
-              filterable
-              placeholder="选择 MILP 实例集"
-              class="toolbar-select"
-              @update:model-value="$emit('update:selectedDatasetId', $event)"
-              @visible-change="$emit('reloadDatasets', $event)"
-            >
-              <el-option
-                v-for="item in datasets"
-                :key="item.dataset_id"
-                :label="item.dataset_id"
-                :value="item.dataset_id"
-              >
-                <div class="select-option-row">
-                  <span class="select-option-main">{{ item.dataset_id }}</span>
-                  <el-button
-                    class="select-option-delete"
-                    link
-                    type="danger"
-                    aria-label="删除 MILP 实例集"
-                    @click.stop.prevent="$emit('deleteDataset', item.dataset_id)"
-                  >
-                    x
-                  </el-button>
-                </div>
-              </el-option>
-            </el-select>
-            <el-button @click="$emit('createDataset')">新增</el-button>
-          </div>
-        </div>
-      </el-card>
+      <EntityToolbar
+        label="MILP 实例集"
+        :model-value="selectedDatasetId"
+        :options="datasetOptions"
+        placeholder="选择 MILP 实例集"
+        delete-label="删除 MILP 实例集"
+        @update:model-value="$emit('update:selectedDatasetId', $event)"
+        @visible-change="$emit('reloadDatasets', $event)"
+        @add="$emit('createDataset')"
+        @delete="$emit('deleteDataset', $event)"
+      />
 
       <div v-if="!datasets.length" class="primary-empty-panel">
         <el-empty :image-size="120">

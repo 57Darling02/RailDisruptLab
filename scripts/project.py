@@ -108,6 +108,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     solve.add_argument("--time-limit", type=float, default=120.0)
     solve.add_argument("--mip-gap", type=float, default=0.0)
     solve.add_argument("--threads", type=int, default=0)
+    solve.add_argument("--skip-solved", action="store_true", help="Skip cases that already have .sol and .sol.csv.")
 
     export_timetable = sub.add_parser("export_timetable", help="Export adjusted timetables from solved cases.")
     export_timetable.add_argument("dataset_id")
@@ -217,6 +218,7 @@ def main() -> None:
             time_limit=args.time_limit,
             mip_gap=args.mip_gap,
             threads=args.threads,
+            skip_solved=args.skip_solved,
         )
     elif args.command == "export_timetable":
         export_dataset_timetables(

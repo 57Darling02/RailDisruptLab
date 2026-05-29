@@ -16,6 +16,8 @@ import type {
   ScenarioSetVisualization,
 } from '@/types'
 
+type ScenarioAnalysisMode = 'absolute' | 'relative'
+
 const props = defineProps<{
   page: 'ablation-scenarios' | 'ablation-datasets'
   selectedProjectId: string
@@ -27,10 +29,12 @@ const baselineScenarioSetId = ref('')
 const candidateScenarioSetIds = ref<string[]>([])
 const scenarioSetVisualizations = ref<ScenarioSetVisualization[]>([])
 const scenarioCompareLoading = ref(false)
+const scenarioAnalysisMode = ref<ScenarioAnalysisMode>('relative')
 const baselineDatasetId = ref('')
 const candidateDatasetIds = ref<string[]>([])
 const datasetSolveAnalysis = ref<DatasetSolveAnalysis | null>(null)
 const datasetCompareLoading = ref(false)
+const datasetAnalysisMode = ref<ScenarioAnalysisMode>('relative')
 
 const comparedDatasets = computed(() => {
   const selected = new Set([baselineDatasetId.value, ...candidateDatasetIds.value])
@@ -45,13 +49,53 @@ const baselineVisualization = computed(() =>
 const candidateScenarioSets = computed(() =>
   props.scenarioSets.filter((item) => item.scenario_set_id !== baselineScenarioSetId.value),
 )
-const scenarioCategoryOption = computed(() => buildScenarioCategoryOption(scenarioItems.value))
-const scenarioCoverageOption = computed(() => buildScenarioCoverageOption(scenarioItems.value))
-const mathMetricOption = computed(() => buildMetricOption(scenarioItems.value, 'math_graph_metrics'))
-const anchorCoverageOption = computed(() => buildAnchorCoverageOption(scenarioItems.value))
-const combinationMetricOption = computed(() => buildMetricOption(scenarioItems.value, 'combination_complexity'))
-const disturbanceCountOption = computed(() => buildDisturbanceCountOption(scenarioItems.value))
-const typeTimeOption = computed(() => buildTypeTimeOption(scenarioItems.value))
+const scenarioCategoryOption = computed(() =>
+  buildScenarioCategoryOption(scenarioItems.value, scenarioAnalysisMode.value),
+)
+const scenarioCoverageOption = computed(() =>
+  buildScenarioCoverageOption(scenarioItems.value, scenarioAnalysisMode.value),
+)
+const mathMetricOption = computed(() =>
+  buildMetricByMetricOption(scenarioItems.value, 'math_graph_metrics', scenarioAnalysisMode.value),
+)
+const anchorCoverageOption = computed(() =>
+  buildAnchorCoverageOption(scenarioItems.value, scenarioAnalysisMode.value),
+)
+const combinationMetricOption = computed(() =>
+  buildMetricByMetricOption(scenarioItems.value, 'combination_complexity', scenarioAnalysisMode.value),
+)
+const disturbanceCountOption = computed(() =>
+  buildDisturbanceCountOption(scenarioItems.value, scenarioAnalysisMode.value),
+)
+const typeTimeSetFilter = ref<string[]>([])
+const typeTimeTypeFilter = ref<string[]>([])
+const ALL_TYPE_FILTER = '__all__'
+const ALL_TYPE_LABEL = '全部'
+const LEGEND_NAME_LIMIT = 16
+const AXIS_LABEL_LIMIT = 12
+const typeTimeSetOptions = computed(() => scenarioItems.value.map((item) => scenarioSetLabel(item)))
+const typeTimeTypeOptions = computed(() =>
+  [
+    ALL_TYPE_LABEL,
+    ...unique(scenarioItems.value.flatMap((item) => item.summary.joint_structure.type_time.map((row) => row.type_label))),
+  ],
+)
+const typeTimeOption = computed(() =>
+  buildTypeTimeOption(
+    scenarioItems.value,
+    typeTimeSetFilter.value,
+    typeTimeTypeFilter.value,
+    scenarioAnalysisMode.value,
+  ),
+)
+const typeLocationOption = computed(() =>
+  buildTypeLocationOption(
+    scenarioItems.value,
+    typeTimeSetFilter.value,
+    typeTimeTypeFilter.value,
+    scenarioAnalysisMode.value,
+  ),
+)
 const relationRows = computed(() => scenarioItems.value.flatMap((item) => relationTableRows(item)))
 const parameterRows = computed(() => scenarioItems.value.flatMap((item) => parameterTableRows(item)))
 const incompleteDatasetMessages = computed(() =>
@@ -65,8 +109,11 @@ const datasetSummaryRows = computed(() => datasetAnalysisItems.value.flatMap(dat
 const datasetErrorRows = computed(() => datasetSolveAnalysis.value?.comparison.rows ?? [])
 const datasetErrorSummaryRows = computed(() => summarizeDatasetErrors(datasetErrorRows.value))
 const datasetConfigRows = computed(() => datasetAnalysisItems.value.map(datasetConfigTableRow))
-const datasetSolveMetricOption = computed(() => buildDatasetSolveMetricOption(datasetAnalysisItems.value))
-const datasetSolveErrorOption = computed(() => buildDatasetSolveErrorOption(datasetErrorSummaryRows.value))
+const datasetSolveChartOption = computed(() =>
+  datasetAnalysisMode.value === 'absolute'
+    ? buildDatasetSolveMetricOption(datasetAnalysisItems.value)
+    : buildDatasetSolveErrorOption(datasetErrorSummaryRows.value),
+)
 const datasetAnalysisWarnings = computed(() => [
   ...incompleteDatasetMessages.value,
   ...(datasetSolveAnalysis.value?.warnings.map((item) => item.message) ?? []),
@@ -131,12 +178,18 @@ async function compareScenarioSets() {
         api.readScenarioSetVisualization(props.selectedProjectId, scenarioSetId),
       ),
     )
+    resetTypeTimeFilters()
   } catch (error) {
     scenarioSetVisualizations.value = []
     ElMessage.error(error instanceof Error ? error.message : String(error))
   } finally {
     scenarioCompareLoading.value = false
   }
+}
+
+function resetTypeTimeFilters() {
+  typeTimeSetFilter.value = typeTimeSetOptions.value
+  typeTimeTypeFilter.value = [ALL_TYPE_LABEL]
 }
 
 async function compareDatasets() {
@@ -156,159 +209,301 @@ async function compareDatasets() {
   }
 }
 
-function buildScenarioCategoryOption(items: ScenarioSetVisualization[]) {
+function buildScenarioCategoryOption(items: ScenarioSetVisualization[], mode: ScenarioAnalysisMode) {
   const categories = unique(items.flatMap((item) => item.summary.category_ratios.map((row) => row.label)))
   const labels = items.map(scenarioSetLabel)
+  const baseline = baselineScenarioItem(items)
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    legend: { top: 0, type: 'scroll' },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: valueFormatterForMode(mode),
+    },
+    legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 48, right: 18, bottom: 54, left: 48 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 0, rotate: labels.length > 3 ? 24 : 0 } },
-    yAxis: { type: 'value', name: '场景数' },
+    xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
+    yAxis: valueAxis('场景数', mode),
     series: categories.map((category) => ({
       name: category,
       type: 'bar',
-      stack: 'category',
-      data: items.map((item) => categoryCount(item, category)),
+      stack: mode === 'absolute' ? 'category' : undefined,
+      data: items.map((item) =>
+        modeValue(
+          categoryCount(item, category),
+          baseline ? categoryCount(baseline, category) : 0,
+          mode,
+        ),
+      ),
     })),
   }
 }
 
-function buildScenarioCoverageOption(items: ScenarioSetVisualization[]) {
-  const labels = items.map(scenarioSetLabel)
+function buildScenarioCoverageOption(items: ScenarioSetVisualization[], mode: ScenarioAnalysisMode) {
+  const metrics = [
+    { label: '时间覆盖率', key: 'time_ratio' as const },
+    { label: '空间覆盖率', key: 'space_ratio' as const },
+  ]
+  const baseline = baselineScenarioItem(items)
   return {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      valueFormatter: (value: number) => `${(Number(value) * 100).toFixed(1)}%`,
+      valueFormatter: percentFormatterForMode(mode),
     },
-    legend: { top: 0 },
+    legend: legendConfig({ top: 0 }),
     grid: { top: 48, right: 18, bottom: 54, left: 48 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 0, rotate: labels.length > 3 ? 24 : 0 } },
-    yAxis: {
-      type: 'value',
-      name: '覆盖率',
-      max: 1,
-      axisLabel: { formatter: (value: number) => `${Math.round(value * 100)}%` },
-    },
-    series: [
-      {
-        name: '时间覆盖率',
-        type: 'bar',
-        data: items.map((item) => coverageValue(item, 'time_ratio')),
-      },
-      {
-        name: '空间覆盖率',
-        type: 'bar',
-        data: items.map((item) => coverageValue(item, 'space_ratio')),
-      },
-    ],
+    xAxis: categoryAxis(metrics.map((item) => item.label)),
+    yAxis: mode === 'absolute' ? percentAxis('覆盖率') : valueAxis('相对基准', mode),
+    series: items.map((item) => ({
+      name: scenarioSetLabel(item),
+      type: 'bar',
+      data: metrics.map((metric) =>
+        modeValue(
+          coverageValue(item, metric.key),
+          baseline ? coverageValue(baseline, metric.key) : 0,
+          mode,
+        ),
+      ),
+    })),
   }
 }
 
-function buildMetricOption(
+function buildMetricByMetricOption(
   items: ScenarioSetVisualization[],
   group: 'math_graph_metrics' | 'combination_complexity',
+  mode: ScenarioAnalysisMode,
 ) {
-  const cards = unique(items.flatMap((item) => item.summary[group].cards.map((card) => card.label)))
-  const labels = items.map(scenarioSetLabel)
+  const metrics = unique(items.flatMap((item) => item.summary[group].cards.map((card) => card.label)))
+  const baseline = baselineScenarioItem(items)
   return {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      valueFormatter: (value: number) => formatChartNumber(Number(value)),
+      valueFormatter: valueFormatterForMode(mode),
     },
-    legend: { top: 0, type: 'scroll' },
-    grid: { top: 48, right: 18, bottom: 58, left: 56 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 0, rotate: labels.length > 3 ? 24 : 0 } },
-    yAxis: { type: 'value' },
-    series: cards.map((label) => ({
-      name: label,
+    legend: legendConfig({ top: 0, type: 'scroll' }),
+    grid: { top: 48, right: 18, bottom: 72, left: 56 },
+    xAxis: categoryAxis(metrics, { rotate: metrics.length > 4 ? 24 : 0 }),
+    yAxis: valueAxis('', mode),
+    series: items.map((item) => ({
+      name: scenarioSetLabel(item),
       type: 'bar',
-      data: items.map((item) => metricValue(item.summary[group].cards, label)),
+      data: metrics.map((metric) =>
+        modeValue(
+          metricValue(item.summary[group].cards, metric),
+          baseline ? metricValue(baseline.summary[group].cards, metric) : 0,
+          mode,
+        ),
+      ),
     })),
   }
 }
 
-function buildAnchorCoverageOption(items: ScenarioSetVisualization[]) {
+function buildAnchorCoverageOption(items: ScenarioSetVisualization[], mode: ScenarioAnalysisMode) {
   const labels = items.map(scenarioSetLabel)
   const anchorLabels = unique(
     items.flatMap((item) => item.summary.math_graph_metrics.anchor_coverage.map((row) => row.label)),
   )
+  const baseline = baselineScenarioItem(items)
   return {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
-      valueFormatter: (value: number) => `${(Number(value) * 100).toFixed(1)}%`,
+      valueFormatter: percentFormatterForMode(mode),
     },
-    legend: { top: 0 },
+    legend: legendConfig({ top: 0 }),
     grid: { top: 48, right: 18, bottom: 54, left: 56 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 0, rotate: labels.length > 3 ? 24 : 0 } },
-    yAxis: {
-      type: 'value',
-      name: '覆盖率',
-      max: 1,
-      axisLabel: { formatter: (value: number) => `${Math.round(value * 100)}%` },
-    },
+    xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
+    yAxis: mode === 'absolute' ? percentAxis('覆盖率') : valueAxis('相对基准', mode),
     series: anchorLabels.map((label) => ({
       name: label,
       type: 'bar',
       data: items.map((item) => {
-        return item.summary.math_graph_metrics.anchor_coverage.find((row) => row.label === label)?.ratio ?? 0
+        const value = item.summary.math_graph_metrics.anchor_coverage.find((row) => row.label === label)?.ratio ?? 0
+        const baselineValue =
+          baseline?.summary.math_graph_metrics.anchor_coverage.find((row) => row.label === label)?.ratio ?? 0
+        return modeValue(value, baselineValue, mode)
       }),
     })),
   }
 }
 
-function buildDisturbanceCountOption(items: ScenarioSetVisualization[]) {
+function buildDisturbanceCountOption(items: ScenarioSetVisualization[], mode: ScenarioAnalysisMode) {
   const labels = unique(
     items.flatMap((item) => item.summary.combination_complexity.count_distribution.map((row) => row.label)),
   )
+  const baseline = baselineScenarioItem(items)
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    legend: { top: 0, type: 'scroll' },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: valueFormatterForMode(mode),
+    },
+    legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 48, right: 18, bottom: 46, left: 48 },
-    xAxis: { type: 'category', name: '单场景扰动数', data: labels },
-    yAxis: { type: 'value', name: '场景数' },
+    xAxis: categoryAxis(labels, { name: '单场景扰动数' }),
+    yAxis: valueAxis('场景数', mode),
     series: items.map((item) => ({
       name: scenarioSetLabel(item),
       type: 'bar',
       data: labels.map((label) => {
-        return item.summary.combination_complexity.count_distribution.find((row) => row.label === label)?.count ?? 0
+        const value = disturbanceCountValue(item, label)
+        return modeValue(value, baseline ? disturbanceCountValue(baseline, label) : 0, mode)
       }),
     })),
   }
 }
 
-function buildTypeTimeOption(items: ScenarioSetVisualization[]) {
+function buildTypeTimeOption(
+  items: ScenarioSetVisualization[],
+  selectedSets: string[],
+  selectedTypes: string[],
+  mode: ScenarioAnalysisMode,
+) {
   const bins = unique(items.flatMap((item) => item.summary.joint_structure.time_bins))
-  const seriesKeys = unique(
-    items.flatMap((item) =>
-      item.summary.joint_structure.type_time.map((row) => `${scenarioSetLabel(item)} · ${row.type_label}`),
-    ),
-  )
+  const setFilter = selectedSets.length ? new Set(selectedSets) : new Set(items.map((item) => scenarioSetLabel(item)))
+  const aggregateTypes = selectedTypes.includes(ALL_TYPE_LABEL)
+  const typeFilter = !aggregateTypes && selectedTypes.length
+    ? new Set(selectedTypes)
+    : new Set(items.flatMap((item) => item.summary.joint_structure.type_time.map((row) => row.type_label)))
+  const baseline = baselineScenarioItem(items)
+  const seriesKeys = aggregateTypes
+    ? items.filter((item) => setFilter.has(scenarioSetLabel(item))).map(scenarioSetLabel)
+    : unique(
+        items.flatMap((item) =>
+          item.summary.joint_structure.type_time
+            .filter((row) => setFilter.has(scenarioSetLabel(item)) && typeFilter.has(row.type_label))
+            .map((row) => `${scenarioSetLabel(item)} · ${row.type_label}`),
+        ),
+      )
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    legend: { top: 0, type: 'scroll' },
-    grid: { top: 72, right: 18, bottom: 46, left: 48 },
-    xAxis: { type: 'category', data: bins },
-    yAxis: { type: 'value', name: '扰动数' },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: valueFormatterForMode(mode),
+    },
+    legend: legendConfig({ top: 0, selectedMode: false }),
+    grid: { top: 92, right: 18, bottom: 46, left: 48 },
+    xAxis: categoryAxis(bins),
+    yAxis: valueAxis('扰动数', mode),
     series: seriesKeys.map((key) => {
-      const [label, typeLabel] = key.split(' · ')
+      const { label, typeLabel } = parseTypeSeriesKey(key, aggregateTypes)
       const item = items.find((candidate) => scenarioSetLabel(candidate) === label)
       return {
         name: key,
         type: 'line',
         smooth: true,
         data: bins.map((bin) => {
-          return (
-            item?.summary.joint_structure.type_time.find(
-              (row) => row.type_label === typeLabel && row.time_bin === bin,
-            )?.count ?? 0
-          )
+          const value = typeTimeCount(item, bin, typeLabel)
+          const baselineValue = typeTimeCount(baseline, bin, typeLabel)
+          return modeValue(value, baselineValue, mode)
         }),
       }
     }),
+  }
+}
+
+function buildTypeLocationOption(
+  items: ScenarioSetVisualization[],
+  selectedSets: string[],
+  selectedTypes: string[],
+  mode: ScenarioAnalysisMode,
+) {
+  const setFilter = selectedSets.length ? new Set(selectedSets) : new Set(items.map((item) => scenarioSetLabel(item)))
+  const aggregateTypes = selectedTypes.includes(ALL_TYPE_LABEL)
+  const typeFilter = !aggregateTypes && selectedTypes.length
+    ? new Set(selectedTypes)
+    : new Set(items.flatMap((item) => item.summary.joint_structure.type_time.map((row) => row.type_label)))
+  const visibleLocationRows = items.flatMap((item) =>
+    item.summary.joint_structure.location_time.filter(
+      (row) => setFilter.has(scenarioSetLabel(item)) && typeFilter.has(row.type_label),
+    ),
+  )
+  const locations = orderedSpatialLocations(items, visibleLocationRows.map((row) => row.location))
+  const locationAlias = spatialLocationAlias(items, locations)
+  const baseline = baselineScenarioItem(items)
+  const seriesKeys = aggregateTypes
+    ? items.filter((item) => setFilter.has(scenarioSetLabel(item))).map(scenarioSetLabel)
+    : unique(
+        items.flatMap((item) =>
+          item.summary.joint_structure.location_time
+            .filter((row) => setFilter.has(scenarioSetLabel(item)) && typeFilter.has(row.type_label))
+            .map((row) => `${scenarioSetLabel(item)} · ${row.type_label}`),
+        ),
+      )
+  return {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: valueFormatterForMode(mode),
+    },
+    legend: legendConfig({ top: 0, selectedMode: false }),
+    grid: { top: 92, right: 18, bottom: 96, left: 48 },
+    xAxis: categoryAxis(locations, { rotate: locations.length > 8 ? 35 : 0 }),
+    yAxis: valueAxis('扰动数', mode),
+    series: seriesKeys.map((key) => {
+      const { label, typeLabel } = parseTypeSeriesKey(key, aggregateTypes)
+      const item = items.find((candidate) => scenarioSetLabel(candidate) === label)
+      return {
+        name: key,
+        type: 'line',
+        smooth: true,
+        emphasis: { focus: 'series' },
+        data: locations.map((location) => {
+          const value = typeLocationCount(item, location, typeLabel, locationAlias)
+          const baselineValue = typeLocationCount(baseline, location, typeLabel, locationAlias)
+          return modeValue(value, baselineValue, mode)
+        }),
+      }
+    }),
+  }
+}
+
+function orderedSpatialLocations(items: ScenarioSetVisualization[], rawLocations: string[]) {
+  const existing = new Set(rawLocations)
+  const stationOrder = items.find((item) => item.station_order.length)?.station_order ?? []
+  const ordered = stationOrder.flatMap((station, index) => {
+    const next = stationOrder[index + 1]
+    return next ? [station, `${station}-${next}`] : [station]
+  })
+  const known = ordered.filter((location) => existing.has(location) || existing.has(reverseSection(location)))
+  const knownSet = new Set(known)
+  const rest = [...existing]
+    .filter((location) => !knownSet.has(location) && !knownSet.has(reverseSection(location)))
+    .sort()
+  return [...known, ...rest]
+}
+
+function reverseSection(location: string) {
+  const [left, right, ...rest] = location.split('-')
+  return left && right && rest.length === 0 ? `${right}-${left}` : ''
+}
+
+function spatialLocationAlias(items: ScenarioSetVisualization[], locations: string[]) {
+  const aliases = new Map<string, string>()
+  const knownLocations = new Set(locations)
+  for (const item of items) {
+    for (let index = 0; index < item.station_order.length - 1; index += 1) {
+      const left = item.station_order[index]
+      const right = item.station_order[index + 1]
+      const forward = `${left}-${right}`
+      const reverse = `${right}-${left}`
+      const target = knownLocations.has(forward) ? forward : knownLocations.has(reverse) ? reverse : forward
+      aliases.set(forward, target)
+      aliases.set(reverse, target)
+    }
+  }
+  return aliases
+}
+
+function parseTypeSeriesKey(key: string, aggregateTypes: boolean) {
+  if (aggregateTypes) return { label: key, typeLabel: ALL_TYPE_FILTER }
+  const separator = ' · '
+  const index = key.lastIndexOf(separator)
+  if (index < 0) return { label: key, typeLabel: '' }
+  return {
+    label: key.slice(0, index),
+    typeLabel: key.slice(index + separator.length),
   }
 }
 
@@ -321,9 +516,9 @@ function buildDatasetSolveMetricOption(items: DatasetSolveState[]) {
       axisPointer: { type: 'shadow' },
       valueFormatter: (value: number) => formatChartNumber(Number(value)),
     },
-    legend: { top: 0, type: 'scroll' },
+    legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 54, right: 18, bottom: 58, left: 56 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 0, rotate: labels.length > 3 ? 24 : 0 } },
+    xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
     yAxis: { type: 'value', name: '均值' },
     series: metrics.map((metric) => ({
       name: metric,
@@ -342,9 +537,9 @@ function buildDatasetSolveErrorOption(rows: ReturnType<typeof summarizeDatasetEr
       axisPointer: { type: 'shadow' },
       valueFormatter: (value: number) => formatChartNumber(Number(value)),
     },
-    legend: { top: 0, type: 'scroll' },
+    legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 54, right: 18, bottom: 58, left: 56 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 0, rotate: labels.length > 3 ? 24 : 0 } },
+    xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
     yAxis: { type: 'value', name: '平均相对误差' },
     series: metrics.map((metric) => ({
       name: metric,
@@ -360,12 +555,116 @@ function categoryCount(item: ScenarioSetVisualization, label: string) {
   return item.summary.category_ratios.find((row) => row.label === label)?.count ?? 0
 }
 
+function baselineScenarioItem(items: ScenarioSetVisualization[]) {
+  return (
+    items.find((item) => item.scenario_set_id === baselineScenarioSetId.value) ??
+    items[0] ??
+    null
+  )
+}
+
+function disturbanceCountValue(item: ScenarioSetVisualization, label: string) {
+  return item.summary.combination_complexity.count_distribution.find((row) => row.label === label)?.count ?? 0
+}
+
+function typeTimeCount(item: ScenarioSetVisualization | null | undefined, timeBin: string, typeLabel: string) {
+  const rows =
+    item?.summary.joint_structure.type_time.filter(
+      (row) =>
+        row.time_bin === timeBin &&
+        (typeLabel === ALL_TYPE_FILTER || row.type_label === typeLabel),
+    ) ?? []
+  return sumCounts(rows)
+}
+
+function typeLocationCount(
+  item: ScenarioSetVisualization | null | undefined,
+  location: string,
+  typeLabel: string,
+  locationAlias: Map<string, string>,
+) {
+  const rows =
+    item?.summary.joint_structure.location_time.filter(
+      (row) =>
+        (locationAlias.get(row.location) ?? row.location) === location &&
+        (typeLabel === ALL_TYPE_FILTER || row.type_label === typeLabel),
+    ) ?? []
+  return sumCounts(rows)
+}
+
+function modeValue(value: number, baselineValue: number, mode: ScenarioAnalysisMode) {
+  if (mode === 'absolute') return value
+  return baselineValue === 0 ? null : value / baselineValue
+}
+
+function valueAxis(name: string, mode: ScenarioAnalysisMode) {
+  return mode === 'absolute'
+    ? { type: 'value', name }
+    : {
+        type: 'value',
+        name: '相对基准',
+        axisLabel: { formatter: (value: number) => formatChartNumber(Number(value)) },
+      }
+}
+
+function percentAxis(name: string) {
+  return {
+    type: 'value',
+    name,
+    max: 1,
+    axisLabel: { formatter: (value: number) => `${Math.round(value * 100)}%` },
+  }
+}
+
+function valueFormatterForMode(mode: ScenarioAnalysisMode) {
+  return (value: number) => formatChartNumber(Number(value))
+}
+
+function percentFormatterForMode(mode: ScenarioAnalysisMode) {
+  return mode === 'absolute'
+    ? (value: number) => `${(Number(value) * 100).toFixed(1)}%`
+    : valueFormatterForMode(mode)
+}
+
+function legendConfig(options: Record<string, unknown> = {}) {
+  return {
+    ...options,
+    formatter: truncateLegendName,
+    tooltip: { show: true },
+  }
+}
+
+function truncateLegendName(name: string) {
+  return name.length > LEGEND_NAME_LIMIT ? `${name.slice(0, LEGEND_NAME_LIMIT)}...` : name
+}
+
+function categoryAxis(data: string[], options: { name?: string; rotate?: number } = {}) {
+  return {
+    type: 'category',
+    name: options.name,
+    data,
+    axisLabel: {
+      interval: 0,
+      rotate: options.rotate ?? 0,
+      formatter: truncateAxisLabel,
+    },
+  }
+}
+
+function truncateAxisLabel(value: string) {
+  return value.length > AXIS_LABEL_LIMIT ? `${value.slice(0, AXIS_LABEL_LIMIT)}...` : value
+}
+
 function coverageValue(item: ScenarioSetVisualization, key: 'time_ratio' | 'space_ratio') {
   return item.summary.coverage.rows.find((row) => row.type === 'all')?.[key] ?? 0
 }
 
 function unique(values: string[]) {
   return [...new Set(values)]
+}
+
+function sumCounts(rows: { count: number }[]) {
+  return rows.reduce((total, row) => total + row.count, 0)
 }
 
 function scenarioSetLabel(item: ScenarioSetVisualization) {
@@ -500,48 +799,66 @@ function datasetQualityMessages(item: DatasetSummary) {
 <template>
   <section class="page-layout">
     <div class="page-stack">
-      <el-card shadow="never">
-        <template v-if="page === 'ablation-scenarios'">
-          <div class="toolbar-row analysis-toolbar">
-            <div class="inline-control">
-              <span>基准场景集：</span>
-              <el-select
-                v-model="baselineScenarioSetId"
-                filterable
-                class="analysis-select"
-                placeholder="选择基准"
-              >
-                <el-option
-                  v-for="item in scenarioSets"
-                  :key="item.scenario_set_id"
-                  :label="item.scenario_set_id"
-                  :value="item.scenario_set_id"
+      <template v-if="page === 'ablation-scenarios'">
+        <el-card shadow="never">
+          <el-row class="analysis-toolbar" :gutter="12" align="middle">
+            <el-col :span="8">
+              <div class="inline-control">
+                <span>基准场景集：</span>
+                <el-select
+                  v-model="baselineScenarioSetId"
+                  filterable
+                  class="analysis-select full-width"
+                  placeholder="选择基准"
+                >
+                  <el-option
+                    v-for="item in scenarioSets"
+                    :key="item.scenario_set_id"
+                    :label="item.scenario_set_id"
+                    :value="item.scenario_set_id"
+                  />
+                </el-select>
+              </div>
+            </el-col>
+            <el-col :span="8">
+              <div class="inline-control">
+                <span>对比场景集：</span>
+                <el-select
+                  v-model="candidateScenarioSetIds"
+                  multiple
+                  filterable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  class="analysis-select full-width"
+                  placeholder="选择对比集"
+                >
+                  <el-option
+                    v-for="item in candidateScenarioSets"
+                    :key="item.scenario_set_id"
+                    :label="item.scenario_set_id"
+                    :value="item.scenario_set_id"
+                  />
+                </el-select>
+              </div>
+            </el-col>
+            <el-col :span="4">
+              <div class="mode-switch">
+                <span>数值</span>
+                <el-switch
+                  v-model="scenarioAnalysisMode"
+                  active-value="relative"
+                  inactive-value="absolute"
+                  active-text="误差"
                 />
-              </el-select>
-            </div>
-            <div class="inline-control">
-              <span>对比场景集：</span>
-              <el-select
-                v-model="candidateScenarioSetIds"
-                multiple
-                filterable
-                collapse-tags
-                collapse-tags-tooltip
-                class="analysis-select"
-                placeholder="选择对比集"
-              >
-                <el-option
-                  v-for="item in candidateScenarioSets"
-                  :key="item.scenario_set_id"
-                  :label="item.scenario_set_id"
-                  :value="item.scenario_set_id"
-                />
-              </el-select>
-            </div>
-            <el-button type="primary" :loading="scenarioCompareLoading" @click="compareScenarioSets">
-              开始分析
-            </el-button>
-          </div>
+              </div>
+            </el-col>
+            <el-col :span="4">
+              <el-button class="full-width" type="primary" :loading="scenarioCompareLoading" @click="compareScenarioSets">
+                开始分析
+              </el-button>
+            </el-col>
+          </el-row>
+        </el-card>
 
           <el-row class="analysis-section" :gutter="16">
             <el-col :span="8">
@@ -580,6 +897,72 @@ function datasetQualityMessages(item: DatasetSummary) {
                 <VChart :option="scenarioCoverageOption" autoresize class="analysis-chart" />
               </el-card>
             </div>
+
+            <el-card shadow="never">
+              <template #header>组合复杂度摘要</template>
+              <VChart :option="combinationMetricOption" autoresize class="analysis-chart" />
+            </el-card>
+
+            <el-card shadow="never">
+              <template #header>单场景扰动数分布</template>
+              <VChart :option="disturbanceCountOption" autoresize class="analysis-chart" />
+            </el-card>
+
+            <el-card class="analysis-section" shadow="never">
+              <template #header>时空联合结构</template>
+              <div class="type-time-controls">
+                <label class="type-time-filter">
+                  <span>集合维度</span>
+                  <el-select
+                    v-model="typeTimeSetFilter"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    class="type-time-select"
+                    placeholder="全部场景集"
+                  >
+                    <el-option
+                      v-for="label in typeTimeSetOptions"
+                      :key="label"
+                      :label="label"
+                      :value="label"
+                    />
+                  </el-select>
+                </label>
+                <label class="type-time-filter">
+                  <span>类型维度</span>
+                  <el-select
+                    v-model="typeTimeTypeFilter"
+                    multiple
+                    collapse-tags
+                    collapse-tags-tooltip
+                    class="type-time-select"
+                    placeholder="全部场景类型"
+                  >
+                    <el-option
+                      v-for="label in typeTimeTypeOptions"
+                      :key="label"
+                      :label="label"
+                      :value="label"
+                    />
+                  </el-select>
+                </label>
+              </div>
+              <el-row :gutter="16">
+                <el-col :span="24">
+                  <el-card shadow="never">
+                    <template #header>时间-数量</template>
+                    <VChart :option="typeTimeOption" autoresize class="analysis-chart wide-chart" />
+                  </el-card>
+                </el-col>
+                <el-col :span="24">
+                  <el-card shadow="never" class="joint-chart-card">
+                    <template #header>空间-数量</template>
+                    <VChart :option="typeLocationOption" autoresize class="analysis-chart wide-chart" />
+                  </el-card>
+                </el-col>
+              </el-row>
+            </el-card>
 
             <el-card class="analysis-section" shadow="never">
               <template #header>
@@ -640,70 +1023,70 @@ function datasetQualityMessages(item: DatasetSummary) {
                 </el-card>
               </div>
             </el-card>
-
-            <el-card class="analysis-section" shadow="never">
-              <template #header>组合复杂度指标</template>
-              <div class="analysis-grid compact-grid">
-                <el-card shadow="never">
-                  <template #header>复杂度摘要</template>
-                  <VChart :option="combinationMetricOption" autoresize class="analysis-chart" />
-                </el-card>
-                <el-card shadow="never">
-                  <template #header>单场景扰动数分布</template>
-                  <VChart :option="disturbanceCountOption" autoresize class="analysis-chart" />
-                </el-card>
-              </div>
-            </el-card>
-
-            <el-card class="analysis-section" shadow="never">
-              <template #header>时空联合结构</template>
-              <VChart :option="typeTimeOption" autoresize class="analysis-chart wide-chart" />
-            </el-card>
           </template>
           <el-empty v-else class="analysis-section" description="请选择基准和对比场景集并开始对比" />
-        </template>
+      </template>
 
-        <template v-else>
-          <div class="toolbar-row analysis-toolbar">
-            <div class="inline-control">
-              <span>基准数据集：</span>
-              <el-select
-                v-model="baselineDatasetId"
-                filterable
-                class="analysis-select"
-                placeholder="选择基准"
-              >
-                <el-option
-                  v-for="item in datasets"
-                  :key="item.dataset_id"
-                  :label="item.dataset_id"
-                  :value="item.dataset_id"
+      <template v-else>
+        <el-card shadow="never">
+          <el-row class="analysis-toolbar" :gutter="12" align="middle">
+            <el-col :span="8">
+              <div class="inline-control">
+                <span>基准数据集：</span>
+                <el-select
+                  v-model="baselineDatasetId"
+                  filterable
+                  class="analysis-select full-width"
+                  placeholder="选择基准"
+                >
+                  <el-option
+                    v-for="item in datasets"
+                    :key="item.dataset_id"
+                    :label="item.dataset_id"
+                    :value="item.dataset_id"
+                  />
+                </el-select>
+              </div>
+            </el-col>
+            <el-col :span="8">
+              <div class="inline-control">
+                <span>对比数据集：</span>
+                <el-select
+                  v-model="candidateDatasetIds"
+                  multiple
+                  filterable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  class="analysis-select full-width"
+                  placeholder="选择对比集"
+                >
+                  <el-option
+                    v-for="item in candidateDatasets"
+                    :key="item.dataset_id"
+                    :label="item.dataset_id"
+                    :value="item.dataset_id"
+                  />
+                </el-select>
+              </div>
+            </el-col>
+            <el-col :span="4">
+              <div class="mode-switch">
+                <span>数值</span>
+                <el-switch
+                  v-model="datasetAnalysisMode"
+                  active-value="relative"
+                  inactive-value="absolute"
+                  active-text="误差"
                 />
-              </el-select>
-            </div>
-            <div class="inline-control">
-              <span>对比数据集：</span>
-              <el-select
-                v-model="candidateDatasetIds"
-                multiple
-                filterable
-                collapse-tags
-                collapse-tags-tooltip
-                class="analysis-select"
-                placeholder="选择对比集"
-              >
-                <el-option
-                  v-for="item in candidateDatasets"
-                  :key="item.dataset_id"
-                  :label="item.dataset_id"
-                  :value="item.dataset_id"
-                />
-              </el-select>
-            </div>
-            <el-button type="primary" :loading="datasetCompareLoading" @click="compareDatasets">
-              开始分析
-            </el-button>
-          </div>
+              </div>
+            </el-col>
+            <el-col :span="4">
+              <el-button class="full-width" type="primary" :loading="datasetCompareLoading" @click="compareDatasets">
+                开始分析
+              </el-button>
+            </el-col>
+          </el-row>
+        </el-card>
 
           <el-row class="analysis-section" :gutter="16">
             <el-col :span="8">
@@ -734,8 +1117,13 @@ function datasetQualityMessages(item: DatasetSummary) {
               type="warning"
               show-icon
               :closable="false"
-              :description="datasetAnalysisWarnings.join(' ')"
-            />
+            >
+              <ul class="analysis-warning-list">
+                <li v-for="message in datasetAnalysisWarnings" :key="message">
+                  {{ message }}
+                </li>
+              </ul>
+            </el-alert>
 
             <el-card class="analysis-section" shadow="never">
               <template #header>求解器配置</template>
@@ -763,21 +1151,21 @@ function datasetQualityMessages(item: DatasetSummary) {
               </el-table>
             </el-card>
 
-            <div class="analysis-grid">
-              <el-card shadow="never">
-                <template #header>求解行为数值对比</template>
-                <VChart :option="datasetSolveMetricOption" autoresize class="analysis-chart" />
-              </el-card>
-              <el-card shadow="never">
-                <template #header>相对基准误差对比</template>
-                <VChart :option="datasetSolveErrorOption" autoresize class="analysis-chart" />
-              </el-card>
-            </div>
+            <el-card shadow="never">
+              <template #header>
+                {{ datasetAnalysisMode === 'absolute' ? '求解行为数值对比' : '相对基准误差对比' }}
+              </template>
+              <VChart :option="datasetSolveChartOption" autoresize class="analysis-chart" />
+            </el-card>
 
-            <div class="analysis-grid">
-              <el-card shadow="never">
-                <template #header>直接数值表</template>
-                <el-table :data="datasetSummaryRows" height="360" empty-text="暂无求解行为数据">
+            <el-card shadow="never">
+              <template #header>{{ datasetAnalysisMode === 'absolute' ? '直接数值表' : '误差汇总表' }}</template>
+              <el-table
+                v-if="datasetAnalysisMode === 'absolute'"
+                :data="datasetSummaryRows"
+                height="360"
+                empty-text="暂无求解行为数据"
+              >
                   <el-table-column prop="dataset_id" label="数据集" min-width="160" show-overflow-tooltip />
                   <el-table-column prop="metric" label="指标" min-width="120" />
                   <el-table-column prop="count" label="样本数" width="90" />
@@ -791,10 +1179,12 @@ function datasetQualityMessages(item: DatasetSummary) {
                     <template #default="{ row }">{{ formatOptionalNumber(row.max) }}</template>
                   </el-table-column>
                 </el-table>
-              </el-card>
-              <el-card shadow="never">
-                <template #header>误差汇总表</template>
-                <el-table :data="datasetErrorSummaryRows" height="360" empty-text="暂无可对齐的误差数据">
+              <el-table
+                v-else
+                :data="datasetErrorSummaryRows"
+                height="360"
+                empty-text="暂无可对齐的误差数据"
+              >
                   <el-table-column prop="dataset_id" label="对比数据集" min-width="160" show-overflow-tooltip />
                   <el-table-column prop="metric_label" label="指标" min-width="120" />
                   <el-table-column prop="count" label="对齐实例" width="100" />
@@ -805,12 +1195,10 @@ function datasetQualityMessages(item: DatasetSummary) {
                     <template #default="{ row }">{{ formatOptionalPercent(row.mean_relative_error) }}</template>
                   </el-table-column>
                 </el-table>
-              </el-card>
-            </div>
+            </el-card>
           </template>
           <el-empty v-else class="analysis-section" description="请选择基准和对比数据集并开始对比" />
-        </template>
-      </el-card>
+      </template>
     </div>
   </section>
 </template>
@@ -818,15 +1206,6 @@ function datasetQualityMessages(item: DatasetSummary) {
 <style scoped>
 .analysis-select {
   width: 420px;
-}
-
-.analysis-toolbar {
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.analysis-section {
-  margin-top: 16px;
 }
 
 .analysis-grid {
@@ -844,6 +1223,10 @@ function datasetQualityMessages(item: DatasetSummary) {
   margin-top: 12px;
 }
 
+.joint-chart-card {
+  margin-top: 12px;
+}
+
 .analysis-chart {
   display: block;
   width: 100%;
@@ -852,6 +1235,48 @@ function datasetQualityMessages(item: DatasetSummary) {
 
 .wide-chart {
   height: 380px;
+}
+
+.type-time-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.type-time-filter {
+  display: flex;
+  min-width: min(360px, 100%);
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.type-time-select {
+  width: 100%;
+}
+
+.mode-switch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.analysis-warning-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.analysis-warning-list li + li {
+  margin-top: 4px;
 }
 
 .metric-card-grid {

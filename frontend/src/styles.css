@@ -72,7 +72,7 @@ body {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 16px;
+  padding: 16px 8px 16px 16px;
 }
 
 .task-aside {
@@ -87,6 +87,10 @@ body {
 
 .main-scroll {
   height: 100%;
+}
+
+.main-scroll .el-scrollbar__wrap {
+  padding-right: 8px;
 }
 
 .main-scroll .el-scrollbar__view {
@@ -196,33 +200,6 @@ body {
   line-height: 32px;
 }
 
-.toolbar-select {
-  width: min(320px, 42vw);
-}
-
-.select-option-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-}
-
-.select-option-main {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.select-option-delete {
-  flex: 0 0 auto;
-  min-height: 24px;
-  padding: 0 4px;
-  font-size: 16px;
-  font-weight: 700;
-}
-
 .primary-empty-panel {
   display: flex;
   min-height: 420px;
@@ -310,10 +287,6 @@ body {
   .scenario-actions {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .toolbar-select {
-    width: 100%;
   }
 
 }

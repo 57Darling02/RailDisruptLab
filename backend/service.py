@@ -321,6 +321,7 @@ class RailGraphBackend:
         time_limit: Optional[float] = None,
         mip_gap: Optional[float] = None,
         threads: Optional[int] = None,
+        skip_solved: bool = TASK_DEFAULTS["solve"]["skip_solved"],
     ) -> Dict[str, object]:
         return self.submit_task(
             project_id,
@@ -332,6 +333,7 @@ class RailGraphBackend:
                 "time_limit": time_limit,
                 "mip_gap": mip_gap,
                 "threads": threads,
+                "skip_solved": skip_solved,
             },
             label="solve",
         )

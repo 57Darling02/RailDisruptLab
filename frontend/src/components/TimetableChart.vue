@@ -476,7 +476,7 @@ function disturbanceRect(
       start,
       end: start + seconds,
       yCenter: stationY,
-      height: 0.24,
+      height: 0.16,
       detail: `${DISTURBANCE_LABEL.delay} ${item.train_id ?? ''} ${item.station} ${item.event_type ?? ''} +${item.seconds ?? 0}s`,
     })
   }
@@ -516,7 +516,7 @@ function makeRect({
 }): DisturbanceRect {
   const color = DISTURBANCE_COLOR[type]
   return {
-    value: [start, end, yCenter - height / 2, yCenter + height / 2, detail],
+    value: [start, end, yCenter, height, detail],
     itemStyle: {
       color,
       opacity: type === 'delay' ? 0.3 : 0.2,
@@ -531,16 +531,17 @@ function makeRect({
 function renderDisturbanceRect(params: CustomRenderParams, api: CustomRenderApi) {
   const start = Number(api.value(0))
   const end = Number(api.value(1))
-  const y0 = Number(api.value(2))
-  const y1 = Number(api.value(3))
-  const leftTop = api.coord([start, y1])
-  const rightBottom = api.coord([end, y0])
+  const yCenter = Number(api.value(2))
+  const heightUnits = Number(api.value(3))
+  const startCenter = api.coord([start, yCenter])
+  const endCenter = api.coord([end, yCenter])
+  const bandHeight = Math.abs(api.size([0, Math.max(heightUnits, 0.08)])[1])
   const coordSys = params.coordSys
-  if (!coordSys) return null
-  const x = Math.max(leftTop[0], coordSys.x)
-  const y = Math.max(leftTop[1], coordSys.y)
-  const right = Math.min(rightBottom[0], coordSys.x + coordSys.width)
-  const bottom = Math.min(rightBottom[1], coordSys.y + coordSys.height)
+  if (!coordSys || !startCenter.every(Number.isFinite) || !endCenter.every(Number.isFinite)) return null
+  const x = Math.max(Math.min(startCenter[0], endCenter[0]), coordSys.x)
+  const y = Math.max(startCenter[1] - bandHeight / 2, coordSys.y)
+  const right = Math.min(Math.max(startCenter[0], endCenter[0]), coordSys.x + coordSys.width)
+  const bottom = Math.min(startCenter[1] + bandHeight / 2, coordSys.y + coordSys.height)
   if (right <= x || bottom <= y) return null
   return {
     type: 'rect',
@@ -554,6 +555,9 @@ function timeExtent(rows: TimetableRowState[], disturbances: TimetableDisturbanc
   for (const item of disturbances) {
     if (typeof item.start_time === 'number') values.push(item.start_time)
     if (typeof item.end_time === 'number') values.push(item.end_time)
+    if (item.type === 'delay' && typeof item.start_time === 'number') {
+      values.push(item.start_time + Math.max(0, Number(item.seconds ?? 0) || 0))
+    }
   }
   const times = values.filter((value): value is number => value != null)
   if (!times.length) return { min: 0, max: 24 * 3600 }
