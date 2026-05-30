@@ -178,12 +178,12 @@ def _target_copy_sources(root: Path) -> List[Dict[str, object]]:
 
     context_path = root / MATH_CONTEXT_FILENAME
     sample_dir = root / "samples"
-    if context_path.is_file() and sample_dir.is_dir():
-        context = json.loads(context_path.read_text(encoding="utf-8"))
+    if sample_dir.is_dir():
         result: List[Dict[str, object]] = []
         for path in sorted(sample_dir.rglob("*.json")):
             sample = json.loads(path.read_text(encoding="utf-8"))
             if sample.get("graph_type") == MATH_LEARNING_SAMPLE_TYPE:
+                context = _load_context_for_sample(path, sample)
                 result.append(_target_copy_sample(context, sample))
         return result
 

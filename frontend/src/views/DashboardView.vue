@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import PlanTimetablePanel from '@/components/PlanTimetablePanel.vue'
 import type { DatasetSummary, ModelSummary, Task } from '@/types'
 
 defineProps<{
@@ -7,7 +6,6 @@ defineProps<{
   scenarioSetCount: number
   datasets: DatasetSummary[]
   models: ModelSummary[]
-  originalGraphActive: boolean
   tasks: Task[]
   runningTaskCount: number
   doneTaskCount: number
@@ -16,7 +14,6 @@ defineProps<{
 }>()
 
 defineEmits<{
-  prepare: []
   refreshTasks: []
 }>()
 </script>
@@ -24,13 +21,6 @@ defineEmits<{
 <template>
   <section class="page-layout">
     <div class="page-stack">
-      <PlanTimetablePanel
-        :project-id="selectedProjectId"
-        :active="originalGraphActive"
-        :busy="busy"
-        @prepare="$emit('prepare')"
-      />
-
       <el-card shadow="never">
         <template #header>
           <div class="card-header">
@@ -39,13 +29,13 @@ defineEmits<{
         </template>
         <el-row :gutter="16">
           <el-col :span="8">
-            <el-statistic title="扰动场景集" :value="scenarioSetCount" />
+            <el-statistic title="扰动场景类别" :value="scenarioSetCount" />
           </el-col>
           <el-col :span="8">
-            <el-statistic title="MILP实例集" :value="datasets.length" />
+            <el-statistic title="MILP实例类别" :value="datasets.length" />
           </el-col>
           <el-col :span="8">
-            <el-statistic title="扰动生成模型" :value="models.length" />
+            <el-statistic title="扰动生成模型数量" :value="models.length" />
           </el-col>
         </el-row>
       </el-card>

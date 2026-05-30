@@ -96,9 +96,6 @@ class MathGraphSample:
 class RailDisturbanceDataset(Dataset):
     def __init__(self, graph_root: Union[str, Path], num_instances: Optional[int] = None):
         self.graph_root = Path(graph_root)
-        self.context_payload = _load_library_context(self.graph_root)
-        if self.context_payload is None:
-            raise FileNotFoundError(f"Missing {MATH_CONTEXT_FILENAME}: {self.graph_root}")
         self.files = list_learning_sample_files(self.graph_root)
         if num_instances is not None:
             self.files = self.files[:num_instances]
@@ -113,7 +110,8 @@ class RailDisturbanceDataset(Dataset):
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("graph_type") != MATH_LEARNING_SAMPLE_TYPE:
             raise ValueError(f"Unsupported graph_type in {path}: {payload.get('graph_type')}")
-        return math_learning_sample_to_sample(self.context_payload, payload, graph_path=str(path))
+        context_payload = load_context_for_sample(path, payload)
+        return math_learning_sample_to_sample(context_payload, payload, graph_path=str(path))
 
 
 class RailDisturbanceContextDataset(Dataset):
@@ -151,6 +149,8 @@ def list_context_graph_files(root: Union[str, Path]) -> List[Path]:
         candidates = [root_path]
     elif (root_path / MATH_CONTEXT_FILENAME).is_file():
         candidates = [root_path / MATH_CONTEXT_FILENAME]
+    elif (root_path / "contexts").is_dir():
+        candidates = sorted((root_path / "contexts").rglob("*.json"))
     else:
         candidates = []
     return [path for path in candidates if path.is_file() and _is_math_context_graph(path)]
@@ -168,6 +168,22 @@ def load_learning_sample(path: Union[str, Path]) -> Dict[str, object]:
     if payload.get("graph_type") != MATH_LEARNING_SAMPLE_TYPE:
         raise ValueError(f"Unsupported graph_type in {path}: {payload.get('graph_type')}")
     return payload
+
+
+def load_context_for_sample(sample_path: Union[str, Path], sample_payload: Dict[str, object]) -> Dict[str, object]:
+    path = Path(sample_path)
+    context_ref = Path(str(sample_payload.get("context_ref", "") or ""))
+    if not context_ref:
+        raise ValueError(f"Learning sample is missing context_ref: {path}")
+    if context_ref.is_absolute():
+        context_path = context_ref
+    else:
+        candidates = [
+            path.parent / context_ref,
+            path.parent.parent / context_ref,
+        ]
+        context_path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+    return load_context_graph(context_path)
 
 
 def math_learning_sample_to_sample(

@@ -50,11 +50,10 @@ export function taskDisplayLabel(task: Task | string | null | undefined) {
   if (!label) return '任务'
   return (
     {
-      normal_generate: '批量生成场景',
-      scenario_set_create: '创建场景集合',
+      normal_generate: '模拟场景',
+      scenario_set_create: '创建场景分类',
       scenario_add: '新增场景',
       scenario_delete: '删除场景',
-      prepare: '激活原计划运行图',
       build: '构建 MILP',
       solve: '求解',
       analyze: '导出时刻表',

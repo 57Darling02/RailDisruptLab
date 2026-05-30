@@ -39,29 +39,13 @@ NEAR_SPACE_UNITS = 1.0
 
 
 def read_scenario_set_visualization(layout: ProjectLayout, scenario_set_id: str) -> Dict[str, object]:
-    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
-    root = layout.scenario_set(scenario_set_id).root
-    if not root.is_dir():
-        raise FileNotFoundError(f"Scenario set not found: {root}")
+    from backend.scenario_cases import read_scenario_set_detail
 
-    context = load_base_context(layout.context_json)
-    station_order = list(context.station_order)
-    plan = {"rows": plan_rows(context)}
-    scenario_items = [
-        scenario_visualization_item(path, context)
-        for path in scenario_files(root)
-    ]
-
-    return {
-        "project_id": layout.name,
-        "scenario_set_id": scenario_set_id,
-        "station_order": station_order,
-        "mileage_by_station": dict(context.mileage_by_station),
-        "train_routes": dict(context.translated.train_routes),
-        "plan": plan,
-        "scenarios": scenario_items,
-        "summary": scenario_set_summary(scenario_items, context, station_order, plan["rows"]),
-    }
+    detail = read_scenario_set_detail(layout, scenario_set_id)
+    detail.setdefault("mileage_by_station", {})
+    detail.setdefault("train_routes", {})
+    detail.setdefault("plan", {"rows": []})
+    return detail
 
 
 def scenario_visualization_item(path: Path, context: Any) -> Dict[str, object]:
@@ -122,8 +106,8 @@ def math_graph_metrics(
     context: Any,
     pair_summary: Dict[str, object],
 ) -> Dict[str, object]:
-    event_anchor_total = len(getattr(context, "event_anchors", {}) or {})
-    section_anchor_total = len(getattr(context, "section_anchors", {}) or {})
+    event_anchor_total = len(getattr(context, "event_anchors", {}) or {}) if context is not None else 0
+    section_anchor_total = len(getattr(context, "section_anchors", {}) or {}) if context is not None else 0
     used_event_anchors = {
         str(item.get("event_anchor_id"))
         for item in disturbances

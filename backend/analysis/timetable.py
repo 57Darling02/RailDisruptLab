@@ -20,10 +20,9 @@ def export_dataset_timetables(
     limit: int = 0,
 ) -> None:
     dataset = layout.dataset(dataset_id)
-    context = load_base_context(layout.context_json)
     case_dirs = [dataset_case_dir(dataset, case_id)] if case_id else limit_items(dataset_case_dirs(dataset), limit)
     records = [
-        export_case_timetable(case_dir, index, context)
+        export_case_timetable(case_dir, index)
         for index, case_dir in enumerate(case_dirs, start=1)
     ]
 
@@ -32,7 +31,7 @@ def export_dataset_timetables(
     print(f"Export timetable finished: {ok_count}/{len(records)} case(s)")
 
 
-def export_case_timetable(case_dir: Path, index: int, context: Any) -> Dict[str, object]:
+def export_case_timetable(case_dir: Path, index: int) -> Dict[str, object]:
     started = datetime.now()
     case_id = sanitize_id(case_dir.name)
     sol_path = case_dir / f"{case_id}.sol"
@@ -40,6 +39,7 @@ def export_case_timetable(case_dir: Path, index: int, context: Any) -> Dict[str,
     try:
         if not sol_path.is_file():
             raise FileNotFoundError(f"Solution not found: {sol_path}")
+        context = load_base_context(case_dir / "context.json")
         values = load_solution_values(sol_path)
         rows = adjusted_timetable_rows(context.translated, values)
         write_json(
@@ -67,7 +67,7 @@ def read_case_timetable(layout: ProjectLayout, dataset_id: str, case_id: str) ->
         raise FileNotFoundError(f"Dataset case not found: {case_dir}")
 
     adjusted = read_json(case_dir / "adjusted_timetable.json")
-    context = load_base_context(layout.context_json)
+    context = load_base_context(case_dir / "context.json")
     return {
         "project_id": layout.name,
         "dataset_id": dataset_id,
@@ -78,18 +78,6 @@ def read_case_timetable(layout: ProjectLayout, dataset_id: str, case_id: str) ->
         "plan": {"rows": plan_rows(context)},
         "adjusted": adjusted,
         "disturbances": read_case_disturbances(layout, case_dir, case_id, context),
-    }
-
-
-def read_plan_timetable(layout: ProjectLayout) -> Dict[str, object]:
-    context = load_base_context(layout.context_json)
-    return {
-        "project_id": layout.name,
-        "station_order": list(context.station_order),
-        "mileage_by_station": dict(context.mileage_by_station),
-        "train_routes": dict(context.translated.train_routes),
-        "plan": {"rows": plan_rows(context)},
-        "disturbances": [],
     }
 
 

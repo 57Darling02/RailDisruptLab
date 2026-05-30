@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from core.project_layout import PROJECTS_ROOT, ProjectLayout, require_id, sanitize_id, to_posix
-from core.scenario_config import load_scenario_document, scenario_file_by_id, scenario_files
+from backend.scenario_cases import (
+    list_scenario_cases,
+    read_scenario_case,
+    scenario_source_file,
+)
 from backend.state import (
     get_project_state,
     list_project_datasets,
@@ -39,48 +43,19 @@ class ProjectRepository:
         return list_project_models(self.layout(project_id))
 
     def list_scenarios(self, project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
-        root = self.layout(project_id).scenario_set(scenario_set_id).root
-        if not root.is_dir():
-            raise FileNotFoundError("Scenario set not found: {}".format(root))
-        yaml = require_yaml()
-        scenarios: List[Dict[str, object]] = []
-        for path in scenario_files(root):
-            doc = load_scenario_document(path, yaml)
-            speed_limit_count, interruption_count = speed_limit_counts(doc.scenarios.get("speed_limits", []) or [])
-            scenarios.append(
-                {
-                    "scenario_id": sanitize_id(path.stem),
-                    "name": doc.name,
-                    "path": to_posix(path),
-                    "size_bytes": path.stat().st_size,
-                    "delay_count": len(doc.scenarios.get("delays", []) or []),
-                    "speed_limit_count": speed_limit_count,
-                    "interruption_count": interruption_count,
-                }
-            )
-        return scenarios
+        return list_scenario_cases(self.layout(project_id), scenario_set_id)
 
     def read_scenario(self, project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
-        root = self.layout(project_id).scenario_set(scenario_set_id).root
-        if not root.is_dir():
-            raise FileNotFoundError("Scenario set not found: {}".format(root))
-        path = scenario_file_by_id(root, scenario_id)
-        if path is None:
-            raise FileNotFoundError("Scenario not found: {}".format(scenario_id))
-        return read_yaml(path)
+        return read_scenario_case(self.layout(project_id), scenario_set_id, scenario_id)
 
-    def save_source_file(self, project_id: str, filename: str, content: bytes) -> Path:
-        layout = self.layout(project_id)
-        layout.source_dir.mkdir(parents=True, exist_ok=True)
-        target = layout.source_dir / Path(filename).name
-        target.write_bytes(content)
-        return target
-
-    def source_file_path(self, project_id: str, filename: str) -> Path:
-        path = self.layout(project_id).source_dir / Path(filename).name
-        if not path.is_file():
-            raise FileNotFoundError("Source file not found: {}".format(path))
-        return path
+    def scenario_source_file_path(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
+        filename: str,
+    ) -> Path:
+        return scenario_source_file(self.layout(project_id), scenario_set_id, scenario_id, filename)
 
     def read_training_summary(self, project_id: str, model_id: str) -> Dict[str, object]:
         return read_json(self.layout(project_id).model(model_id).root / "training_summary.json")

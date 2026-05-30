@@ -43,7 +43,7 @@ const emit = defineEmits<{
 }>()
 
 const TRAINING_CONFIG_LABELS: Record<string, string> = {
-  scenario_set_id: '训练扰动场景集',
+  scenario_set_id: '训练场景分类',
   max_slots: '最大槽位',
   event_time_window: '事件时间窗口',
   event_top_k: '事件候选 Top K',
@@ -255,7 +255,7 @@ function formatMetadataValue(key: string, value: unknown) {
   if (key === 'created_at' && typeof value === 'string') return value.replace('T', ' ')
   if (key === 'source') {
     if (value === 'scenario') return '单个场景'
-    if (value === 'scenario_set') return '扰动场景集'
+    if (value === 'scenario_set') return '场景分类'
   }
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
@@ -488,12 +488,12 @@ function escapeRegExp(value: string) {
   <section class="page-layout">
     <div class="page-stack">
       <EntityToolbar
-        label="扰动生成模型"
+        label="模型训练"
         :model-value="selectedModelId"
         :options="modelOptions"
         :loading="resourceLoading"
-        placeholder="选择扰动生成模型"
-        delete-label="删除扰动生成模型"
+        placeholder="选择模型训练"
+        delete-label="删除模型训练"
         :busy="busy"
         @update:model-value="$emit('update:selectedModelId', $event)"
         @visible-change="$emit('reloadModels', $event)"
@@ -504,17 +504,17 @@ function escapeRegExp(value: string) {
       <div v-if="!models.length && !pendingModelId" class="primary-empty-panel">
         <el-empty :image-size="120">
           <template #description>
-            <div class="primary-empty-title">暂无扰动生成模型资源</div>
+            <div class="primary-empty-title">暂无模型训练资源</div>
           </template>
           <el-button type="primary" size="large" :disabled="busy" @click="$emit('train')">
-            训练扰动生成模型
+            训练模型
           </el-button>
         </el-empty>
       </div>
       <el-alert
         v-if="pendingModelId"
         class="dialog-section"
-        :title="`扰动生成模型 ${pendingModelId} 正在训练，产物状态会随任务更新。`"
+        :title="`模型训练 ${pendingModelId} 正在训练，产物状态会随任务更新。`"
         type="info"
         show-icon
         :closable="false"
@@ -545,7 +545,7 @@ function escapeRegExp(value: string) {
           </div>
         </template>
 
-        <el-empty v-if="!selectedModelId" description="请选择或训练扰动生成模型" />
+        <el-empty v-if="!selectedModelId" description="请选择或训练模型" />
         <el-result v-else-if="modelDetailError" icon="error" title="模型数据加载失败" :sub-title="modelDetailError">
           <template #extra>
             <el-button

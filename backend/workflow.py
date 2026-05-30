@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -10,11 +11,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from core.base_context import build_base_context, load_base_context, write_base_context
-from core.builder import build_model
 from core.disturbance_graph import disturbance_graph_to_scenario
-from core.exporter import export_lp
-from core.loader import load_config_payload, load_mileage_table, load_timetable, parse_scenario_config
-from core.project_layout import ProjectLayout, REPO_ROOT, require_id, reset_dir, sanitize_id, to_posix
+from core.loader import load_mileage_table, load_timetable
+from core.project_layout import ProjectLayout, REPO_ROOT, reset_dir, sanitize_id, to_posix
 from core.scenario_config import (
     ScenarioDocument,
     load_scenario_document,
@@ -24,25 +23,22 @@ from core.scenario_config import (
     scenario_files,
 )
 from core.solver import GurobiSolveError, solve_lp
-from core.types import AppConfig
+from core.types import BaseContext, ScenarioConfig
 from core.vae_learning_graph import (
     DEFAULT_EVENT_TIME_WINDOW,
     DEFAULT_EVENT_TOP_K,
     DEFAULT_MAX_SLOTS,
     DEFAULT_SECTION_ORDER_WINDOW,
     infer_math_dataset_schema,
-    scenario_to_typed_vae_learning_graph,
     scenario_config_to_typed_vae_learning_graph,
     typed_generated_graph_to_disturbance_graph,
-    typed_learning_graph_to_dataset_profile,
     typed_learning_graph_to_math_context_graph,
-    typed_learning_graph_to_math_learning_sample,
 )
 
 
 def new_project(layout: ProjectLayout) -> None:
     for directory in (
-        layout.source_dir,
+        layout.scenario_sets_dir,
         layout.datasets_dir,
         layout.model_dir,
     ):
@@ -58,58 +54,6 @@ def delete_project(layout: ProjectLayout, *, force: bool = False) -> None:
         raise FileNotFoundError(f"Project not found: {layout.root}")
     reset_dir(layout.root)
     print(f"Project deleted: {layout.root}")
-
-
-def prepare(
-    layout: ProjectLayout,
-    *,
-    timetable_filename: str,
-    mileage_filename: str,
-    timetable_sheet_name: str = "Sheet1",
-    mileage_sheet_name: str = "Sheet1",
-) -> None:
-    timetable_filename = required_filename({"timetable_filename": timetable_filename}, "timetable_filename")
-    mileage_filename = required_filename({"mileage_filename": mileage_filename}, "mileage_filename")
-    timetable_path = layout.source_dir / timetable_filename
-    mileage_path = layout.source_dir / mileage_filename
-    if not timetable_path.is_file():
-        raise FileNotFoundError(f"Timetable not found in project source: {timetable_path}")
-    if not mileage_path.is_file():
-        raise FileNotFoundError(f"Mileage table not found in project source: {mileage_path}")
-
-    timetable_sheet = str(timetable_sheet_name or "Sheet1")
-    mileage_sheet = str(mileage_sheet_name or "Sheet1")
-    context = build_base_context(
-        timetable_path=timetable_path,
-        mileage_path=mileage_path,
-        timetable_sheet_name=timetable_sheet,
-        mileage_sheet_name=mileage_sheet,
-        timetable_table=load_timetable(timetable_path, timetable_sheet),
-        mileage_table=load_mileage_table(mileage_path, mileage_sheet),
-    )
-    write_base_context(
-        context,
-        layout.context_json,
-        metadata={
-            "id": layout.name,
-            "prepared_at": now(),
-            "timetable_filename": timetable_filename,
-            "mileage_filename": mileage_filename,
-            "timetable_sheet_name": timetable_sheet,
-            "mileage_sheet_name": mileage_sheet,
-        },
-    )
-    print(f"Context exported: {layout.context_json}")
-
-
-def delete_source_file(layout: ProjectLayout, filename: str) -> None:
-    require_project(layout)
-    clean_filename = required_filename({"filename": filename}, "filename")
-    path = layout.source_dir / clean_filename
-    if not path.is_file():
-        raise FileNotFoundError(f"Source file not found: {path}")
-    path.unlink()
-    print(f"Source file deleted: {path}")
 
 
 def create_dataset(layout: ProjectLayout, dataset_id: str, *, exist_ok: bool = False) -> None:
@@ -141,13 +85,14 @@ def build_dataset(
     big_m: int = 100000,
     tolerance_delay_seconds: int = 7200,
 ) -> None:
+    docs = load_scenario_documents(layout, scenario_set_id, scenario_id=scenario_id)
+    require_activated_scenarios(docs)
     dataset = layout.dataset(dataset_id)
     if dataset.root.exists() and not dataset.root.is_dir():
         raise NotADirectoryError(f"MILP dataset path is not a directory: {dataset.root}")
     if not dataset.root.is_dir():
         dataset.root.mkdir(parents=True, exist_ok=False)
     prepare_output_dir(dataset.root, overwrite=True)
-    docs = load_scenario_documents(layout, scenario_set_id, scenario_id=scenario_id)
 
     for index, doc in enumerate(docs, start=1):
         started = datetime.now()
@@ -166,21 +111,54 @@ def build_dataset(
             "tolerance_delay_seconds": tolerance_delay_seconds,
         }
         lp_path = case_dir / f"{case_id}.lp"
+        cli_summary_path = case_dir / "core_build_summary.json"
         try:
             case_dir.mkdir(parents=True, exist_ok=True)
             write_yaml(case_dir / "scenario.yml", scenario_document_to_yaml(case_id, doc))
-            config = case_app_config(
-                layout,
-                doc,
-                case_dir,
-                build_config,
+            if doc.path is None:
+                raise ValueError(f"Scenario document path is required: {doc.name}")
+            shutil.copy2(doc.path.parent / "context.json", case_dir / "context.json")
+            run(
+                [
+                    sys.executable,
+                    "core_cli.py",
+                    "build-milp-case",
+                    "--context",
+                    to_posix(case_dir / "context.json"),
+                    "--scenario",
+                    to_posix(case_dir / "scenario.yml"),
+                    "--output-dir",
+                    to_posix(case_dir),
+                    "--summary-output",
+                    to_posix(cli_summary_path),
+                    "--objective-delay-weight",
+                    str(objective_delay_weight),
+                    "--objective-mode",
+                    objective_mode,
+                    "--cancellation-penalty-weight",
+                    str(cancellation_penalty_weight),
+                    "--arr-arr-headway-seconds",
+                    str(arr_arr_headway_seconds),
+                    "--dep-dep-headway-seconds",
+                    str(dep_dep_headway_seconds),
+                    "--dwell-seconds-at-stops",
+                    str(dwell_seconds_at_stops),
+                    "--big-m",
+                    str(big_m),
+                    "--tolerance-delay-seconds",
+                    str(tolerance_delay_seconds),
+                    *(
+                        ["--cancellation-enabled"]
+                        if cancellation_enabled
+                        else []
+                    ),
+                ]
             )
-            model = build_model(config.base_context.translated, config)
-            export_lp(model, config.build.lp_path)
+            cli_summary = read_json(cli_summary_path)
             record.update(
                 {
                     "status": "ok",
-                    "constraints": len(model.constraints),
+                    "constraints": int(cli_summary.get("constraints", 0) or 0),
                 }
             )
         except Exception as exc:
@@ -334,6 +312,8 @@ def train_model(
     scenario_set_id = sanitize_id(scenario_set_id)
     model_id = sanitize_id(model_id)
     model = layout.model(model_id)
+    docs = load_scenario_set(layout, scenario_set_id)
+    require_activated_scenarios(docs)
     if model.root.exists():
         reset_dir(model.root)
     model.root.mkdir(parents=True, exist_ok=True)
@@ -341,7 +321,8 @@ def train_model(
         layout,
         model,
         scenario_set_id,
-        {
+        docs=docs,
+        graph_settings={
             "max_slots": max_slots,
             "event_time_window": event_time_window,
             "event_top_k": event_top_k,
@@ -396,6 +377,10 @@ def generate_scenarios(
     model_id: str,
     checkpoint: str,
     scenario_set_id: str,
+    source_scenario_set_id: str = "",
+    source_timetable_path: str = "",
+    source_mileage_path: str = "",
+    output_prefix: str = "generated",
     num_samples: int,
     seed: int,
     device: str,
@@ -405,15 +390,41 @@ def generate_scenarios(
     model = layout.model(model_id)
     checkpoint_path = model_checkpoint_path(model.root, checkpoint)
     output_root = layout.scenario_set(scenario_set_id).root
-    prepare_output_dir(output_root, overwrite=overwrite)
-    generation_run = layout.root / ".tmp" / f"generation_{sanitize_id(scenario_set_id)}_{datetime.now():%Y%m%d_%H%M%S_%f}"
+    source_set_id = sanitize_id(source_scenario_set_id)
+    source_timetable_path = source_timetable_path.strip()
+    source_mileage_path = source_mileage_path.strip()
+    has_upload_source = bool(source_timetable_path or source_mileage_path)
+    if bool(source_set_id) == has_upload_source:
+        raise ValueError("Generation requires exactly one context source: scenario category or uploaded source files.")
+
+    tmp_root = layout.root / ".tmp" / f"generation_{sanitize_id(scenario_set_id)}_{datetime.now():%Y%m%d_%H%M%S_%f}"
+    context_graph_root = tmp_root / "context_graphs"
+    generation_run = tmp_root / "decode"
     try:
+        graph_settings = generation_graph_settings(model)
+        if has_upload_source:
+            export_uploaded_generation_context_graph(
+                layout,
+                source_timetable_path=source_timetable_path,
+                source_mileage_path=source_mileage_path,
+                context_path=tmp_root / "source_context" / "context.json",
+                output_dir=context_graph_root,
+                graph_settings=graph_settings,
+            )
+        else:
+            export_generation_context_graphs(
+                layout,
+                source_set_id,
+                context_graph_root,
+                graph_settings=graph_settings,
+            )
+        output_root.mkdir(parents=True, exist_ok=True)
         run(
             [
                 sys.executable,
                 "scripts/generate_vae.py",
-                "--context-graph",
-                to_posix(model.context_graph),
+                "--context-graphs",
+                to_posix(context_graph_root),
                 "--checkpoint",
                 to_posix(checkpoint_path),
                 "--num-samples",
@@ -426,35 +437,184 @@ def generate_scenarios(
                 to_posix(generation_run),
             ]
         )
-        context = load_project_context(layout)
         graph_paths = sorted((generation_run / "math_graphs").glob("*.json"))
         for index, graph_path in enumerate(graph_paths, start=1):
             graph = json.loads(graph_path.read_text(encoding="utf-8"))
+            base_context_path = str(graph.get("decode_handle", {}).get("base_context_path", ""))
+            if not base_context_path:
+                raise ValueError(f"Generated graph missing decode_handle.base_context_path: {graph_path}")
+            context = load_base_context(Path(base_context_path))
             disturbance_graph = typed_generated_graph_to_disturbance_graph(
                 graph,
                 context,
                 speed_interruption_threshold=speed_interruption_threshold,
             )
             scenarios = disturbance_graph_to_scenario(disturbance_graph, context)
-            scenario_path = output_root / f"sample_{index:06d}.yml"
-            write_yaml(scenario_path, scenario_config_to_yaml(f"sample_{index:06d}", scenarios))
+            scenario_id = sanitize_id(f"{output_prefix}_{index:04d}")
+            target = layout.scenario_set(scenario_set_id).scenario(scenario_id)
+            if target.root.exists():
+                if not overwrite:
+                    raise FileExistsError(f"Generated scenario already exists: {target.root}")
+                reset_dir(target.root)
+            target.root.mkdir(parents=True, exist_ok=False)
+            write_yaml(target.scenario_yml, scenario_config_to_yaml(scenario_id, scenarios))
+            shutil.copy2(Path(base_context_path), target.context_json)
+            copy_generation_source_files(Path(base_context_path), target.source_dir)
         print(f"Generated and decoded {len(graph_paths)} scenarios: {output_root}")
     finally:
-        if generation_run.exists():
-            reset_dir(generation_run)
+        if tmp_root.exists():
+            reset_dir(tmp_root)
+        cleanup_generation_uploads(source_timetable_path, source_mileage_path, project_root=layout.root)
+
+
+def copy_generation_source_files(context_path: Path, target_source_dir: Path) -> None:
+    context = load_base_context(context_path)
+    target_source_dir.mkdir(parents=True, exist_ok=True)
+    if Path(context.source_timetable_path).is_file():
+        shutil.copy2(context.source_timetable_path, target_source_dir / "timetable.xlsx")
+    if Path(context.source_mileage_path).is_file():
+        shutil.copy2(context.source_mileage_path, target_source_dir / "mileage.xlsx")
+
+
+def generation_graph_settings(model: Any) -> Dict[str, object]:
+    config = read_json_if_exists(model.root / "training_config.json")
+    return {
+        "max_slots": int(config.get("max_slots", DEFAULT_MAX_SLOTS) or DEFAULT_MAX_SLOTS),
+        "event_time_window": int(config.get("event_time_window", DEFAULT_EVENT_TIME_WINDOW) or DEFAULT_EVENT_TIME_WINDOW),
+        "event_top_k": int(config.get("event_top_k", DEFAULT_EVENT_TOP_K) or DEFAULT_EVENT_TOP_K),
+        "section_order_window": int(
+            config.get("section_order_window", DEFAULT_SECTION_ORDER_WINDOW) or DEFAULT_SECTION_ORDER_WINDOW
+        ),
+    }
+
+
+def export_generation_context_graphs(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    output_dir: Path,
+    *,
+    graph_settings: Dict[str, object],
+) -> None:
+    docs = load_scenario_set(layout, scenario_set_id)
+    require_activated_scenarios(docs)
+    prepare_output_dir(output_dir, overwrite=True)
+    for doc in docs:
+        if doc.path is None:
+            raise ValueError(f"Scenario document path is required: {doc.name}")
+        context_path = doc.path.parent / "context.json"
+        write_generation_context_graph(
+            load_base_context(context_path),
+            context_path,
+            output_dir / f"{sanitize_id(doc.name)}.json",
+            graph_settings=graph_settings,
+            source_config_path=to_posix(doc.path),
+        )
+    print(f"Generation context graphs exported: {output_dir}")
+
+
+def export_uploaded_generation_context_graph(
+    layout: ProjectLayout,
+    *,
+    source_timetable_path: str,
+    source_mileage_path: str,
+    context_path: Path,
+    output_dir: Path,
+    graph_settings: Dict[str, object],
+) -> None:
+    timetable_path = generation_task_upload_path(layout, source_timetable_path, "source_timetable_path")
+    mileage_path = generation_task_upload_path(layout, source_mileage_path, "source_mileage_path")
+    if not timetable_path.is_file():
+        raise FileNotFoundError(f"Timetable not found in project source: {timetable_path}")
+    if not mileage_path.is_file():
+        raise FileNotFoundError(f"Mileage table not found in project source: {mileage_path}")
+    context = build_base_context(
+        timetable_path=timetable_path,
+        mileage_path=mileage_path,
+        timetable_sheet_name="Sheet1",
+        mileage_sheet_name="Sheet1",
+        timetable_table=load_timetable(timetable_path, "Sheet1"),
+        mileage_table=load_mileage_table(mileage_path, "Sheet1"),
+    )
+    write_base_context(
+        context,
+        context_path,
+        metadata={
+            "id": "generation_source",
+            "timetable_filename": timetable_path.name,
+            "mileage_filename": mileage_path.name,
+            "timetable_sheet_name": "Sheet1",
+            "mileage_sheet_name": "Sheet1",
+        },
+    )
+    prepare_output_dir(output_dir, overwrite=True)
+    write_generation_context_graph(
+        context,
+        context_path,
+        output_dir / "uploaded_source.json",
+        graph_settings=graph_settings,
+    )
+    print(f"Uploaded generation context graph exported: {output_dir}")
+
+
+def generation_task_upload_path(layout: ProjectLayout, path_text: str, key: str) -> Path:
+    path = Path(path_text)
+    if not path.is_absolute():
+        raise ValueError(f"{key} must be an absolute task upload path.")
+    root = (layout.root / ".tmp" / "uploads").resolve()
+    resolved = path.resolve()
+    if root != resolved and root not in resolved.parents:
+        raise ValueError(f"{key} must be under project .tmp/uploads/: {path}")
+    return resolved
+
+
+def cleanup_generation_uploads(*path_texts: str, project_root: Path) -> None:
+    upload_root = (project_root / ".tmp" / "uploads").resolve()
+    parents = set()
+    for path_text in path_texts:
+        if not path_text.strip():
+            continue
+        resolved = Path(path_text).resolve()
+        if upload_root in resolved.parents:
+            parents.add(resolved.parent)
+    for parent in parents:
+        if parent.exists():
+            reset_dir(parent)
+
+
+def write_generation_context_graph(
+    base_context: BaseContext,
+    base_context_path: Path,
+    output_path: Path,
+    *,
+    graph_settings: Dict[str, object],
+    source_config_path: str = "",
+) -> None:
+    typed = scenario_config_to_typed_vae_learning_graph(
+        ScenarioConfig(delays=[], speed_limits=[]),
+        base_context,
+        base_context_path=to_posix(base_context_path),
+        source_config_path=source_config_path,
+        max_slots=int(graph_settings.get("max_slots", DEFAULT_MAX_SLOTS)),
+        event_time_window=int(graph_settings.get("event_time_window", DEFAULT_EVENT_TIME_WINDOW)),
+        event_top_k=int(graph_settings.get("event_top_k", DEFAULT_EVENT_TOP_K)),
+        section_order_window=int(graph_settings.get("section_order_window", DEFAULT_SECTION_ORDER_WINDOW)),
+    )
+    write_json(output_path, typed_learning_graph_to_math_context_graph(typed))
 
 
 def export_training_graphs(
     layout: ProjectLayout,
     model: Any,
     scenario_set_id: str,
+    *,
+    docs: List[ScenarioDocument] | None = None,
     graph_settings: Dict[str, object],
 ) -> None:
     reset_dir(model.graph_dir)
     model.sample_dir.mkdir(parents=True, exist_ok=True)
-    base_context = load_project_context(layout)
-    base_context_path = to_posix(layout.context_json)
-    docs = load_scenario_set(layout, scenario_set_id)
+    model.context_graph_dir.mkdir(parents=True, exist_ok=True)
+    docs = docs if docs is not None else load_scenario_set(layout, scenario_set_id)
+    require_activated_scenarios(docs)
     total = len(docs)
     write_graph_progress(
         model,
@@ -464,27 +624,43 @@ def export_training_graphs(
         sample_completed=0,
     )
 
-    context_graph: Dict[str, object] | None = None
-    profile_source: Dict[str, object] | None = None
+    first_context_graph: Dict[str, object] | None = None
     samples: List[Dict[str, object]] = []
     sample_records: List[Dict[str, object]] = []
 
     for index, doc in enumerate(docs, start=1):
-        scenarios = parse_scenario_config(doc.scenarios, base_context)
-        typed = scenario_config_to_typed_vae_learning_graph(
-            scenarios,
-            base_context,
-            base_context_path=base_context_path,
-            source_config_path=to_posix(doc.path or Path(doc.name)),
-            max_slots=int(graph_settings.get("max_slots", DEFAULT_MAX_SLOTS)),
-            event_time_window=int(graph_settings.get("event_time_window", DEFAULT_EVENT_TIME_WINDOW)),
-            event_top_k=int(graph_settings.get("event_top_k", DEFAULT_EVENT_TOP_K)),
-            section_order_window=int(graph_settings.get("section_order_window", DEFAULT_SECTION_ORDER_WINDOW)),
+        if doc.path is None:
+            raise ValueError(f"Scenario document path is required: {doc.name}")
+        scenario_context_path = doc.path.parent / "context.json"
+        context_path = model.context_graph_dir / f"{sanitize_id(doc.name)}.json"
+        sample_path = model.sample_dir / f"{sanitize_id(doc.name)}.json"
+        run(
+            [
+                sys.executable,
+                "core_cli.py",
+                "export-vae-case-graph",
+                "--context",
+                to_posix(scenario_context_path),
+                "--scenario",
+                to_posix(doc.path),
+                "--context-output",
+                to_posix(context_path),
+                "--sample-output",
+                to_posix(sample_path),
+                "--max-slots",
+                str(int(graph_settings.get("max_slots", DEFAULT_MAX_SLOTS))),
+                "--event-time-window",
+                str(int(graph_settings.get("event_time_window", DEFAULT_EVENT_TIME_WINDOW))),
+                "--event-top-k",
+                str(int(graph_settings.get("event_top_k", DEFAULT_EVENT_TOP_K))),
+                "--section-order-window",
+                str(int(graph_settings.get("section_order_window", DEFAULT_SECTION_ORDER_WINDOW))),
+            ]
         )
-        context = typed_learning_graph_to_math_context_graph(typed)
-        if context_graph is None:
-            context_graph = context
-            profile_source = typed
+        context = read_json(context_path)
+        sample = read_json(sample_path)
+        if first_context_graph is None:
+            first_context_graph = context
             write_graph_progress(
                 model,
                 global_graph_status="done",
@@ -492,20 +668,11 @@ def export_training_graphs(
                 sample_total=total,
                 sample_completed=0,
             )
-        elif context != context_graph:
-            raise ValueError("All training samples must share the same context graph.")
-        sample = typed_learning_graph_to_math_learning_sample(
-            typed,
-            context_ref=model.context_graph.name,
-            sample_id=doc.name,
-        )
-        sample_path = model.sample_dir / f"{sanitize_id(doc.name)}.json"
-        write_json(sample_path, sample)
         samples.append(sample)
         sample_records.append(
             {
                 "learning_sample_path": to_posix(sample_path),
-                "context_graph_path": to_posix(model.context_graph),
+                "context_graph_path": to_posix(context_path),
                 "source_scenario_path": to_posix(doc.path or Path(doc.name)),
             }
         )
@@ -517,14 +684,13 @@ def export_training_graphs(
             sample_completed=index,
         )
 
-    if context_graph is None or profile_source is None:
+    if first_context_graph is None:
         raise ValueError(f"No scenarios found for training: {scenario_set_id}")
-    inferred_context, inferred_schema = infer_math_dataset_schema(context_graph, samples)
-    write_json(model.context_graph, inferred_context)
+    _inferred_context, inferred_schema = infer_math_dataset_schema(first_context_graph, samples)
     write_json(
         model.graph_dir / "dataset_profile.json",
-        typed_learning_graph_to_dataset_profile(
-            profile_source,
+        math_context_graph_to_dataset_profile(
+            first_context_graph,
             samples=sample_records,
             inferred_schema=inferred_schema,
             export_profile=dict(graph_settings),
@@ -537,6 +703,41 @@ def export_training_graphs(
         sample_total=total,
         sample_completed=total,
     )
+
+
+def math_context_graph_to_dataset_profile(
+    context_graph: Dict[str, object],
+    *,
+    samples: List[Dict[str, object]],
+    inferred_schema: Dict[str, object],
+    export_profile: Dict[str, object],
+) -> Dict[str, object]:
+    rules = context_graph.get("rules", {})
+    pools = list(dict(rules).get("pools", [])) if isinstance(rules, dict) else []
+    tasks = list(dict(rules).get("tasks", [])) if isinstance(rules, dict) else []
+    return {
+        "schema_version": context_graph.get("schema_version", 1),
+        "graph_type": "vae_math_dataset_profile",
+        "math_context_graph_type": "vae_math_context_graph",
+        "math_learning_sample_type": "vae_math_learning_sample",
+        "base_context_path": str(context_graph.get("decode_handle", {}).get("base_context_path", ""))
+        if isinstance(context_graph.get("decode_handle"), dict)
+        else "",
+        "export_profile": dict(export_profile),
+        "type_system": {},
+        "pools": {
+            str(item.get("pool_id")): {
+                "size": item.get("size"),
+                "feature_dim": item.get("feature_dim"),
+            }
+            for item in pools
+            if isinstance(item, dict)
+        },
+        "tasks": tasks,
+        "inferred_schema": dict(inferred_schema),
+        "decode_contract": {},
+        "samples": list(samples),
+    }
 
 
 def write_graph_progress(
@@ -559,33 +760,6 @@ def write_graph_progress(
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         },
     )
-
-
-def case_app_config(
-    layout: ProjectLayout,
-    scenario_doc: ScenarioDocument,
-    case_dir: Path,
-    build_config: Dict[str, object] | None = None,
-) -> AppConfig:
-    case_id = sanitize_id(scenario_doc.name)
-    payload = {
-        "project": {
-            "name": case_id,
-            "output_dir": to_posix(case_dir),
-            "base_context_path": to_posix(layout.context_json),
-        },
-        "build": {"scenarios": scenario_doc.scenarios},
-        "solver": dict(build_config or default_build_config()),
-        "solve": {},
-        "export-timetable": {"sol_path": ""},
-    }
-    return load_config_payload(payload, case_dir / "case.yml")
-
-
-def load_project_context(layout: ProjectLayout):
-    if not layout.context_json.is_file():
-        raise FileNotFoundError(f"Missing project context. Activate the original timetable first: {layout.context_json}")
-    return load_base_context(layout.context_json)
 
 
 def require_project(layout: ProjectLayout) -> None:
@@ -635,22 +809,17 @@ def load_scenario_documents(
     return [load_scenario_document(path, require_yaml())]
 
 
-def scenario_note(config: AppConfig) -> str:
-    count = len(config.scenarios.delays) + len(config.scenarios.speed_limits)
-    return f"Scenarios: {count}" if count else "Scenarios: none"
-
-
-def required_filename(config: Dict[str, object], key: str) -> str:
-    value = str(config.get(key, "") or "").strip()
-    if not value:
-        raise ValueError(f"Missing required {key}")
-    if Path(value).name != value:
-        raise ValueError(f"{key} must be a filename under project source/: {value}")
-    return value
-
-
-def required_id(config: Dict[str, object], key: str) -> str:
-    return require_id(config.get(key), key)
+def require_activated_scenarios(docs: List[ScenarioDocument]) -> None:
+    missing = []
+    for doc in docs:
+        if doc.path is None:
+            missing.append(doc.name)
+            continue
+        if not (doc.path.parent / "context.json").is_file():
+            missing.append(doc.name)
+    if missing:
+        names = ", ".join(sanitize_id(name) for name in missing[:10])
+        raise FileNotFoundError(f"Scenario context is required before batch execution: {names}")
 
 
 def default_build_config() -> Dict[str, object]:
@@ -734,6 +903,16 @@ def write_yaml(path: Path, payload: Dict[str, object]) -> None:
 def write_json(path: Path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def read_json_if_exists(path: Path) -> Dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def write_solution_csv(path: Path, values: Dict[str, float]) -> None:

@@ -46,14 +46,35 @@ def ensure_no_active_conflict(
 
 def resources_conflict(left: TaskResources, right: TaskResources) -> bool:
     return bool(
-        left.writes & right.writes
-        or left.writes & right.reads
-        or left.reads & right.writes
+        resources_overlap(left.writes, right.writes)
+        or resources_overlap(left.writes, right.reads)
+        or resources_overlap(left.reads, right.writes)
     )
 
 
 def resource_intersection(left: TaskResources, right: TaskResources) -> set[str]:
-    return set(left.writes & right.writes) | set(left.writes & right.reads) | set(left.reads & right.writes)
+    return (
+        resource_overlaps(left.writes, right.writes)
+        | resource_overlaps(left.writes, right.reads)
+        | resource_overlaps(left.reads, right.writes)
+    )
+
+
+def resources_overlap(left: Iterable[str], right: Iterable[str]) -> bool:
+    return any(resource_overlaps_one(left_item, right_item) for left_item in left for right_item in right)
+
+
+def resource_overlaps(left: Iterable[str], right: Iterable[str]) -> set[str]:
+    result: set[str] = set()
+    for left_item in left:
+        for right_item in right:
+            if resource_overlaps_one(left_item, right_item):
+                result.add(left_item if len(left_item) >= len(right_item) else right_item)
+    return result
+
+
+def resource_overlaps_one(left: str, right: str) -> bool:
+    return left == right or left.startswith(f"{right}:") or right.startswith(f"{left}:")
 
 
 def resources_for_task(task: Dict[str, object]) -> TaskResources:
@@ -76,19 +97,20 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         writes.add("project")
     elif action == "deleteproject":
         writes.add("project")
-    elif action == "prepare":
-        writes.add("context")
     elif action == "scenario_set_create":
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
-    elif action in {"scenario_add", "scenario_delete", "normal_generate"}:
-        reads.add("context")
+    elif action == "scenario_set_delete":
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
+    elif action in {"scenario_add", "scenario_delete", "scenario_activate", "normal_generate"}:
+        if action == "normal_generate":
+            writes.add(resource("scenario_set", params.get("scenario_set_id")))
+        else:
+            writes.add(scenario_case_resource(params))
     elif action == "dataset_create":
         writes.add(resource("dataset", params.get("dataset_id")))
     elif action == "build":
         reads.update(
             {
-                "context",
                 resource("scenario_set", params.get("scenario_set_id")),
             }
         )
@@ -96,23 +118,19 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
     elif action == "solve":
         writes.add(dataset_case_or_dataset(params))
     elif action == "export_timetable":
-        reads.add("context")
         writes.add(dataset_case_or_dataset(params))
     elif action == "train":
         reads.update(
             {
-                "context",
                 resource("scenario_set", params.get("scenario_set_id")),
             }
         )
         writes.add(resource("model", params.get("model_id")))
     elif action == "generation":
-        reads.update(
-            {
-                "context",
-                resource("model", params.get("model_id")),
-            }
-        )
+        source_set_id = str(params.get("source_scenario_set_id") or "").strip()
+        reads.add(resource("model", params.get("model_id")))
+        if source_set_id:
+            reads.add(resource("scenario_set", source_set_id))
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
 
     return TaskResources(
@@ -133,6 +151,15 @@ def dataset_case_or_dataset(params: Mapping[str, Any]) -> str:
         return ""
     dataset_resource = resource("dataset", dataset_id)
     return f"{dataset_resource}:case:{sanitize_id(case_id)}" if case_id else dataset_resource
+
+
+def scenario_case_resource(params: Mapping[str, Any]) -> str:
+    scenario_set_id = str(params.get("scenario_set_id") or "").strip()
+    scenario_id = str(params.get("scenario_id") or "").strip()
+    if not scenario_set_id:
+        return ""
+    scenario_set_resource = resource("scenario_set", scenario_set_id)
+    return f"{scenario_set_resource}:scenario:{sanitize_id(scenario_id)}" if scenario_id else scenario_set_resource
 
 
 def task_references_value(task: Dict[str, object], *, field: str, value: str) -> bool:

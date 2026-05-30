@@ -26,7 +26,6 @@ export interface TaskResponse {
 export interface ProjectSummary {
   project_id: string
   root: string
-  has_context: boolean
 }
 
 export interface ResourceOption {
@@ -45,17 +44,72 @@ export interface ScenarioSet {
   scenario_set_id: string
   root: string
   case_count: number
+  activated_count?: number
+  delay_count?: number
+  speed_limit_count?: number
+  interruption_count?: number
   files?: string[]
 }
 
 export interface ScenarioSummary {
+  scenario_set_id?: string
   scenario_id: string
   name: string
-  path: string
-  size_bytes: number
+  root?: string
+  activated?: boolean
+  has_timetable?: boolean
+  has_mileage?: boolean
+  counts?: {
+    delay: number
+    speed_limit: number
+    interruption: number
+    total: number
+  }
   delay_count: number
   speed_limit_count: number
   interruption_count: number
+}
+
+export interface ScenarioResourceSummary {
+  project_id: string
+  scenario_count: number
+  disturbance_counts: {
+    delay: number
+    speed_limit: number
+    interruption: number
+    total: number
+  }
+}
+
+export interface ScenarioContextStats {
+  station_count: number
+  train_count: number
+  total_mileage: number
+  event_node_count: number
+  section_node_count: number
+}
+
+export interface ScenarioDetail {
+  scenario_set_id: string
+  scenario_id: string
+  name: string
+  root: string
+  activated: boolean
+  has_timetable: boolean
+  has_mileage: boolean
+  counts: {
+    delay: number
+    speed_limit: number
+    interruption: number
+    total: number
+  }
+  delay_count: number
+  speed_limit_count: number
+  interruption_count: number
+  source_files: FileState[]
+  context_stats: ScenarioContextStats | null
+  scenario: JsonObject | null
+  timetable: PlanTimetableState | null
 }
 
 export interface ScenarioEventAnchorOption {
@@ -307,6 +361,8 @@ export interface ScenarioSetVisualization {
       location_time: ScenarioJointLocationTimeRow[]
     }
   }
+  time_distribution?: ScenarioCountRow[]
+  space_distribution?: ScenarioCountRow[]
 }
 
 export interface PlanTimetableState {
@@ -406,8 +462,7 @@ export interface ProjectState {
   project_id: string
   root: string
   exists: boolean
-  has_context: boolean
-  source_files: FileState[]
+  scenario_summary?: ScenarioResourceSummary
   scenario_sets: ScenarioSet[]
   datasets: DatasetSummary[]
   models: ModelSummary[]

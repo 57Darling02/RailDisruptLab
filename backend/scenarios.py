@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 import random
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
-from core.loader import parse_scenario_config
 from core.project_layout import ProjectLayout, require_id, reset_dir, sanitize_id
-from core.scenario_config import (
-    ScenarioDocument,
-    scenario_config_to_yaml,
-    scenario_document_to_yaml,
-    scenario_file_by_id,
-    scenario_files,
-)
+from core.scenario_config import ScenarioDocument
 from core.types import BaseContext, SectionAnchor
+from backend.scenario_cases import (
+    delete_scenario_case,
+    scenario_case_layout,
+    update_scenario_disturbances,
+    write_case_context,
+    write_scenario_document as write_case_scenario_document,
+)
 
 
 DAY_START = 6 * 3600
@@ -54,10 +55,15 @@ class ScenarioGenerationBase:
     station_neighbors: Dict[str, set[str]]
 
 
-def read_scenario_options(layout: ProjectLayout) -> Dict[str, object]:
-    context = load_project_context(layout)
+def read_scenario_options(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
+    case = scenario_case_layout(layout, scenario_set_id, scenario_id)
+    if not case.context_json.is_file():
+        raise FileNotFoundError(f"Scenario is not activated: {case.context_json}")
+    context = load_base_context(case.context_json)
     return {
         "project_id": layout.name,
+        "scenario_set_id": require_id(scenario_set_id, "scenario_set_id"),
+        "scenario_id": require_id(scenario_id, "scenario_id"),
         "event_anchors": [
             {
                 "anchor_id": anchor.anchor_id,
@@ -112,119 +118,143 @@ def add_scenario(
     speed_limits: Sequence[Mapping[str, object]] | None = None,
     overwrite: bool = False,
 ) -> None:
-    scenario_id = sanitize_required_id(scenario_id, "scenario_id")
-    scenarios = normalize_scenario_payload(
-        layout,
-        {
-            "delays": list(delays or []),
-            "speed_limits": list(speed_limits or []),
-        },
-    )
-    write_scenario_document(
+    update_scenario_disturbances(
         layout,
         scenario_set_id,
-        ScenarioDocument(name=scenario_id, scenarios=scenarios),
-        overwrite=overwrite,
+        scenario_id,
+        delays=list(delays or []),
+        speed_limits=list(speed_limits or []),
     )
 
 
 def delete_scenario(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> None:
-    require_project(layout)
-    root = layout.scenario_set(scenario_set_id).root
-    if not root.is_dir():
-        raise FileNotFoundError(f"Scenario set not found: {root}")
-
-    path = scenario_file_by_id(root, scenario_id)
-    if path is None:
-        raise FileNotFoundError(f"Scenario not found in {root}: {sanitize_id(scenario_id)}")
-    path.unlink()
-    print(f"Scenario deleted: {path}")
+    delete_scenario_case(layout, scenario_set_id, scenario_id)
+    print(f"Scenario deleted: {scenario_set_id}/{scenario_id}")
 
 
 def normal_generate(
     layout: ProjectLayout,
     *,
     scenario_set_id: str,
+    scenario_id_prefix: str = "sim",
+    simulation_count: int = 1,
+    source_timetable_path: str = "",
+    source_mileage_path: str = "",
     seed: int = 20260320,
     delay_count: int = 10,
     speed_count: int = 10,
     interruption_count: int = 10,
     combo_per_type: int = 10,
     overwrite: bool = False,
-    merge: bool = False,
 ) -> None:
     scenario_set_id = sanitize_required_id(scenario_set_id, "scenario_set_id")
-    root = layout.scenario_set(scenario_set_id).root
-    if merge:
-        root.mkdir(parents=True, exist_ok=True)
-    else:
-        prepare_output_dir(root, overwrite=overwrite)
-
     validate_case_counts(
         delay_count=delay_count,
         speed_count=speed_count,
         interruption_count=interruption_count,
         combo_per_type=combo_per_type,
     )
+    simulation_count = max(1, int(simulation_count))
+    scenario_id_prefix = sanitize_required_id(scenario_id_prefix or "sim", "scenario_id_prefix")
+    timetable_path = task_upload_path(layout, source_timetable_path, "source_timetable_path")
+    mileage_path = task_upload_path(layout, source_mileage_path, "source_mileage_path")
+    if not timetable_path.is_file():
+        raise FileNotFoundError(f"Timetable not found in project source: {timetable_path}")
+    if not mileage_path.is_file():
+        raise FileNotFoundError(f"Mileage table not found in project source: {mileage_path}")
+
+    root = layout.scenario_set(scenario_set_id).root
+    root.mkdir(parents=True, exist_ok=True)
+    targets = [
+        layout.scenario_set(scenario_set_id).scenario(f"{scenario_id_prefix}_{index:04d}")
+        for index in range(1, simulation_count + 1)
+    ]
+    existing = [target.root for target in targets if target.root.exists()]
+    if existing and not overwrite:
+        raise FileExistsError(f"Scenario already exists, enable overwrite to replace: {existing[0]}")
 
     rng = random.Random(seed)
-    base = load_generation_base(load_project_context(layout))
-    case_index = 1
-    case_index = generate_delay_cases(rng, base, layout, scenario_set_id, case_index, delay_count, overwrite=True)
-    case_index = generate_speed_cases(rng, base, layout, scenario_set_id, case_index, speed_count, overwrite=True)
-    case_index = generate_interruption_cases(
-        rng,
-        base,
-        layout,
-        scenario_set_id,
-        case_index,
-        interruption_count,
-        overwrite=True,
-    )
-    generate_combo_cases(rng, base, layout, scenario_set_id, case_index, combo_per_type, overwrite=True)
+    tmp_case = layout.scenario_set(scenario_set_id).scenario(f".tmp_{scenario_id_prefix}")
+    if tmp_case.root.exists():
+        reset_dir(tmp_case.root)
+    tmp_case.source_dir.mkdir(parents=True, exist_ok=False)
+    shutil.copy2(timetable_path, tmp_case.timetable_xlsx)
+    shutil.copy2(mileage_path, tmp_case.mileage_xlsx)
+    write_case_context(tmp_case, scenario_id=tmp_case.root.name)
+    context = load_base_context(tmp_case.context_json)
+    base = load_generation_base(context)
 
-    print(f"Generated {len(scenario_files(root))} scenarios: {root}")
+    try:
+        for target in targets:
+            if target.root.exists():
+                reset_dir(target.root)
+            target.source_dir.mkdir(parents=True, exist_ok=False)
+            shutil.copy2(timetable_path, target.timetable_xlsx)
+            shutil.copy2(mileage_path, target.mileage_xlsx)
+            shutil.copy2(tmp_case.context_json, target.context_json)
+            payload = generate_simulated_payload(
+                rng,
+                base,
+                delay_count=delay_count,
+                speed_count=speed_count,
+                interruption_count=interruption_count,
+                combo_per_type=combo_per_type,
+            )
+            write_case_scenario_document(
+                target,
+                ScenarioDocument(name=target.root.name, scenarios=payload),
+            )
+            print(f"Generated simulated scenario: {target.root}")
+    finally:
+        if tmp_case.root.exists():
+            reset_dir(tmp_case.root)
+        cleanup_task_uploads(timetable_path, mileage_path, project_root=layout.root)
+
+    print(f"Generated {simulation_count} simulated scenario(s): {root}")
 
 
-def write_scenario_document(
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    doc: ScenarioDocument,
+def generate_simulated_payload(
+    rng: random.Random,
+    base: ScenarioGenerationBase,
     *,
-    overwrite: bool,
-) -> Path:
-    require_project(layout)
-    scenario_set_id = sanitize_required_id(scenario_set_id, "scenario_set_id")
-    scenario_id = sanitize_required_id(doc.name, "scenario_id")
-    root = layout.scenario_set(scenario_set_id).root
-    if not root.is_dir():
-        raise FileNotFoundError(f"Scenario set not found: {root}")
+    delay_count: int,
+    speed_count: int,
+    interruption_count: int,
+    combo_per_type: int,
+) -> Dict[str, object]:
+    delays: List[Dict[str, object]] = []
+    speed_limits: List[Dict[str, object]] = []
+    for _level, low, high in weighted_level_sequence(rng, DELAY_LEVELS, delay_count):
+        _train_id, _station, _event_type, _event_time, event_anchor_id = rng.choice(base.event_candidates)
+        delays.append({"event_anchor_id": event_anchor_id, "seconds": rng.randint(low, high)})
+    for _level, low, high in weighted_level_sequence(rng, SPEED_LEVELS, speed_count):
+        section = rng.choice(base.section_candidates)
+        speed_limits.append(speed_payload(base, section, random_window(rng), rng.randint(low, high)))
+    for span in interruption_spans(rng, interruption_count):
+        window = random_window(rng, min_len=1200, max_len=4200)
+        for section in pick_contiguous_sections(rng, base.section_candidates, span=span):
+            speed_limits.append(speed_payload(base, section, window, 0))
+    for combo_type in COMBO_TYPES:
+        for time_relation, space_relation in combo_relation_plan(rng, combo_per_type):
+            combo_delays, combo_speed_limits = combo_case_payload(rng, base, combo_type, time_relation, space_relation)
+            delays.extend(combo_delays)
+            speed_limits.extend(combo_speed_limits)
+    return {"delays": delays, "speed_limits": speed_limits}
 
-    target = root / f"{scenario_id}.yml"
-    existing = scenario_file_by_id(root, scenario_id)
-    if existing is not None and not overwrite:
-        raise FileExistsError(f"Scenario already exists, enable overwrite to replace: {existing}")
-    if existing is not None and existing != target:
-        existing.unlink()
 
-    write_yaml(target, scenario_document_to_yaml(scenario_id, doc))
-    print(f"Scenario written: {target}")
-    return target
+def interruption_spans(rng: random.Random, count: int) -> List[int]:
+    seq: List[int] = []
+    quotas = proportional_counts(count, [weight for _span, weight in INTERRUPTION_SPAN_WEIGHTS])
+    for (span, _weight), quota in zip(INTERRUPTION_SPAN_WEIGHTS, quotas):
+        seq.extend([span] * quota)
+    rng.shuffle(seq)
+    return seq
 
 
 def normalize_scenario_payload(layout: ProjectLayout, payload: Mapping[str, object]) -> Dict[str, object]:
-    context = load_project_context(layout)
-    scenarios = parse_scenario_config(
-        {
-            "delays": list_payload(payload.get("delays")),
-            "speed_limits": list_payload(payload.get("speed_limits")),
-        },
-        context,
-    )
-    canonical = scenario_config_to_yaml("scenario", scenarios)
     return {
-        "delays": list_payload(canonical.get("delays")),
-        "speed_limits": list_payload(canonical.get("speed_limits")),
+        "delays": list(list_payload(payload.get("delays"))),
+        "speed_limits": list(list_payload(payload.get("speed_limits"))),
     }
 
 
@@ -251,137 +281,6 @@ def load_generation_base(context: BaseContext) -> ScenarioGenerationBase:
         station_order=context.station_order,
         station_neighbors=build_station_neighbors(context.station_order),
     )
-
-
-def generate_delay_cases(
-    rng: random.Random,
-    base: ScenarioGenerationBase,
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    case_index: int,
-    count: int,
-    *,
-    overwrite: bool,
-) -> int:
-    for level, low, high in weighted_level_sequence(rng, DELAY_LEVELS, count):
-        train_id, station, event_type, _event_time, event_anchor_id = rng.choice(base.event_candidates)
-        delay_seconds = rng.randint(low, high)
-        scenario_id = f"case{case_index:04d}_delay_{level.lower()}"
-        write_generated_scenario(
-            layout,
-            scenario_set_id,
-            scenario_id,
-            delays=[{"event_anchor_id": event_anchor_id, "seconds": delay_seconds}],
-            speed_limits=[],
-            overwrite=overwrite,
-        )
-        print(f"[{case_index}] delay | {train_id} {station} {event_type} +{delay_seconds}s")
-        case_index += 1
-    return case_index
-
-
-def generate_speed_cases(
-    rng: random.Random,
-    base: ScenarioGenerationBase,
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    case_index: int,
-    count: int,
-    *,
-    overwrite: bool,
-) -> int:
-    for level, low, high in weighted_level_sequence(rng, SPEED_LEVELS, count):
-        section = rng.choice(base.section_candidates)
-        window = random_window(rng)
-        limit_speed = rng.randint(low, high)
-        scenario_id = f"case{case_index:04d}_speedlimit_{level.lower()}"
-        write_generated_scenario(
-            layout,
-            scenario_set_id,
-            scenario_id,
-            delays=[],
-            speed_limits=[
-                {
-                    "section_anchor_id": base.section_anchor_by_key[section].anchor_id,
-                    "start_time": seconds_to_hms(window[0]),
-                    "duration": window[1] - window[0],
-                    "limit_speed": limit_speed,
-                }
-            ],
-            overwrite=overwrite,
-        )
-        print(f"[{case_index}] speed_limit | {section[0]} -> {section[1]} {limit_speed}km/h")
-        case_index += 1
-    return case_index
-
-
-def generate_interruption_cases(
-    rng: random.Random,
-    base: ScenarioGenerationBase,
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    case_index: int,
-    count: int,
-    *,
-    overwrite: bool,
-) -> int:
-    seq: List[int] = []
-    quotas = proportional_counts(count, [weight for _span, weight in INTERRUPTION_SPAN_WEIGHTS])
-    for (span, _weight), quota in zip(INTERRUPTION_SPAN_WEIGHTS, quotas):
-        seq.extend([span] * quota)
-    rng.shuffle(seq)
-
-    for span in seq:
-        sections = pick_contiguous_sections(rng, base.section_candidates, span=span)
-        window = random_window(rng, min_len=1200, max_len=4200)
-        scenario_id = f"case{case_index:04d}_interruption_s{span}"
-        write_generated_scenario(
-            layout,
-            scenario_set_id,
-            scenario_id,
-            delays=[],
-            speed_limits=[
-                {
-                    "section_anchor_id": base.section_anchor_by_key[(start_station, end_station)].anchor_id,
-                    "start_time": seconds_to_hms(window[0]),
-                    "duration": window[1] - window[0],
-                    "limit_speed": 0,
-                }
-                for start_station, end_station in sections
-            ],
-            overwrite=overwrite,
-        )
-        print(f"[{case_index}] interruption | {span} section(s)")
-        case_index += 1
-    return case_index
-
-
-def generate_combo_cases(
-    rng: random.Random,
-    base: ScenarioGenerationBase,
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    case_index: int,
-    per_type: int,
-    *,
-    overwrite: bool,
-) -> int:
-    relations = combo_relation_plan(rng, per_type)
-    for combo_type in COMBO_TYPES:
-        for time_relation, space_relation in relations:
-            scenario_id = f"case{case_index:04d}_combo_{combo_type}"
-            delays, speed_limits = combo_case_payload(rng, base, combo_type, time_relation, space_relation)
-            write_generated_scenario(
-                layout,
-                scenario_set_id,
-                scenario_id,
-                delays=delays,
-                speed_limits=speed_limits,
-                overwrite=overwrite,
-            )
-            print(f"[{case_index}] combo | {combo_type} {time_relation}/{space_relation}")
-            case_index += 1
-    return case_index
 
 
 def combo_case_payload(
@@ -440,29 +339,6 @@ def speed_payload(
         "duration": window[1] - window[0],
         "limit_speed": limit_speed,
     }
-
-
-def write_generated_scenario(
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    scenario_id: str,
-    *,
-    delays: Sequence[Mapping[str, object]],
-    speed_limits: Sequence[Mapping[str, object]],
-    overwrite: bool,
-) -> None:
-    write_scenario_document(
-        layout,
-        scenario_set_id,
-        ScenarioDocument(
-            name=scenario_id,
-            scenarios={
-                "delays": [dict(item) for item in delays],
-                "speed_limits": [dict(item) for item in speed_limits],
-            },
-        ),
-        overwrite=overwrite,
-    )
 
 
 def validate_case_counts(
@@ -664,23 +540,28 @@ def combo_relation_plan(rng: random.Random, count: int) -> List[Tuple[str, str]]
     return list(zip(time_relations, space_relations))
 
 
-def prepare_output_dir(path: Path, *, overwrite: bool) -> None:
-    if path.exists():
-        if not overwrite:
-            raise FileExistsError(f"Output already exists, enable overwrite to replace: {path}")
-        reset_dir(path)
-    path.mkdir(parents=True, exist_ok=True)
-
-
-def load_project_context(layout: ProjectLayout) -> BaseContext:
-    if not layout.context_json.is_file():
-        raise FileNotFoundError(f"Missing project context. Activate the original timetable first: {layout.context_json}")
-    return load_base_context(layout.context_json)
-
-
 def require_project(layout: ProjectLayout) -> None:
     if not layout.root.is_dir():
         raise FileNotFoundError(f"Project not found: {layout.root}")
+
+
+def task_upload_path(layout: ProjectLayout, path_text: str, key: str) -> Path:
+    path = Path(path_text)
+    if not path.is_absolute():
+        raise ValueError(f"{key} must be an absolute task upload path.")
+    root = (layout.root / ".tmp" / "uploads").resolve()
+    resolved = path.resolve()
+    if root != resolved and root not in resolved.parents:
+        raise ValueError(f"{key} must be under project .tmp/uploads/: {path}")
+    return resolved
+
+
+def cleanup_task_uploads(*paths: Path, project_root: Path) -> None:
+    upload_root = (project_root / ".tmp" / "uploads").resolve()
+    parents = {path.resolve().parent for path in paths if upload_root in path.resolve().parents}
+    for parent in parents:
+        if parent.exists():
+            reset_dir(parent)
 
 
 def list_payload(value: object) -> List[Mapping[str, object]]:

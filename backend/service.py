@@ -7,8 +7,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from backend.analysis.dataset import read_dataset_solve_analysis
-from backend.analysis.scenario_set import read_scenario_set_visualization
-from backend.analysis.timetable import read_case_timetable, read_plan_timetable
+from backend.scenario_cases import (
+    activate_scenario_case,
+    create_scenario_case,
+    read_scenario_set_detail,
+    read_scenario_summary,
+    update_scenario_disturbances,
+)
+from backend.analysis.timetable import read_case_timetable
 from backend.lifecycle import delete_dataset, delete_model, delete_scenario_set, ensure_no_active_reference
 from backend.pueue_client import PueueClient
 from backend.repository import ProjectRepository
@@ -111,41 +117,97 @@ class RailGraphBackend:
     def read_scenario(self, project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
         return self.repository.read_scenario(project_id, scenario_set_id, scenario_id)
 
-    def read_scenario_options(self, project_id: str) -> Dict[str, object]:
-        return read_scenario_options(self.repository.layout(project_id))
+    def read_scenario_options(self, project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
+        return read_scenario_options(self.repository.layout(project_id), scenario_set_id, scenario_id)
 
     def read_scenario_set_visualization(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
-        return read_scenario_set_visualization(self.repository.layout(project_id), scenario_set_id)
+        return read_scenario_set_detail(self.repository.layout(project_id), scenario_set_id)
 
-    def save_source_file(self, project_id: str, filename: str, content: bytes) -> str:
-        return to_posix(self.repository.save_source_file(project_id, filename, content))
+    def read_scenario_summary(self, project_id: str) -> Dict[str, object]:
+        return read_scenario_summary(self.repository.layout(project_id))
 
-    def activate_plan(
+    def create_scenario_case(
         self,
         project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
         *,
-        timetable_filename: str,
         timetable_content: bytes,
-        mileage_filename: str,
         mileage_content: bytes,
-        timetable_sheet_name: str = TASK_DEFAULTS["prepare"]["timetable_sheet_name"],
-        mileage_sheet_name: str = TASK_DEFAULTS["prepare"]["mileage_sheet_name"],
+        overwrite: bool = False,
     ) -> Dict[str, object]:
-        timetable_path = self.repository.save_source_file(project_id, timetable_filename, timetable_content)
-        mileage_path = self.repository.save_source_file(project_id, mileage_filename, mileage_content)
-        return self.prepare(
-            project_id,
-            timetable_filename=timetable_path.name,
-            mileage_filename=mileage_path.name,
-            timetable_sheet_name=timetable_sheet_name,
-            mileage_sheet_name=mileage_sheet_name,
+        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id)
+        return create_scenario_case(
+            self.repository.layout(project_id),
+            scenario_set_id,
+            scenario_id,
+            timetable_content=timetable_content,
+            mileage_content=mileage_content,
+            overwrite=overwrite,
         )
+
+    def activate_scenario_case(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
+        *,
+        timetable_content: bytes | None = None,
+        mileage_content: bytes | None = None,
+    ) -> Dict[str, object]:
+        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id, action="scenario_activate")
+        return activate_scenario_case(
+            self.repository.layout(project_id),
+            scenario_set_id,
+            scenario_id,
+            timetable_content=timetable_content,
+            mileage_content=mileage_content,
+        )
+
+    def update_scenario_disturbances(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
+        *,
+        delays: List[Dict[str, object]],
+        speed_limits: List[Dict[str, object]],
+    ) -> Dict[str, object]:
+        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id)
+        return update_scenario_disturbances(
+            self.repository.layout(project_id),
+            scenario_set_id,
+            scenario_id,
+            delays=delays,
+            speed_limits=speed_limits,
+        )
+
+    def ensure_no_scenario_case_conflict(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
+        *,
+        action: str = "scenario_add",
+    ) -> None:
+        ensure_no_active_conflict(
+            self.tasks.list_active_tasks(group=normalize_project_id(project_id)),
+            action=action,
+            params={
+                "scenario_set_id": scenario_set_id,
+                "scenario_id": scenario_id,
+            },
+        )
+
+    def save_task_upload_file(self, project_id: str, task_id: str, filename: str, content: bytes) -> str:
+        task_id = require_id(task_id, "task_upload_id")
+        target = self.repository.layout(project_id).root / ".tmp" / "uploads" / task_id / Path(filename).name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        return to_posix(target)
 
     def read_case_timetable(self, project_id: str, dataset_id: str, case_id: str) -> Dict[str, object]:
         return read_case_timetable(self.repository.layout(project_id), dataset_id, case_id)
-
-    def read_plan_timetable(self, project_id: str) -> Dict[str, object]:
-        return read_plan_timetable(self.repository.layout(project_id))
 
     def list_case_artifacts(self, project_id: str, dataset_id: str) -> List[Dict[str, object]]:
         return self.repository.list_case_artifacts(project_id, dataset_id)
@@ -194,11 +256,14 @@ class RailGraphBackend:
     def delete_project(self, project_id: str) -> Dict[str, object]:
         return self.submit_task(project_id, "deleteproject", {}, label="deleteproject")
 
-    def source_file_path(self, project_id: str, filename: str) -> Path:
-        return self.repository.source_file_path(project_id, filename)
-
-    def delete_source_file(self, project_id: str, filename: str) -> Dict[str, object]:
-        return self.submit_task(project_id, "source_delete", {"filename": filename}, label="source_delete")
+    def scenario_source_file_path(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
+        filename: str,
+    ) -> Path:
+        return self.repository.scenario_source_file_path(project_id, scenario_set_id, scenario_id, filename)
 
     def create_scenario_set(self, project_id: str, scenario_set_id: str, *, exist_ok: bool = False) -> Dict[str, object]:
         return self.submit_task(
@@ -211,19 +276,10 @@ class RailGraphBackend:
     def delete_scenario_set(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
         scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
-        ensure_no_active_reference(
+        ensure_no_active_conflict(
             self.tasks.list_active_tasks(group=project_id),
-            field="scenario_set_id",
-            value=scenario_set_id,
-            action_labels=(
-                "scenario_set_create",
-                "normal_generate",
-                "scenario_add",
-                "scenario_delete",
-                "build",
-                "train",
-                "generation",
-            ),
+            action="scenario_set_delete",
+            params={"scenario_set_id": scenario_set_id},
         )
         return delete_scenario_set(self.repository.layout(project_id), scenario_set_id)
 
@@ -258,52 +314,37 @@ class RailGraphBackend:
             label="scenario_delete",
         )
 
-    def prepare(
-        self,
-        project_id: str,
-        *,
-        timetable_filename: str,
-        mileage_filename: str,
-        timetable_sheet_name: str = TASK_DEFAULTS["prepare"]["timetable_sheet_name"],
-        mileage_sheet_name: str = TASK_DEFAULTS["prepare"]["mileage_sheet_name"],
-    ) -> Dict[str, object]:
-        return self.submit_task(
-            project_id,
-            "prepare",
-            {
-                "timetable_filename": timetable_filename,
-                "mileage_filename": mileage_filename,
-                "timetable_sheet_name": timetable_sheet_name,
-                "mileage_sheet_name": mileage_sheet_name,
-            },
-            label="prepare",
-        )
-
     def normal_generate(
         self,
         project_id: str,
         *,
         scenario_set_id: str,
+        scenario_id_prefix: str = "",
+        simulation_count: int = 1,
+        source_timetable_path: str = "",
+        source_mileage_path: str = "",
         seed: int = TASK_DEFAULTS["normal_generate"]["seed"],
         delay_count: int = TASK_DEFAULTS["normal_generate"]["delay_count"],
         speed_count: int = TASK_DEFAULTS["normal_generate"]["speed_count"],
         interruption_count: int = TASK_DEFAULTS["normal_generate"]["interruption_count"],
         combo_per_type: int = TASK_DEFAULTS["normal_generate"]["combo_per_type"],
         overwrite: bool = TASK_DEFAULTS["normal_generate"]["overwrite"],
-        merge: bool = TASK_DEFAULTS["normal_generate"]["merge"],
     ) -> Dict[str, object]:
         return self.submit_task(
             project_id,
             "normal_generate",
             {
                 "scenario_set_id": scenario_set_id,
+                "scenario_id_prefix": scenario_id_prefix,
+                "simulation_count": simulation_count,
+                "source_timetable_path": source_timetable_path,
+                "source_mileage_path": source_mileage_path,
                 "seed": seed,
                 "delay_count": delay_count,
                 "speed_count": speed_count,
                 "interruption_count": interruption_count,
                 "combo_per_type": combo_per_type,
                 "overwrite": overwrite,
-                "merge": merge,
             },
             label="normal_generate",
         )
@@ -470,6 +511,10 @@ class RailGraphBackend:
         checkpoint: str,
         scenario_set_id: str,
         *,
+        source_scenario_set_id: str = TASK_DEFAULTS["generation"]["source_scenario_set_id"],
+        source_timetable_path: str = TASK_DEFAULTS["generation"]["source_timetable_path"],
+        source_mileage_path: str = TASK_DEFAULTS["generation"]["source_mileage_path"],
+        output_prefix: str = TASK_DEFAULTS["generation"]["output_prefix"],
         num_samples: int = TASK_DEFAULTS["generation"]["num_samples"],
         seed: int = TASK_DEFAULTS["generation"]["seed"],
         device: str = TASK_DEFAULTS["generation"]["device"],
@@ -483,6 +528,10 @@ class RailGraphBackend:
                 "model_id": model_id,
                 "checkpoint": checkpoint,
                 "scenario_set_id": scenario_set_id,
+                "source_scenario_set_id": source_scenario_set_id,
+                "source_timetable_path": source_timetable_path,
+                "source_mileage_path": source_mileage_path,
+                "output_prefix": output_prefix,
                 "num_samples": num_samples,
                 "seed": seed,
                 "device": device,

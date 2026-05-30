@@ -5,13 +5,14 @@ import type {
   JsonObject,
   ModelCheckpoint,
   ModelDetail,
-  PlanTimetableState,
   ProjectState,
   ProjectSummary,
   ResourceOption,
   ScenarioSet,
   ScenarioSetVisualization,
+  ScenarioDetail,
   ScenarioOptions,
+  ScenarioResourceSummary,
   ScenarioSummary,
   Task,
   TaskResponse,
@@ -90,6 +91,8 @@ export const api = {
   },
   listScenarioSets: (projectId: string) =>
     request<ScenarioSet[]>(`/projects/${projectId}/scenario-sets`),
+  readScenarioSummary: (projectId: string) =>
+    request<ScenarioResourceSummary>(`/projects/${projectId}/scenario-summary`),
   createScenarioSet: (projectId: string, scenarioSetId: string, existOk = false) =>
     request<TaskResponse>(`/projects/${projectId}/scenario-sets`, {
       method: 'POST',
@@ -106,11 +109,45 @@ export const api = {
       `/projects/${projectId}/scenario-sets/${scenarioSetId}/visualization`,
     ),
   readScenario: (projectId: string, scenarioSetId: string, scenarioId: string) =>
-    request<JsonObject>(
+    request<ScenarioDetail>(
       `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}`,
     ),
-  readScenarioOptions: (projectId: string) =>
-    request<ScenarioOptions>(`/projects/${projectId}/scenario-options`),
+  readScenarioOptions: (projectId: string, scenarioSetId: string, scenarioId: string) =>
+    request<ScenarioOptions>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}/options`,
+    ),
+  createScenarioCase: (
+    projectId: string,
+    scenarioSetId: string,
+    scenarioId: string,
+    timetableFile: File,
+    mileageFile: File,
+    overwrite = false,
+  ) => {
+    const params = new URLSearchParams({ scenario_id: scenarioId, overwrite: String(overwrite) })
+    const data = new FormData()
+    data.append('timetable_file', timetableFile)
+    data.append('mileage_file', mileageFile)
+    return request<ScenarioSummary>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/upload?${params}`,
+      { method: 'POST', body: data },
+    )
+  },
+  activateScenarioCase: (
+    projectId: string,
+    scenarioSetId: string,
+    scenarioId: string,
+    timetableFile?: File | null,
+    mileageFile?: File | null,
+  ) => {
+    const data = new FormData()
+    if (timetableFile) data.append('timetable_file', timetableFile)
+    if (mileageFile) data.append('mileage_file', mileageFile)
+    return request<ScenarioDetail>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}/activate`,
+      { method: 'POST', body: data },
+    )
+  },
   addScenario: (
     projectId: string,
     scenarioSetId: string,
@@ -129,33 +166,46 @@ export const api = {
         method: 'DELETE',
       },
     ),
-  activatePlan: (
-    projectId: string,
-    timetableFile: File,
-    mileageFile: File,
-    timetableSheetName: string,
-    mileageSheetName: string,
-  ) => {
-    const data = new FormData()
-    data.append('timetable_file', timetableFile)
-    data.append('mileage_file', mileageFile)
-    data.append('timetable_sheet_name', timetableSheetName)
-    data.append('mileage_sheet_name', mileageSheetName)
-    return request<TaskResponse>(`/projects/${projectId}/plan/activate`, {
-      method: 'POST',
-      body: data,
-    })
-  },
-  submitPrepare: (projectId: string, payload: object) =>
-    request<TaskResponse>(`/projects/${projectId}/tasks/prepare`, {
-      method: 'POST',
-      ...jsonBody(payload),
-    }),
   submitNormalGenerate: (projectId: string, payload: object) =>
     request<TaskResponse>(`/projects/${projectId}/tasks/normal-generate`, {
       method: 'POST',
       ...jsonBody(payload),
     }),
+  submitNormalGenerateUpload: (
+    projectId: string,
+    payload: {
+      scenarioSetId: string
+      scenarioIdPrefix: string
+      simulationCount: number
+      seed: number
+      delayCount: number
+      speedCount: number
+      interruptionCount: number
+      comboPerType: number
+      overwrite: boolean
+      timetableFile: File
+      mileageFile: File
+    },
+  ) => {
+    const params = new URLSearchParams({
+      scenario_set_id: payload.scenarioSetId,
+      scenario_id_prefix: payload.scenarioIdPrefix,
+      simulation_count: String(payload.simulationCount),
+      seed: String(payload.seed),
+      delay_count: String(payload.delayCount),
+      speed_count: String(payload.speedCount),
+      interruption_count: String(payload.interruptionCount),
+      combo_per_type: String(payload.comboPerType),
+      overwrite: String(payload.overwrite),
+    })
+    const data = new FormData()
+    data.append('timetable_file', payload.timetableFile)
+    data.append('mileage_file', payload.mileageFile)
+    return request<TaskResponse>(`/projects/${projectId}/tasks/normal-generate-upload?${params}`, {
+      method: 'POST',
+      body: data,
+    })
+  },
   createDataset: (projectId: string, datasetId: string, existOk = false) =>
     request<TaskResponse>(`/projects/${projectId}/datasets`, {
       method: 'POST',
@@ -222,6 +272,8 @@ export const api = {
     modelId: string,
     checkpoint: string,
     scenarioSetId: string,
+    sourceScenarioSetId: string,
+    outputPrefix: string,
     numSamples: number,
     seed: number,
     device: string,
@@ -234,6 +286,8 @@ export const api = {
         model_id: modelId,
         checkpoint,
         scenario_set_id: scenarioSetId,
+        source_scenario_set_id: sourceScenarioSetId,
+        output_prefix: outputPrefix,
         num_samples: numSamples,
         seed,
         device,
@@ -241,6 +295,41 @@ export const api = {
         overwrite,
       }),
     }),
+  submitGenerationUpload: (
+    projectId: string,
+    payload: {
+      modelId: string
+      checkpoint: string
+      scenarioSetId: string
+      outputPrefix: string
+      numSamples: number
+      seed: number
+      device: string
+      speedInterruptionThreshold: number
+      overwrite: boolean
+      timetableFile: File
+      mileageFile: File
+    },
+  ) => {
+    const params = new URLSearchParams({
+      model_id: payload.modelId,
+      checkpoint: payload.checkpoint,
+      scenario_set_id: payload.scenarioSetId,
+      output_prefix: payload.outputPrefix,
+      num_samples: String(payload.numSamples),
+      seed: String(payload.seed),
+      device: payload.device,
+      speed_interruption_threshold: String(payload.speedInterruptionThreshold),
+      overwrite: String(payload.overwrite),
+    })
+    const data = new FormData()
+    data.append('timetable_file', payload.timetableFile)
+    data.append('mileage_file', payload.mileageFile)
+    return request<TaskResponse>(`/projects/${projectId}/tasks/generation-upload?${params}`, {
+      method: 'POST',
+      body: data,
+    })
+  },
   listTasks: (projectId?: string) =>
     request<Task[]>(projectId ? `/tasks?project_id=${encodeURIComponent(projectId)}` : '/tasks'),
   removeTask: (taskId: number) => request<JsonObject>(`/tasks/${taskId}`, { method: 'DELETE' }),
@@ -255,8 +344,6 @@ export const api = {
     request<CaseTimetableState>(
       `/projects/${projectId}/datasets/${datasetId}/cases/${caseId}/timetable`,
     ),
-  readPlanTimetable: (projectId: string) =>
-    request<PlanTimetableState>(`/projects/${projectId}/plan-timetable`),
   readDatasetSolveAnalysis: (projectId: string, datasetIds: string[]) => {
     const query = datasetIds
       .map((datasetId) => `dataset_ids=${encodeURIComponent(datasetId)}`)

@@ -30,11 +30,13 @@ const props = withDefaults(
     busy?: boolean
     submitting?: boolean
     initialScenarioId?: string
+    optionsScenarioId?: string
   }>(),
   {
     busy: false,
     submitting: false,
     initialScenarioId: '',
+    optionsScenarioId: '',
   },
 )
 
@@ -56,7 +58,7 @@ const eventOptions = computed(() => options.value?.event_anchors ?? [])
 const sectionOptions = computed(() => options.value?.section_anchors ?? [])
 
 watch(
-  () => [props.modelValue, props.projectId, props.initialScenarioId] as const,
+  () => [props.modelValue, props.projectId, props.scenarioSetId, props.optionsScenarioId, props.initialScenarioId] as const,
   ([visible]) => {
     if (!visible) {
       requestSeq += 1
@@ -71,11 +73,12 @@ watch(
 
 async function loadOptions() {
   const projectId = props.projectId
+  const scenarioIdForOptions = props.optionsScenarioId || props.initialScenarioId
   const seq = requestSeq + 1
   requestSeq = seq
   errorMessage.value = ''
 
-  if (!props.modelValue || !projectId) {
+  if (!props.modelValue || !projectId || !props.scenarioSetId || !scenarioIdForOptions) {
     options.value = null
     loading.value = false
     return
@@ -83,7 +86,7 @@ async function loadOptions() {
 
   loading.value = true
   try {
-    const result = await api.readScenarioOptions(projectId)
+    const result = await api.readScenarioOptions(projectId, props.scenarioSetId, scenarioIdForOptions)
     if (seq !== requestSeq || projectId !== props.projectId) return
     options.value = result
   } catch (error) {
@@ -179,7 +182,7 @@ function formatError(error: unknown) {
         </template>
       </el-result>
       <el-form v-else label-width="100px">
-        <el-form-item label="场景集">
+        <el-form-item label="场景分类">
           <el-input :model-value="scenarioSetId" disabled />
         </el-form-item>
         <el-form-item label="场景 ID">

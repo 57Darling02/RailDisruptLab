@@ -10,6 +10,8 @@ from core.types import ScenarioConfig
 
 
 SCENARIO_EXTENSIONS = {".yaml", ".yml"}
+SCENARIO_CASES_DIRNAME = "scenarios"
+SCENARIO_FILENAME = "scenario.yml"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECTS_ROOT = REPO_ROOT / "projects"
 
@@ -47,24 +49,21 @@ def expand_config_scenarios(payload: Dict[str, object], owner_path: Path, yaml: 
 
 
 def scenario_files(root: Path) -> List[Path]:
-    return sorted(
-        path
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in SCENARIO_EXTENSIONS
-    )
+    scenarios_root = root / SCENARIO_CASES_DIRNAME
+    if not scenarios_root.is_dir():
+        return []
+    result = []
+    for case_dir in sorted(path for path in scenarios_root.iterdir() if path.is_dir()):
+        path = case_dir / SCENARIO_FILENAME
+        if path.is_file():
+            result.append(path)
+    return result
 
 
 def scenario_file_by_id(root: Path, scenario_id: str) -> Optional[Path]:
     clean_id = sanitize_id(scenario_id)
-    exact_matches = [root / f"{clean_id}{suffix}" for suffix in (".yml", ".yaml")]
-    existing_exact = [path for path in exact_matches if path.is_file()]
-    if existing_exact:
-        return existing_exact[0]
-
-    matches = [path for path in scenario_files(root) if sanitize_id(path.stem) == clean_id]
-    if len(matches) > 1:
-        raise ValueError(f"Scenario id is ambiguous in {root}: {clean_id}")
-    return matches[0] if matches else None
+    path = root / SCENARIO_CASES_DIRNAME / clean_id / SCENARIO_FILENAME
+    return path if path.is_file() else None
 
 
 def load_scenario_document(path: Path, yaml: Any) -> ScenarioDocument:

@@ -251,7 +251,7 @@ function mergeSelectedOptions(options: ResourceOption[], selected: ResourceOptio
 async function compareScenarioSets() {
   if (scenarioBusy.value) return
   if (!props.selectedProjectId || !baselineScenarioSetId.value) {
-    ElMessage.warning('请选择基准场景集。')
+    ElMessage.warning('请选择基准场景分类。')
     return
   }
   const scenarioSetIds = unique([baselineScenarioSetId.value, ...candidateScenarioSetIds.value])
@@ -894,7 +894,7 @@ function datasetQualityMessages(item: DatasetSummary) {
           <el-row class="analysis-toolbar" :gutter="12" align="middle">
             <el-col :span="8">
               <div class="inline-control">
-                <span>基准场景集：</span>
+                <span>基准场景分类：</span>
                 <el-select
                   v-model="baselineScenarioSetId"
                   filterable
@@ -918,7 +918,7 @@ function datasetQualityMessages(item: DatasetSummary) {
             </el-col>
             <el-col :span="8">
               <div class="inline-control">
-                <span>对比场景集：</span>
+                <span>对比场景分类：</span>
                 <el-select
                   v-model="candidateScenarioSetIds"
                   multiple
@@ -966,12 +966,12 @@ function datasetQualityMessages(item: DatasetSummary) {
           <el-row class="analysis-section" :gutter="16">
             <el-col :span="8">
               <el-card shadow="never">
-                <el-statistic title="基准场景集" :value="baselineScenarioSetId || '-'" />
+                <el-statistic title="基准场景分类" :value="baselineScenarioSetId || '-'" />
               </el-card>
             </el-col>
             <el-col :span="8">
               <el-card shadow="never">
-                <el-statistic title="对比场景集" :value="candidateScenarioSetIds.length" />
+                <el-statistic title="对比场景分类" :value="candidateScenarioSetIds.length" />
               </el-card>
             </el-col>
             <el-col :span="8">
@@ -1042,7 +1042,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                     collapse-tags
                     collapse-tags-tooltip
                     class="type-time-select"
-                    placeholder="全部场景集"
+                    placeholder="全部场景分类"
                     :disabled="scenarioBusy"
                   >
                     <el-option
@@ -1143,7 +1143,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                 <el-card shadow="never">
                   <template #header>扰动参数统计</template>
                   <el-table :data="parameterRows" height="320" empty-text="暂无参数统计">
-                    <el-table-column prop="scenario_set_id" label="场景集" min-width="150" show-overflow-tooltip />
+                    <el-table-column prop="scenario_set_id" label="场景分类" min-width="150" show-overflow-tooltip />
                     <el-table-column prop="metric" label="指标" min-width="130" />
                     <el-table-column prop="count" label="样本数" width="90" />
                     <el-table-column label="均值" width="100">
@@ -1161,7 +1161,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                 <el-card shadow="never">
                   <template #header>辅助关系类型</template>
                   <el-table :data="relationRows" height="320" empty-text="暂无关系统计">
-                    <el-table-column prop="scenario_set_id" label="场景集" min-width="150" show-overflow-tooltip />
+                    <el-table-column prop="scenario_set_id" label="场景分类" min-width="150" show-overflow-tooltip />
                     <el-table-column prop="relation" label="关系类型" min-width="120" />
                     <el-table-column prop="count" label="数量" width="100" />
                   </el-table>
@@ -1169,7 +1169,7 @@ function datasetQualityMessages(item: DatasetSummary) {
               </div>
             </el-card>
           </template>
-          <el-empty v-else class="analysis-section" description="请选择基准和对比场景集并开始对比" />
+          <el-empty v-else class="analysis-section" description="请选择基准和对比场景分类并开始对比" />
       </template>
 
       <template v-else>

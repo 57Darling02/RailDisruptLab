@@ -6,8 +6,6 @@ import type { ScrollbarInstance, UploadFile, UploadUserFile } from 'element-plus
 import { api, ApiError } from '@/api/client'
 import BuildOptionsFields from '@/components/BuildOptionsFields.vue'
 import FieldLabelTip from '@/components/FieldLabelTip.vue'
-import ScenarioDialog from '@/components/ScenarioDialog.vue'
-import type { ScenarioPayload } from '@/components/ScenarioDialog.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 import TimetableDialog from '@/components/TimetableDialog.vue'
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
@@ -15,6 +13,7 @@ import AblationView from '@/views/AblationView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import DatasetsView from '@/views/DatasetsView.vue'
 import ModelsView from '@/views/ModelsView.vue'
+import ScenarioDetailView from '@/views/ScenarioDetailView.vue'
 import ScenarioSetsView from '@/views/ScenarioSetsView.vue'
 import {
   isTaskCancellable,
@@ -34,14 +33,15 @@ import type {
   ProjectState,
   ProjectSummary,
   ResourceOption,
-  ScenarioSetVisualization,
+  ScenarioResourceSummary,
   ScenarioSummary,
   Task,
 } from '@/types'
 
-type PageKey = 'dashboard' | 'scenarios' | 'datasets' | 'models' | 'ablation-scenarios' | 'ablation-datasets'
+type PageKey = 'dashboard' | 'scenarios' | 'scenario-detail' | 'datasets' | 'models' | 'ablation-scenarios' | 'ablation-datasets'
 type DatasetBuildSource = 'scenario_set' | 'scenario'
 type DatasetCreateMode = 'empty' | 'scenario_set'
+type GenerationContextSourceMode = 'scenario_set' | 'upload'
 type ResourceKind = 'scenario_sets' | 'datasets' | 'models'
 
 const TASK_POLL_MS = 2500
@@ -88,16 +88,16 @@ const DEFAULT_TRAIN_FORM: TrainForm = {
 const DEFAULT_SPEED_INTERRUPTION_THRESHOLD = 20
 const DEVICE_OPTIONS = ['auto', 'cpu', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3']
 const TRAIN_FIELD_TIPS = {
-  model_id: '本次训练产物的扰动生成模型目录 ID，用于后续选择 checkpoint 生成场景。',
-  scenario_set_id: '训练样本来源，固定使用一个完整扰动场景集。',
+  model_id: '本次训练产物的模型目录 ID，用于后续选择 checkpoint 生成场景。',
+  scenario_set_id: '训练样本来源，固定使用一个完整场景分类。',
   max_slots: '每类扰动最多保留/预测的事件槽位数，决定辅助扰动图的目标容量。',
   event_time_window: '判断两个时刻事件是否存在近邻关系的时间窗口，单位秒。',
   event_top_k: '每个时刻事件最多连接的近邻事件数量，用于控制辅助扰动图稠密度。',
   section_order_window: '沿线路顺序连接前后区间的窗口大小，用于表达邻近区间关系。',
   hidden_dim: 'VAE 编码器/解码器隐藏层维度，越大表达能力越强但训练更重。',
-  latent_dim: '潜变量维度，控制扰动生成模型压缩扰动模式的容量。',
+  latent_dim: '潜变量维度，控制模型压缩扰动模式的容量。',
   message_passing_steps: '图神经网络消息传递轮数，越大可聚合更远邻域信息。',
-  epochs: '完整遍历训练扰动场景集的轮数。',
+  epochs: '完整遍历训练场景分类的轮数。',
   batch_size: '每次优化使用的样本数量。',
   lr: '优化器学习率。',
   seed: '随机种子，用于复现实验。',
@@ -109,25 +109,25 @@ const TRAIN_FIELD_TIPS = {
   relation_weight: '扰动关系辅助损失权重，用于强化 target_relations 的时空关联学习。',
 } as const
 const GENERATION_FIELD_TIPS = {
-  scenario_set_id: '扰动生成模型生成的场景会写入这个扰动场景集。',
-  num_samples: '本次从扰动生成模型采样并解码出的场景数量。',
+  scenario_set_id: '模型生成的场景会写入这个场景分类。',
+  num_samples: '本次从模型采样并解码出的场景数量。',
   seed: '生成随机种子，用于复现采样结果。',
   device: '生成使用的设备，auto 会优先使用 CUDA；指定 GPU 卡号可填写 cuda:0、cuda:1，CPU 填 cpu。',
   speed_interruption_threshold:
     '生成解码时，低于或等于该速度阈值的限速会被转成 limit_speed=0；后续 build 会按中断建模。',
-  overwrite: '开启后会覆盖同名扰动场景集。',
+  overwrite: '开启后会覆盖同名输出场景。',
 } as const
 const TASK_LABELS = {
-  dashboard: ['newproject', 'deleteproject', 'source_delete', 'prepare'],
+  dashboard: ['newproject', 'deleteproject'],
   scenarios: ['normal_generate', 'scenario_set_create', 'scenario_add', 'scenario_delete'],
   datasets: ['dataset_create', 'build', 'solve', 'export_timetable'],
   models: ['train', 'generation'],
 } as const
 const PAGE_TASK_FILTERS = [
   { value: 'dashboard', label: '仪表盘', labels: TASK_LABELS.dashboard },
-  { value: 'scenarios', label: '扰动场景集', labels: TASK_LABELS.scenarios },
+  { value: 'scenarios', label: '扰动场景', labels: TASK_LABELS.scenarios },
   { value: 'datasets', label: 'MILP 实例集', labels: TASK_LABELS.datasets },
-  { value: 'models', label: '扰动生成模型', labels: TASK_LABELS.models },
+  { value: 'models', label: '模型训练', labels: TASK_LABELS.models },
   { value: 'ablation', label: '消融分析', labels: [] },
 ] as const
 
@@ -145,34 +145,38 @@ const mainScrollbar = ref<ScrollbarInstance>()
 const projectDialogVisible = ref(false)
 const newProjectId = ref('')
 
-const prepareDialogVisible = ref(false)
-const prepareTimetableFiles = ref<UploadUserFile[]>([])
-const prepareMileageFiles = ref<UploadUserFile[]>([])
-const prepareForm = ref({
-  timetable_file: null as File | null,
-  mileage_file: null as File | null,
-  timetable_sheet_name: 'Sheet1',
-  mileage_sheet_name: 'Sheet1',
-})
-
 const selectedScenarioSetId = ref('')
 const scenarioSetOptions = ref<ResourceOption[]>([])
 const scenarioSetOptionsLoading = ref(false)
 const scenarios = ref<ScenarioSummary[]>([])
-const scenarioSetVisualization = ref<ScenarioSetVisualization | null>(null)
-const scenarioSetLoading = ref(false)
+const scenarioSummary = ref<ScenarioResourceSummary | null>(null)
+const selectedScenarioId = ref('')
 const scenarioSetDialogVisible = ref(false)
 const newScenarioSetId = ref('')
 const scenarioDialogVisible = ref(false)
+const scenarioCreateScenarioSetId = ref('')
 const scenarioDialogInitialId = ref('')
+const scenarioCreateFiles = ref({
+  timetable_file: null as File | null,
+  mileage_file: null as File | null,
+})
+const scenarioCreateTimetableFiles = ref<UploadUserFile[]>([])
+const scenarioCreateMileageFiles = ref<UploadUserFile[]>([])
 const normalGenerateDialogVisible = ref(false)
 const normalGenerateForm = ref({
+  scenario_id_prefix: 'sim',
+  simulation_count: 1,
+  timetable_file: null as File | null,
+  mileage_file: null as File | null,
   seed: 20260320,
   delay_count: 10,
   speed_count: 10,
   interruption_count: 10,
   combo_per_type: 10,
+  overwrite: false,
 })
+const normalGenerateTimetableFiles = ref<UploadUserFile[]>([])
+const normalGenerateMileageFiles = ref<UploadUserFile[]>([])
 
 const selectedDatasetId = ref('')
 const datasetOptions = ref<ResourceOption[]>([])
@@ -211,12 +215,19 @@ const generationScenarioSetSuffix = ref('')
 const generationForm = ref({
   checkpoint: '',
   scenario_set_id: '',
+  source_mode: 'scenario_set' as GenerationContextSourceMode,
+  source_scenario_set_id: '',
+  output_prefix: 'generated',
   num_samples: 100,
   seed: 1,
   device: 'auto',
   speed_interruption_threshold: DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
   overwrite: false,
+  timetable_file: null as File | null,
+  mileage_file: null as File | null,
 })
+const generationTimetableFiles = ref<UploadUserFile[]>([])
+const generationMileageFiles = ref<UploadUserFile[]>([])
 
 let pollHandle = 0
 let durationTickHandle = 0
@@ -228,7 +239,6 @@ const resourceOptionRequestSeq = reactive<Record<ResourceKind, number>>({
 let projectOptionRequestSeq = 0
 
 const hasProject = computed(() => Boolean(selectedProjectId.value && project.value?.exists))
-const originalGraphActive = computed(() => Boolean(project.value?.has_context))
 const trainModelPrefix = computed(() => {
   const scenarioSetId = trainForm.scenario_set_id.trim()
   return scenarioSetId ? `train_${scenarioSetId}` : ''
@@ -269,6 +279,10 @@ const scenarioSetSelectOptions = computed(() =>
       label: resourceLabel(scenarioSets.value, 'scenario_set_id', selectedScenarioSetId.value, 'case_count'),
     },
     {
+      value: scenarioCreateScenarioSetId.value,
+      label: resourceLabel(scenarioSets.value, 'scenario_set_id', scenarioCreateScenarioSetId.value, 'case_count'),
+    },
+    {
       value: datasetCreateScenarioSetId.value,
       label: resourceLabel(scenarioSets.value, 'scenario_set_id', datasetCreateScenarioSetId.value, 'case_count'),
     },
@@ -307,7 +321,7 @@ const taskProjectOptions = computed(() => [
   ...projects.value.map((item) => ({ label: item.project_id, value: item.project_id })),
 ])
 const selectedBuildScenarios = computed(() =>
-  selectedScenarioSetId.value === datasetBuildForm.value.scenario_set_id ? scenarios.value : [],
+  scenarios.value,
 )
 const scenarioTasks = computed(() => filterTasks(TASK_LABELS.scenarios))
 const datasetTasks = computed(() => filterTasks(TASK_LABELS.datasets))
@@ -326,7 +340,6 @@ const operationPending = computed(() => Boolean(activeOperation.value))
 const operationText = computed(() => (activeOperation.value ? `${activeOperation.value}中...` : '处理中...'))
 
 watch(selectedProjectId, async (_projectId, previousProjectId) => {
-  resetPrepareForm()
   if (previousProjectId) {
     selectedScenarioSetId.value = ''
     selectedDatasetId.value = ''
@@ -471,12 +484,12 @@ function clearResourceOptions() {
 function selectFirstOptions() {
   if (!project.value) return
   if (
-    !selectedScenarioSetId.value ||
+    selectedScenarioSetId.value &&
     !project.value.scenario_sets.some(
       (item) => item.scenario_set_id === selectedScenarioSetId.value,
     )
   ) {
-    selectedScenarioSetId.value = project.value.scenario_sets[0]?.scenario_set_id ?? ''
+    selectedScenarioSetId.value = ''
   }
   if (
     !selectedDatasetId.value ||
@@ -639,36 +652,10 @@ async function removeSelectedProject() {
   })
 }
 
-function openPrepareDialog() {
-  if (operationPending.value) return
-  resetPrepareForm()
-  prepareDialogVisible.value = true
-}
-
-async function submitPrepare() {
-  if (!prepareForm.value.timetable_file || !prepareForm.value.mileage_file) {
-    ElMessage.warning('请上传时刻表和里程表文件。')
-    return
-  }
-  await submitTask('激活原计划运行图', async () => {
-    const response = await api.activatePlan(
-      selectedProjectId.value,
-      prepareForm.value.timetable_file as File,
-      prepareForm.value.mileage_file as File,
-      prepareForm.value.timetable_sheet_name,
-      prepareForm.value.mileage_sheet_name,
-    )
-    trackTask(response.task)
-    prepareDialogVisible.value = false
-    resetPrepareForm()
-    return response.task
-  })
-}
-
 async function createScenarioSet() {
   const scenarioSetId = newScenarioSetId.value.trim()
   if (!scenarioSetId) return
-  await submitTask('创建扰动场景集', async () => {
+  await submitTask('创建场景分类', async () => {
     const response = await api.createScenarioSet(selectedProjectId.value, scenarioSetId)
     trackTask(response.task)
     selectedScenarioSetId.value = scenarioSetId
@@ -684,8 +671,8 @@ async function deleteScenarioSetById(scenarioSetId: string) {
   if (!selectedProjectId.value || !scenarioSetId) return
   try {
     await ElMessageBox.confirm(
-      `确认删除扰动场景集 ${scenarioSetId}？该操作会删除对应场景文件目录。`,
-      '删除扰动场景集',
+      `确认删除场景分类 ${scenarioSetId}？该操作会删除对应场景文件目录。`,
+      '删除场景分类',
       {
         type: 'warning',
         confirmButtonText: '删除',
@@ -695,34 +682,32 @@ async function deleteScenarioSetById(scenarioSetId: string) {
   } catch {
     return
   }
-  await runAction('删除扰动场景集', async () => {
+  await runAction('删除场景分类', async () => {
     await api.deleteScenarioSet(selectedProjectId.value, scenarioSetId)
     if (selectedScenarioSetId.value === scenarioSetId) {
       selectedScenarioSetId.value = ''
       scenarios.value = []
-      scenarioSetVisualization.value = null
     }
     scenarioSetOptions.value = scenarioSetOptions.value.filter((item) => item.value !== scenarioSetId)
     await loadSelectedProject(false)
-    return `扰动场景集 ${scenarioSetId} 已删除`
+    return `场景分类 ${scenarioSetId} 已删除`
   })
 }
 
 async function loadScenarioSetData(showMessage = true) {
-  const projectId = selectedProjectId.value
-  const scenarioSetId = selectedScenarioSetId.value
-  if (showMessage) scenarioSetLoading.value = true
+  await loadScenarioSummary(showMessage)
+}
+
+async function loadScenarioSummary(showMessage = true) {
+  if (!selectedProjectId.value) {
+    scenarioSummary.value = null
+    return
+  }
   try {
-    await loadScenarios(showMessage, projectId, scenarioSetId)
-    await loadScenarioSetVisualization(showMessage, projectId, scenarioSetId)
-  } finally {
-    if (
-      showMessage &&
-      projectId === selectedProjectId.value &&
-      scenarioSetId === selectedScenarioSetId.value
-    ) {
-      scenarioSetLoading.value = false
-    }
+    scenarioSummary.value = await api.readScenarioSummary(selectedProjectId.value)
+  } catch (error) {
+    scenarioSummary.value = project.value?.scenario_summary ?? null
+    if (showMessage) notifyError(error)
   }
 }
 
@@ -734,7 +719,6 @@ async function loadScenarios(
   if (!projectId || !scenarioSetId) {
     if (projectId === selectedProjectId.value && scenarioSetId === selectedScenarioSetId.value) {
       scenarios.value = []
-      scenarioSetVisualization.value = null
     }
     return
   }
@@ -751,30 +735,6 @@ async function loadScenarios(
   }
 }
 
-async function loadScenarioSetVisualization(
-  showMessage = true,
-  projectId = selectedProjectId.value,
-  scenarioSetId = selectedScenarioSetId.value,
-) {
-  if (!projectId || !scenarioSetId) {
-    if (projectId === selectedProjectId.value && scenarioSetId === selectedScenarioSetId.value) {
-      scenarioSetVisualization.value = null
-    }
-    return
-  }
-  try {
-    const result = await api.readScenarioSetVisualization(projectId, scenarioSetId)
-    if (projectId === selectedProjectId.value && scenarioSetId === selectedScenarioSetId.value) {
-      scenarioSetVisualization.value = result
-    }
-  } catch (error) {
-    if (projectId === selectedProjectId.value && scenarioSetId === selectedScenarioSetId.value) {
-      scenarioSetVisualization.value = null
-    }
-    if (showMessage) notifyError(error)
-  }
-}
-
 async function reloadScenarioSetsOnOpen(visible: boolean) {
   if (!visible) return
   await loadResourceOptions('scenario_sets', '', {
@@ -782,7 +742,7 @@ async function reloadScenarioSetsOnOpen(visible: boolean) {
     loading: scenarioSetOptionsLoading,
   })
   await loadSelectedProject(false)
-  await loadScenarioSetData(false)
+  await loadScenarioSummary(false)
 }
 
 async function searchScenarioSetOptions(query: string) {
@@ -794,36 +754,47 @@ async function searchScenarioSetOptions(query: string) {
 
 function openScenarioDialog() {
   if (operationPending.value) return
-  if (!selectedScenarioSetId.value) {
-    ElMessage.warning('请先选择扰动场景集。')
-    return
-  }
-  if (!originalGraphActive.value) {
-    ElMessage.warning('请先激活原计划运行图。')
-    return
-  }
-  scenarioDialogInitialId.value = nextScenarioId()
+  scenarioCreateScenarioSetId.value = selectedScenarioSetId.value
+  scenarioDialogInitialId.value = ''
+  scenarioCreateFiles.value = { timetable_file: null, mileage_file: null }
+  scenarioCreateTimetableFiles.value = []
+  scenarioCreateMileageFiles.value = []
   scenarioDialogVisible.value = true
 }
 
-async function addScenario(payload: { scenarioId: string; overwrite: boolean; data: ScenarioPayload }) {
-  const id = payload.scenarioId.trim()
-  if (!id) return
-  if (!payload.data.delays.length && !payload.data.speed_limits.length) {
-    ElMessage.warning('请至少添加一个扰动。')
+function setScenarioCreateTimetableFile(file: UploadFile) {
+  if (file.raw) scenarioCreateFiles.value.timetable_file = file.raw
+}
+
+function setScenarioCreateMileageFile(file: UploadFile) {
+  if (file.raw) scenarioCreateFiles.value.mileage_file = file.raw
+}
+
+async function createScenarioCase() {
+  const scenarioId = scenarioDialogInitialId.value.trim()
+  const scenarioSetId = scenarioCreateScenarioSetId.value.trim()
+  if (!scenarioId || !scenarioSetId) {
+    ElMessage.warning('请填写场景 ID 并选择场景分类。')
     return
   }
-  await submitTask('新增场景', async () => {
-    const response = await api.addScenario(
+  if (!scenarioCreateFiles.value.timetable_file || !scenarioCreateFiles.value.mileage_file) {
+    ElMessage.warning('请上传时刻表和里程表。')
+    return
+  }
+  await runAction('新增场景', async () => {
+    await api.createScenarioCase(
       selectedProjectId.value,
-      selectedScenarioSetId.value,
-      id,
-      payload.data,
-      payload.overwrite,
+      scenarioSetId,
+      scenarioId,
+      scenarioCreateFiles.value.timetable_file as File,
+      scenarioCreateFiles.value.mileage_file as File,
     )
-    trackTask(response.task)
+    selectedScenarioSetId.value = scenarioSetId
+    selectedScenarioId.value = scenarioId
     scenarioDialogVisible.value = false
-    return response.task
+    await loadSelectedProject(false)
+    await loadScenarioSummary(false)
+    return `场景 ${scenarioId} 已创建`
   })
 }
 
@@ -844,23 +815,55 @@ async function deleteScenario(id: string) {
   })
 }
 
+function viewScenario(id: string) {
+  selectedScenarioId.value = id
+  activePage.value = 'scenario-detail'
+}
+
+function backToScenarios() {
+  activePage.value = 'scenarios'
+}
+
 function openNormalGenerateDialog() {
   if (operationPending.value) return
   if (!selectedScenarioSetId.value) {
-    ElMessage.warning('请先选择扰动场景集。')
+    ElMessage.warning('请先选择场景分类。')
     return
   }
+  normalGenerateTimetableFiles.value = []
+  normalGenerateMileageFiles.value = []
+  normalGenerateForm.value.timetable_file = null
+  normalGenerateForm.value.mileage_file = null
   normalGenerateDialogVisible.value = true
+}
+
+function setNormalGenerateTimetableFile(file: UploadFile) {
+  if (file.raw) normalGenerateForm.value.timetable_file = file.raw
+}
+
+function setNormalGenerateMileageFile(file: UploadFile) {
+  if (file.raw) normalGenerateForm.value.mileage_file = file.raw
 }
 
 async function submitNormalGenerate() {
   if (!selectedScenarioSetId.value) return
-  await submitTask('批量生成场景', async () => {
-    const response = await api.submitNormalGenerate(selectedProjectId.value, {
-      scenario_set_id: selectedScenarioSetId.value,
-      merge: true,
-      overwrite: true,
-      ...normalGenerateForm.value,
+  if (!normalGenerateForm.value.timetable_file || !normalGenerateForm.value.mileage_file) {
+    ElMessage.warning('请上传时刻表和里程表。')
+    return
+  }
+  await submitTask('模拟场景', async () => {
+    const response = await api.submitNormalGenerateUpload(selectedProjectId.value, {
+      scenarioSetId: selectedScenarioSetId.value,
+      scenarioIdPrefix: normalGenerateForm.value.scenario_id_prefix,
+      simulationCount: normalGenerateForm.value.simulation_count,
+      seed: normalGenerateForm.value.seed,
+      delayCount: normalGenerateForm.value.delay_count,
+      speedCount: normalGenerateForm.value.speed_count,
+      interruptionCount: normalGenerateForm.value.interruption_count,
+      comboPerType: normalGenerateForm.value.combo_per_type,
+      overwrite: normalGenerateForm.value.overwrite,
+      timetableFile: normalGenerateForm.value.timetable_file as File,
+      mileageFile: normalGenerateForm.value.mileage_file as File,
     })
     trackTask(response.task)
     normalGenerateDialogVisible.value = false
@@ -948,13 +951,13 @@ async function createDataset() {
   if (!datasetId) {
     ElMessage.warning(
       importScenarioSet
-        ? '请先选择要引入的扰动场景集。'
+        ? '请先选择要引入的场景分类。'
         : '请填写 MILP 实例集 ID。',
     )
     return
   }
   if (importScenarioSet && !scenarioSetId) {
-    ElMessage.warning('请先选择要引入的扰动场景集。')
+    ElMessage.warning('请先选择要引入的场景分类。')
     return
   }
   const existingDataset = datasets.value.find((item) => item.dataset_id === datasetId)
@@ -1167,9 +1170,8 @@ function updateDatasetBuildOptions(options: DatasetBuildForm) {
 }
 
 async function onDatasetBuildScenarioSetChange() {
-  selectedScenarioSetId.value = datasetBuildForm.value.scenario_set_id
   datasetBuildForm.value.scenario_id = ''
-  await loadScenarios(false)
+  await loadScenarios(false, selectedProjectId.value, datasetBuildForm.value.scenario_set_id)
 }
 
 async function reloadDatasetBuildScenariosOnOpen(visible: boolean) {
@@ -1262,15 +1264,15 @@ function syncTrainModelId() {
 
 async function submitTrain() {
   if (!trainForm.model_id.trim() || !trainForm.scenario_set_id.trim()) {
-    ElMessage.warning('请填写扰动生成模型 ID 并选择训练扰动场景集。')
+    ElMessage.warning('请填写模型 ID 并选择训练场景分类。')
     return
   }
   const existingModel = models.value.find((item) => item.model_id === trainForm.model_id.trim())
   if (existingModel && trainDialogMode.value !== 'retrain') {
     try {
       await ElMessageBox.confirm(
-        `扰动生成模型 ${existingModel.model_id} 已存在。重新训练会先删除旧模型产物，再开始训练。`,
-        '覆盖训练扰动生成模型',
+        `模型训练 ${existingModel.model_id} 已存在。重新训练会先删除旧模型产物，再开始训练。`,
+        '覆盖训练模型',
         { type: 'warning', confirmButtonText: '覆盖并训练', cancelButtonText: '取消' },
       )
     } catch {
@@ -1293,12 +1295,18 @@ async function submitTrain() {
 function openGenerationDialog(file: ModelCheckpoint) {
   if (operationPending.value) return
   if (!selectedModelId.value) {
-    ElMessage.warning('请先选择扰动生成模型。')
+    ElMessage.warning('请先选择模型训练。')
     return
   }
   generationForm.value.checkpoint = file.relative_path
   generationScenarioSetSuffix.value = nextTimestampSuffix()
   syncGenerationScenarioSetId()
+  generationForm.value.source_mode = 'scenario_set'
+  generationForm.value.source_scenario_set_id = ''
+  generationForm.value.timetable_file = null
+  generationForm.value.mileage_file = null
+  generationTimetableFiles.value = []
+  generationMileageFiles.value = []
   generationForm.value.speed_interruption_threshold = DEFAULT_SPEED_INTERRUPTION_THRESHOLD
   generationDialogVisible.value = true
 }
@@ -1317,33 +1325,68 @@ async function submitGeneration() {
     return
   }
   if (!generationForm.value.scenario_set_id.trim()) {
-    ElMessage.warning('请填写生成到的扰动场景集 ID。')
+    ElMessage.warning('请填写生成到的场景分类 ID。')
+    return
+  }
+  if (generationForm.value.source_mode === 'scenario_set' && !generationForm.value.source_scenario_set_id.trim()) {
+    ElMessage.warning('请选择 Context 来源分类。')
+    return
+  }
+  if (
+    generationForm.value.source_mode === 'upload' &&
+    (!generationForm.value.timetable_file || !generationForm.value.mileage_file)
+  ) {
+    ElMessage.warning('请上传时刻表和里程表。')
     return
   }
   await submitTask('生成场景', async () => {
-    const response = await api.submitGeneration(
-      selectedProjectId.value,
-      selectedModelId.value,
-      generationForm.value.checkpoint,
-      generationForm.value.scenario_set_id,
-      generationForm.value.num_samples,
-      generationForm.value.seed,
-      generationForm.value.device,
-      generationForm.value.speed_interruption_threshold,
-      generationForm.value.overwrite,
-    )
+    const response = generationForm.value.source_mode === 'upload'
+      ? await api.submitGenerationUpload(selectedProjectId.value, {
+        modelId: selectedModelId.value,
+        checkpoint: generationForm.value.checkpoint,
+        scenarioSetId: generationForm.value.scenario_set_id,
+        outputPrefix: generationForm.value.output_prefix,
+        numSamples: generationForm.value.num_samples,
+        seed: generationForm.value.seed,
+        device: generationForm.value.device,
+        speedInterruptionThreshold: generationForm.value.speed_interruption_threshold,
+        overwrite: generationForm.value.overwrite,
+        timetableFile: generationForm.value.timetable_file as File,
+        mileageFile: generationForm.value.mileage_file as File,
+      })
+      : await api.submitGeneration(
+        selectedProjectId.value,
+        selectedModelId.value,
+        generationForm.value.checkpoint,
+        generationForm.value.scenario_set_id,
+        generationForm.value.source_scenario_set_id,
+        generationForm.value.output_prefix,
+        generationForm.value.num_samples,
+        generationForm.value.seed,
+        generationForm.value.device,
+        generationForm.value.speed_interruption_threshold,
+        generationForm.value.overwrite,
+      )
     trackTask(response.task)
     generationDialogVisible.value = false
     return response.task
   })
 }
 
+function setGenerationTimetableFile(file: UploadFile) {
+  if (file.raw) generationForm.value.timetable_file = file.raw
+}
+
+function setGenerationMileageFile(file: UploadFile) {
+  if (file.raw) generationForm.value.mileage_file = file.raw
+}
+
 async function deleteModelById(modelId: string) {
   if (!selectedProjectId.value || !modelId) return
   try {
     await ElMessageBox.confirm(
-      `确认删除扰动生成模型 ${modelId}？该操作会删除模型产物目录。`,
-      '删除扰动生成模型',
+      `确认删除模型训练 ${modelId}？该操作会删除模型产物目录。`,
+      '删除模型训练',
       {
         type: 'warning',
         confirmButtonText: '删除',
@@ -1353,7 +1396,7 @@ async function deleteModelById(modelId: string) {
   } catch {
     return
   }
-  await runAction('删除扰动生成模型', async () => {
+  await runAction('删除模型训练', async () => {
     await api.deleteModel(selectedProjectId.value, modelId)
     if (selectedModelId.value === modelId) {
       selectedModelId.value = ''
@@ -1364,7 +1407,7 @@ async function deleteModelById(modelId: string) {
     }
     modelOptions.value = modelOptions.value.filter((item) => item.value !== modelId)
     await loadSelectedProject(false)
-    return `扰动生成模型 ${modelId} 已删除`
+    return `模型训练 ${modelId} 已删除`
   })
 }
 
@@ -1455,29 +1498,6 @@ async function scrollMainToTop() {
   mainScrollbar.value?.setScrollTop(0)
 }
 
-function resetPrepareForm() {
-  prepareForm.value = {
-    timetable_file: null,
-    mileage_file: null,
-    timetable_sheet_name: 'Sheet1',
-    mileage_sheet_name: 'Sheet1',
-  }
-  prepareTimetableFiles.value = []
-  prepareMileageFiles.value = []
-}
-
-function setPrepareFile(kind: 'timetable_file' | 'mileage_file', file: UploadFile) {
-  if (file.raw) prepareForm.value[kind] = file.raw
-}
-
-function setTimetableFile(file: UploadFile) {
-  setPrepareFile('timetable_file', file)
-}
-
-function setMileageFile(file: UploadFile) {
-  setPrepareFile('mileage_file', file)
-}
-
 function warnSingleFile() {
   ElMessage.warning('每项只需要一个文件，请先移除后重新选择。')
 }
@@ -1529,11 +1549,11 @@ function notifyError(error: unknown) {
     <el-container>
       <el-aside width="220px" class="app-aside">
         <div class="brand">RailDisruptLab</div>
-        <el-menu :default-active="activePage" @select="selectPage">
+          <el-menu :default-active="activePage" @select="selectPage">
           <el-menu-item index="dashboard">仪表盘</el-menu-item>
-          <el-menu-item index="scenarios">扰动场景集</el-menu-item>
-          <el-menu-item index="datasets">MILP 实例集</el-menu-item>
-          <el-menu-item index="models">扰动生成模型</el-menu-item>
+          <el-menu-item index="scenarios">扰动场景</el-menu-item>
+          <el-menu-item index="datasets">MILP 实例</el-menu-item>
+          <el-menu-item index="models">模型训练</el-menu-item>
           <el-sub-menu index="ablation">
             <template #title>消融分析</template>
             <el-menu-item index="ablation-scenarios">场景分析</el-menu-item>
@@ -1597,33 +1617,42 @@ function notifyError(error: unknown) {
                   :scenario-set-count="scenarioSets.length"
                   :datasets="datasets"
                   :models="models"
-                  :original-graph-active="originalGraphActive"
                   :tasks="tasks"
                   :running-task-count="runningTaskCount"
                   :done-task-count="doneTaskCount"
                   :failed-task-count="failedTaskCount"
                   :busy="operationPending"
-                  @prepare="openPrepareDialog"
                   @refresh-tasks="refreshTasks"
                 />
 
                 <ScenarioSetsView
                   v-else-if="activePage === 'scenarios'"
                   v-model:selected-scenario-set-id="selectedScenarioSetId"
+                  :selected-project-id="selectedProjectId"
                   :scenario-sets="scenarioSets"
+                  :scenario-summary="scenarioSummary"
                   :scenario-set-options="scenarioSetSelectOptions"
-                  :scenarios="scenarios"
-                  :visualization="scenarioSetVisualization"
-                  :loading="scenarioSetLoading"
                   :resource-loading="scenarioSetOptionsLoading"
                   :busy="operationPending"
                   @reload-scenario-sets="reloadScenarioSetsOnOpen"
                   @search-scenario-sets="searchScenarioSetOptions"
                   @create-scenario-set="scenarioSetDialogVisible = true"
                   @delete-scenario-set="deleteScenarioSetById"
-                  @normal-generate="openNormalGenerateDialog"
+                  @simulate-scenario="openNormalGenerateDialog"
                   @create-scenario="openScenarioDialog"
                   @delete-scenario="deleteScenario"
+                  @view-scenario="viewScenario"
+                  @category-loaded="loadScenarioSummary(false)"
+                />
+
+                <ScenarioDetailView
+                  v-else-if="activePage === 'scenario-detail'"
+                  :project-id="selectedProjectId"
+                  :scenario-set-id="selectedScenarioSetId"
+                  :scenario-id="selectedScenarioId"
+                  :busy="operationPending"
+                  @back="backToScenarios"
+                  @activated="loadSelectedProject(false)"
                 />
 
                 <DatasetsView
@@ -1716,56 +1745,10 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="prepareDialogVisible" title="激活原计划运行图" width="560px">
-      <el-form label-width="140px">
-        <el-form-item label="时刻表文件">
-          <el-upload
-            v-model:file-list="prepareTimetableFiles"
-            :auto-upload="false"
-            :limit="1"
-            :on-change="setTimetableFile"
-            :on-exceed="warnSingleFile"
-            :disabled="operationPending"
-          >
-            <el-button :disabled="operationPending">选择文件</el-button>
-          </el-upload>
-        </el-form-item>
-        <el-form-item label="里程表文件">
-          <el-upload
-            v-model:file-list="prepareMileageFiles"
-            :auto-upload="false"
-            :limit="1"
-            :on-change="setMileageFile"
-            :on-exceed="warnSingleFile"
-            :disabled="operationPending"
-          >
-            <el-button :disabled="operationPending">选择文件</el-button>
-          </el-upload>
-        </el-form-item>
-        <el-form-item label="时刻表工作表">
-          <el-input v-model="prepareForm.timetable_sheet_name" :disabled="operationPending" />
-        </el-form-item>
-        <el-form-item label="里程表工作表">
-          <el-input v-model="prepareForm.mileage_sheet_name" :disabled="operationPending" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button :disabled="operationPending" @click="prepareDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="activeOperation === '激活原计划运行图'"
-          :disabled="operationPending"
-          @click="submitPrepare"
-        >
-          激活
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="scenarioSetDialogVisible" title="新建扰动场景集" width="420px">
+    <el-dialog v-model="scenarioSetDialogVisible" title="新增场景分类" width="420px">
       <el-input
         v-model="newScenarioSetId"
-        placeholder="扰动场景集 ID"
+        placeholder="场景分类 ID"
         :disabled="operationPending"
         @keyup.enter="createScenarioSet"
       />
@@ -1773,7 +1756,7 @@ function notifyError(error: unknown) {
         <el-button :disabled="operationPending" @click="scenarioSetDialogVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :loading="activeOperation === '创建扰动场景集'"
+          :loading="activeOperation === '创建场景分类'"
           :disabled="operationPending"
           @click="createScenarioSet"
         >
@@ -1782,37 +1765,118 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <ScenarioDialog
-      v-model="scenarioDialogVisible"
-      :project-id="selectedProjectId"
-      :scenario-set-id="selectedScenarioSetId"
-      :initial-scenario-id="scenarioDialogInitialId"
-      :busy="operationPending"
-      :submitting="activeOperation === '新增场景'"
-      @submit="addScenario"
-    />
+    <el-dialog v-model="scenarioDialogVisible" title="新增场景" width="620px">
+      <el-form label-width="120px">
+        <el-form-item label="时刻表">
+          <el-upload
+            v-model:file-list="scenarioCreateTimetableFiles"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="setScenarioCreateTimetableFile"
+            :on-exceed="warnSingleFile"
+            :disabled="operationPending"
+          >
+            <el-button :disabled="operationPending">上传时刻表</el-button>
+          </el-upload>
+        </el-form-item>
+        <el-form-item label="里程表">
+          <el-upload
+            v-model:file-list="scenarioCreateMileageFiles"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="setScenarioCreateMileageFile"
+            :on-exceed="warnSingleFile"
+            :disabled="operationPending"
+          >
+            <el-button :disabled="operationPending">上传里程表</el-button>
+          </el-upload>
+        </el-form-item>
+        <el-form-item label="场景 ID">
+          <el-input v-model="scenarioDialogInitialId" :disabled="operationPending" />
+        </el-form-item>
+        <el-form-item label="场景分类">
+          <div class="inline-control-row">
+            <el-select
+              v-model="scenarioCreateScenarioSetId"
+              filterable
+              remote
+              reserve-keyword
+              class="full-width"
+              placeholder="选择场景分类"
+              :disabled="operationPending"
+              :loading="scenarioSetOptionsLoading"
+              :remote-method="searchScenarioSetOptions"
+              @visible-change="reloadScenarioSetsOnOpen"
+            >
+              <el-option
+                v-for="item in scenarioSetSelectOptions"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+              />
+            </el-select>
+            <el-button :disabled="operationPending" @click="scenarioSetDialogVisible = true">新增</el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="operationPending" @click="scenarioDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '新增场景'"
+          :disabled="operationPending"
+          @click="createScenarioCase"
+        >
+          确定
+        </el-button>
+      </template>
+    </el-dialog>
 
-    <el-dialog v-model="normalGenerateDialogVisible" title="批量生成场景" width="560px">
-      <el-alert
-        title="将生成到当前扰动场景集；若生成的场景 ID 已存在，会覆盖同名场景。"
-        type="warning"
-        show-icon
-        :closable="false"
-      />
+    <el-dialog v-model="normalGenerateDialogVisible" title="模拟场景" width="640px">
       <el-form class="dialog-section" label-width="150px">
-        <el-form-item label="当前扰动场景集">
+        <el-form-item label="当前场景分类">
           <el-input :model-value="selectedScenarioSetId" disabled />
+        </el-form-item>
+        <el-form-item label="时刻表">
+          <el-upload
+            v-model:file-list="normalGenerateTimetableFiles"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="setNormalGenerateTimetableFile"
+            :on-exceed="warnSingleFile"
+            :disabled="operationPending"
+          >
+            <el-button :disabled="operationPending">上传时刻表</el-button>
+          </el-upload>
+        </el-form-item>
+        <el-form-item label="里程表">
+          <el-upload
+            v-model:file-list="normalGenerateMileageFiles"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="setNormalGenerateMileageFile"
+            :on-exceed="warnSingleFile"
+            :disabled="operationPending"
+          >
+            <el-button :disabled="operationPending">上传里程表</el-button>
+          </el-upload>
+        </el-form-item>
+        <el-form-item label="场景 ID 前缀">
+          <el-input v-model="normalGenerateForm.scenario_id_prefix" :disabled="operationPending" />
+        </el-form-item>
+        <el-form-item label="模拟数量">
+          <el-input-number v-model="normalGenerateForm.simulation_count" :min="1" :disabled="operationPending" />
         </el-form-item>
         <el-form-item label="随机种子">
           <el-input-number v-model="normalGenerateForm.seed" :min="0" :disabled="operationPending" />
         </el-form-item>
-        <el-form-item label="延误场景数">
+        <el-form-item label="晚点扰动数">
           <el-input-number v-model="normalGenerateForm.delay_count" :min="0" :disabled="operationPending" />
         </el-form-item>
-        <el-form-item label="限速场景数">
+        <el-form-item label="限速扰动数">
           <el-input-number v-model="normalGenerateForm.speed_count" :min="0" :disabled="operationPending" />
         </el-form-item>
-        <el-form-item label="中断场景数">
+        <el-form-item label="中断扰动数">
           <el-input-number
             v-model="normalGenerateForm.interruption_count"
             :min="0"
@@ -1826,23 +1890,26 @@ function notifyError(error: unknown) {
             :disabled="operationPending"
           />
         </el-form-item>
+        <el-form-item label="覆盖同名场景">
+          <el-switch v-model="normalGenerateForm.overwrite" :disabled="operationPending" />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button :disabled="operationPending" @click="normalGenerateDialogVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :loading="activeOperation === '批量生成场景'"
+          :loading="activeOperation === '模拟场景'"
           :disabled="operationPending"
           @click="submitNormalGenerate"
         >
-          确定生成
+          {{ activeOperation === '模拟场景' ? '正在模拟构建中......' : '确定模拟' }}
         </el-button>
       </template>
     </el-dialog>
 
     <el-dialog
       v-model="trainDialogVisible"
-      :title="trainDialogMode === 'retrain' ? '重新训练扰动生成模型' : '训练新扰动生成模型'"
+      :title="trainDialogMode === 'retrain' ? '重新训练模型' : '训练新模型'"
       width="920px"
       class="train-dialog"
     >
@@ -1852,7 +1919,7 @@ function notifyError(error: unknown) {
             <el-col :xs="24" :sm="12">
               <el-form-item>
                 <template #label>
-                  <FieldLabelTip label="训练扰动场景集" :tip="TRAIN_FIELD_TIPS.scenario_set_id" />
+                  <FieldLabelTip label="训练场景分类" :tip="TRAIN_FIELD_TIPS.scenario_set_id" />
                 </template>
                 <el-select
                   v-model="trainForm.scenario_set_id"
@@ -1860,7 +1927,7 @@ function notifyError(error: unknown) {
                   remote
                   reserve-keyword
                   class="full-width"
-                  placeholder="选择训练扰动场景集"
+                  placeholder="选择训练场景分类"
                   :disabled="operationPending"
                   :loading="scenarioSetOptionsLoading"
                   :remote-method="searchScenarioSetOptions"
@@ -1886,7 +1953,7 @@ function notifyError(error: unknown) {
                   placeholder="请输入模型后缀"
                   :disabled="operationPending"
                 >
-                  <template #prepend>{{ trainModelPrefix || '请选择扰动场景集' }}_</template>
+                  <template #prepend>{{ trainModelPrefix || '请选择场景分类' }}_</template>
                 </el-input>
                 <el-input v-else v-model="trainForm.model_id" disabled />
               </el-form-item>
@@ -2111,9 +2178,9 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="generationDialogVisible" title="使用扰动生成模型生成数据" width="560px">
+    <el-dialog v-model="generationDialogVisible" title="使用模型生成数据" width="560px">
       <el-form label-width="150px">
-        <el-form-item label="扰动生成模型">
+        <el-form-item label="模型训练">
           <el-input :model-value="selectedModelId" disabled />
         </el-form-item>
         <el-form-item label="Checkpoint">
@@ -2121,7 +2188,7 @@ function notifyError(error: unknown) {
         </el-form-item>
         <el-form-item>
           <template #label>
-            <FieldLabelTip label="输出扰动场景集" :tip="GENERATION_FIELD_TIPS.scenario_set_id" />
+            <FieldLabelTip label="输出场景分类" :tip="GENERATION_FIELD_TIPS.scenario_set_id" />
           </template>
           <el-input
             v-model="generationScenarioSetSuffix"
@@ -2130,6 +2197,62 @@ function notifyError(error: unknown) {
           >
             <template #prepend>{{ generationScenarioSetPrefix }}_</template>
           </el-input>
+        </el-form-item>
+        <el-form-item label="Context 来源">
+          <el-radio-group v-model="generationForm.source_mode" :disabled="operationPending">
+            <el-radio-button value="scenario_set">场景分类</el-radio-button>
+            <el-radio-button value="upload">上传文件</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="generationForm.source_mode === 'scenario_set'" label="来源场景分类">
+          <el-select
+            v-model="generationForm.source_scenario_set_id"
+            filterable
+            remote
+            reserve-keyword
+            class="full-width"
+            placeholder="选择已激活场景分类"
+            :disabled="operationPending"
+            :loading="scenarioSetOptionsLoading"
+            :remote-method="searchScenarioSetOptions"
+            @visible-change="reloadScenarioSetsOnOpen"
+          >
+            <el-option
+              v-for="item in scenarioSetSelectOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </el-form-item>
+        <template v-else>
+          <el-form-item label="时刻表">
+            <el-upload
+              v-model:file-list="generationTimetableFiles"
+              :auto-upload="false"
+              :limit="1"
+              :on-change="setGenerationTimetableFile"
+              :on-exceed="warnSingleFile"
+              :disabled="operationPending"
+            >
+              <el-button :disabled="operationPending">上传时刻表</el-button>
+            </el-upload>
+          </el-form-item>
+          <el-form-item label="里程表">
+            <el-upload
+              v-model:file-list="generationMileageFiles"
+              :auto-upload="false"
+              :limit="1"
+              :on-change="setGenerationMileageFile"
+              :on-exceed="warnSingleFile"
+              :disabled="operationPending"
+            >
+              <el-button :disabled="operationPending">上传里程表</el-button>
+            </el-upload>
+          </el-form-item>
+        </template>
+        <el-form-item label="输出场景前缀">
+          <el-input v-model="generationForm.output_prefix" :disabled="operationPending" />
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -2202,20 +2325,20 @@ function notifyError(error: unknown) {
         <el-form-item label="创建方式">
           <el-radio-group v-model="datasetCreateMode" :disabled="operationPending">
             <el-radio-button value="scenario_set" :disabled="!scenarioSets.length">
-              从扰动场景集构建
+              从场景分类构建
             </el-radio-button>
             <el-radio-button value="empty">创建空资源</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <template v-if="datasetCreateMode === 'scenario_set'">
-          <el-form-item label="扰动场景集">
+          <el-form-item label="场景分类">
             <el-select
               v-model="datasetCreateScenarioSetId"
               filterable
               remote
               reserve-keyword
               class="full-width"
-              placeholder="选择扰动场景集"
+              placeholder="选择场景分类"
               :disabled="operationPending"
               :loading="scenarioSetOptionsLoading"
               :remote-method="searchScenarioSetOptions"
@@ -2274,11 +2397,11 @@ function notifyError(error: unknown) {
         </el-form-item>
         <el-form-item label="构建来源">
           <el-radio-group v-model="datasetBuildForm.source" :disabled="operationPending">
-            <el-radio-button value="scenario_set">从扰动场景集中构建</el-radio-button>
+            <el-radio-button value="scenario_set">从场景分类中构建</el-radio-button>
             <el-radio-button value="scenario">从场景中构建</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="扰动场景集">
+        <el-form-item label="场景分类">
           <el-select
             v-model="datasetBuildForm.scenario_set_id"
             filterable

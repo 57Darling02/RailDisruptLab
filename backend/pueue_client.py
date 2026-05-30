@@ -376,12 +376,8 @@ def task_display_name(action: str, params: Dict[str, object], *, fallback: str) 
         return "创建项目"
     if action == "deleteproject":
         return "删除项目"
-    if action == "source_delete":
-        return titled(params, "filename", "删除源文件")
-    if action == "prepare":
-        return "激活原计划运行图"
     if action == "scenario_set_create":
-        return titled(params, "scenario_set_id", "创建扰动场景集")
+        return titled(params, "scenario_set_id", "创建场景分类")
     if action == "normal_generate":
         return titled(params, "scenario_set_id", "批量生成场景")
     if action == "scenario_add":

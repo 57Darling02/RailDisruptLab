@@ -48,6 +48,38 @@ def reset_dir(path: Path, *, allowed_root: Path = PROJECTS_ROOT) -> None:
 class ScenarioSetLayout:
     root: Path
 
+    @property
+    def scenarios_dir(self) -> Path:
+        return self.root / "scenarios"
+
+    def scenario(self, scenario_id: str) -> "ScenarioCaseLayout":
+        return ScenarioCaseLayout(self.scenarios_dir / require_id(scenario_id, "scenario_id"))
+
+
+@dataclass(frozen=True)
+class ScenarioCaseLayout:
+    root: Path
+
+    @property
+    def source_dir(self) -> Path:
+        return self.root / "source"
+
+    @property
+    def timetable_xlsx(self) -> Path:
+        return self.source_dir / "timetable.xlsx"
+
+    @property
+    def mileage_xlsx(self) -> Path:
+        return self.source_dir / "mileage.xlsx"
+
+    @property
+    def context_json(self) -> Path:
+        return self.root / "context.json"
+
+    @property
+    def scenario_yml(self) -> Path:
+        return self.root / "scenario.yml"
+
 
 @dataclass(frozen=True)
 class DatasetLayout:
@@ -69,6 +101,10 @@ class ModelLayout:
     @property
     def sample_dir(self) -> Path:
         return self.graph_dir / "samples"
+
+    @property
+    def context_graph_dir(self) -> Path:
+        return self.graph_dir / "contexts"
 
     @property
     def context_graph(self) -> Path:

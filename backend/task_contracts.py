@@ -15,38 +15,26 @@ from core.vae_learning_graph import (
     DEFAULT_SECTION_ORDER_WINDOW,
     DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
 )
-from backend.workflow import (
-    build_dataset,
-    create_dataset,
-    delete_project,
-    delete_source_file,
-    generate_scenarios,
-    new_project,
-    prepare,
-    solve_dataset,
-    train_model,
-)
+from backend.workflow import build_dataset, create_dataset, delete_project, generate_scenarios, new_project, solve_dataset, train_model
 
 
 TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "newproject": {},
     "deleteproject": {},
-    "source_delete": {},
     "scenario_set_create": {"exist_ok": False},
     "scenario_add": {"delays": [], "speed_limits": [], "overwrite": False},
     "scenario_delete": {},
-    "prepare": {
-        "timetable_sheet_name": "Sheet1",
-        "mileage_sheet_name": "Sheet1",
-    },
     "normal_generate": {
+        "scenario_id_prefix": "sim",
+        "simulation_count": 1,
+        "source_timetable_path": "",
+        "source_mileage_path": "",
         "seed": 20260320,
         "delay_count": 10,
         "speed_count": 10,
         "interruption_count": 10,
         "combo_per_type": 10,
         "overwrite": True,
-        "merge": True,
     },
     "dataset_create": {"exist_ok": False},
     "build": {
@@ -94,6 +82,10 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "relation_weight": 0.5,
     },
     "generation": {
+        "source_scenario_set_id": "",
+        "source_timetable_path": "",
+        "source_mileage_path": "",
+        "output_prefix": "generated",
         "num_samples": 100,
         "seed": 1,
         "device": "auto",
@@ -105,11 +97,9 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
 TASK_REQUIRED: Dict[str, tuple[str, ...]] = {
     "newproject": (),
     "deleteproject": (),
-    "source_delete": ("filename",),
     "scenario_set_create": ("scenario_set_id",),
     "scenario_add": ("scenario_set_id", "scenario_id"),
     "scenario_delete": ("scenario_set_id", "scenario_id"),
-    "prepare": ("timetable_filename", "mileage_filename"),
     "normal_generate": ("scenario_set_id",),
     "dataset_create": ("dataset_id",),
     "build": ("scenario_set_id", "dataset_id"),
@@ -152,6 +142,27 @@ def normalize_task_params(action: str, params: Mapping[str, Any] | None) -> Dict
 
 
 def validate_task_params(action: str, params: Mapping[str, Any]) -> None:
+    if action == "normal_generate":
+        has_path_pair = bool(str(params.get("source_timetable_path") or "").strip()) and bool(
+            str(params.get("source_mileage_path") or "").strip()
+        )
+        if not has_path_pair:
+            raise ValueError("normal_generate requires uploaded timetable and mileage source paths")
+        return
+    if action == "generation":
+        has_category_source = bool(str(params.get("source_scenario_set_id") or "").strip())
+        has_upload_source = bool(str(params.get("source_timetable_path") or "").strip()) or bool(
+            str(params.get("source_mileage_path") or "").strip()
+        )
+        if has_category_source == has_upload_source:
+            raise ValueError("generation requires exactly one context source: source_scenario_set_id or uploaded source files")
+        if has_upload_source:
+            has_path_pair = bool(str(params.get("source_timetable_path") or "").strip()) and bool(
+                str(params.get("source_mileage_path") or "").strip()
+            )
+            if not has_path_pair:
+                raise ValueError("generation uploaded context source requires timetable and mileage source paths")
+        return
     if action != "build":
         return
     objective_mode = str(params.get("objective_mode", "") or "").strip()
@@ -212,8 +223,6 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
         new_project(layout)
     elif action == "deleteproject":
         delete_project(layout, force=True)
-    elif action == "source_delete":
-        delete_source_file(layout, text_param(params, "filename"))
     elif action == "scenario_set_create":
         create_scenario_set(
             layout,
@@ -235,25 +244,20 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             text_param(params, "scenario_set_id"),
             text_param(params, "scenario_id"),
         )
-    elif action == "prepare":
-        prepare(
-            layout,
-            timetable_filename=text_param(params, "timetable_filename"),
-            mileage_filename=text_param(params, "mileage_filename"),
-            timetable_sheet_name=text_param(params, "timetable_sheet_name"),
-            mileage_sheet_name=text_param(params, "mileage_sheet_name"),
-        )
     elif action == "normal_generate":
         normal_generate(
             layout,
             scenario_set_id=text_param(params, "scenario_set_id"),
+            scenario_id_prefix=text_param(params, "scenario_id_prefix"),
+            simulation_count=int_param(params, "simulation_count"),
+            source_timetable_path=text_param(params, "source_timetable_path"),
+            source_mileage_path=text_param(params, "source_mileage_path"),
             seed=int_param(params, "seed"),
             delay_count=int_param(params, "delay_count"),
             speed_count=int_param(params, "speed_count"),
             interruption_count=int_param(params, "interruption_count"),
             combo_per_type=int_param(params, "combo_per_type"),
             overwrite=bool_param(params, "overwrite"),
-            merge=bool_param(params, "merge"),
         )
     elif action == "dataset_create":
         create_dataset(
@@ -325,6 +329,10 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             model_id=text_param(params, "model_id"),
             checkpoint=text_param(params, "checkpoint"),
             scenario_set_id=text_param(params, "scenario_set_id"),
+            source_scenario_set_id=text_param(params, "source_scenario_set_id"),
+            source_timetable_path=text_param(params, "source_timetable_path"),
+            source_mileage_path=text_param(params, "source_mileage_path"),
+            output_prefix=text_param(params, "output_prefix"),
             num_samples=int_param(params, "num_samples"),
             seed=int_param(params, "seed"),
             device=text_param(params, "device"),
