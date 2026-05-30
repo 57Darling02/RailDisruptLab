@@ -146,6 +146,11 @@ def list_projects() -> List[Dict[str, object]]:
     return backend.list_projects()
 
 
+@api.get("/project-options")
+def list_project_options(q: str = "", limit: int = 50) -> List[Dict[str, object]]:
+    return backend.list_project_options(query=q, limit=limit)
+
+
 @api.post("/projects")
 def create_project(request: ProjectCreateRequest) -> Dict[str, object]:
     return _task_response(backend.create_project(request.project_id))
@@ -159,6 +164,16 @@ def delete_project(project_id: str) -> Dict[str, object]:
 @api.get("/projects/{project_id}")
 def get_project(project_id: str) -> Dict[str, object]:
     return backend.get_project_state(project_id)
+
+
+@api.get("/projects/{project_id}/resource-options")
+def list_resource_options(
+    project_id: str,
+    resource: str = Query(...),
+    q: str = "",
+    limit: int = 50,
+) -> List[Dict[str, object]]:
+    return backend.list_resource_options(project_id, resource, query=q, limit=limit)
 
 
 @api.get("/projects/{project_id}/scenario-sets")

@@ -36,9 +36,9 @@ def get_project_state(project_id: str, projects_root: Path = PROJECTS_ROOT) -> D
         "exists": layout.root.is_dir(),
         "has_context": layout.context_json.is_file(),
         "source_files": _files(layout.source_dir),
-        "scenario_sets": _scenario_sets(layout),
-        "datasets": _datasets(layout),
-        "models": _models(layout),
+        "scenario_sets": list_project_scenario_sets(layout),
+        "datasets": list_project_datasets(layout),
+        "models": list_project_models(layout),
     }
 
 
@@ -56,7 +56,7 @@ def _files(root: Path) -> List[Dict[str, object]]:
     ]
 
 
-def _scenario_sets(layout: ProjectLayout) -> List[Dict[str, object]]:
+def list_project_scenario_sets(layout: ProjectLayout) -> List[Dict[str, object]]:
     if not layout.scenario_sets_dir.is_dir():
         return []
     result: List[Dict[str, object]] = []
@@ -73,7 +73,7 @@ def _scenario_sets(layout: ProjectLayout) -> List[Dict[str, object]]:
     return result
 
 
-def _datasets(layout: ProjectLayout) -> List[Dict[str, object]]:
+def list_project_datasets(layout: ProjectLayout) -> List[Dict[str, object]]:
     if not layout.datasets_dir.is_dir():
         return []
     result: List[Dict[str, object]] = []
@@ -98,7 +98,7 @@ def _datasets(layout: ProjectLayout) -> List[Dict[str, object]]:
     return result
 
 
-def _models(layout: ProjectLayout) -> List[Dict[str, object]]:
+def list_project_models(layout: ProjectLayout) -> List[Dict[str, object]]:
     if not layout.model_dir.is_dir():
         return []
     result: List[Dict[str, object]] = []

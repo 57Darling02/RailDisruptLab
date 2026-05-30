@@ -6,7 +6,13 @@ from typing import Any, Dict, List
 
 from core.project_layout import PROJECTS_ROOT, ProjectLayout, require_id, sanitize_id, to_posix
 from core.scenario_config import load_scenario_document, scenario_file_by_id, scenario_files
-from backend.state import get_project_state, list_projects
+from backend.state import (
+    get_project_state,
+    list_project_datasets,
+    list_project_models,
+    list_project_scenario_sets,
+    list_projects,
+)
 
 
 class ProjectRepository:
@@ -24,17 +30,13 @@ class ProjectRepository:
         return get_project_state(project_id, self.projects_root)
 
     def list_scenario_sets(self, project_id: str) -> List[Dict[str, object]]:
-        layout = self.layout(project_id)
-        if not layout.scenario_sets_dir.is_dir():
-            return []
-        return [
-            {
-                "scenario_set_id": root.name,
-                "root": to_posix(root),
-                "case_count": len(scenario_files(root)),
-            }
-            for root in sorted(path for path in layout.scenario_sets_dir.iterdir() if path.is_dir())
-        ]
+        return list_project_scenario_sets(self.layout(project_id))
+
+    def list_datasets(self, project_id: str) -> List[Dict[str, object]]:
+        return list_project_datasets(self.layout(project_id))
+
+    def list_models(self, project_id: str) -> List[Dict[str, object]]:
+        return list_project_models(self.layout(project_id))
 
     def list_scenarios(self, project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
         root = self.layout(project_id).scenario_set(scenario_set_id).root

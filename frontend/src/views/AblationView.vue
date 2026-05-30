@@ -15,6 +15,7 @@ import type {
   ScenarioMetricCard,
   ScenarioSet,
   ScenarioSetVisualization,
+  ResourceOption,
 } from '@/types'
 
 type ScenarioAnalysisMode = 'absolute' | 'relative'
@@ -37,6 +38,12 @@ const candidateDatasetIds = ref<string[]>([])
 const datasetSolveAnalysis = ref<DatasetSolveAnalysis | null>(null)
 const datasetCompareLoading = ref(false)
 const datasetAnalysisMode = ref<ScenarioAnalysisMode>('relative')
+const scenarioSetOptions = ref<ResourceOption[]>([])
+const scenarioSetOptionsLoading = ref(false)
+const datasetOptions = ref<ResourceOption[]>([])
+const datasetOptionsLoading = ref(false)
+let scenarioSetOptionRequestSeq = 0
+let datasetOptionRequestSeq = 0
 const scenarioBusy = computed(() => Boolean(props.busy || scenarioCompareLoading.value))
 const datasetBusy = computed(() => Boolean(props.busy || datasetCompareLoading.value))
 
@@ -50,8 +57,14 @@ const baselineVisualization = computed(() =>
   scenarioItems.value[0] ??
   null,
 )
-const candidateScenarioSets = computed(() =>
-  props.scenarioSets.filter((item) => item.scenario_set_id !== baselineScenarioSetId.value),
+const scenarioSetSelectOptions = computed(() =>
+  mergeSelectedOptions(scenarioSetOptions.value, [
+    { value: baselineScenarioSetId.value, label: baselineScenarioSetId.value },
+    ...candidateScenarioSetIds.value.map((value) => ({ value, label: value })),
+  ]),
+)
+const candidateScenarioSetOptions = computed(() =>
+  scenarioSetSelectOptions.value.filter((item) => item.value !== baselineScenarioSetId.value),
 )
 const scenarioCategoryOption = computed(() =>
   buildScenarioCategoryOption(scenarioItems.value, scenarioAnalysisMode.value),
@@ -105,8 +118,14 @@ const parameterRows = computed(() => scenarioItems.value.flatMap((item) => param
 const incompleteDatasetMessages = computed(() =>
   comparedDatasets.value.flatMap((item) => datasetQualityMessages(item)),
 )
-const candidateDatasets = computed(() =>
-  props.datasets.filter((item) => item.dataset_id !== baselineDatasetId.value),
+const datasetSelectOptions = computed(() =>
+  mergeSelectedOptions(datasetOptions.value, [
+    { value: baselineDatasetId.value, label: baselineDatasetId.value },
+    ...candidateDatasetIds.value.map((value) => ({ value, label: value })),
+  ]),
+)
+const candidateDatasetOptions = computed(() =>
+  datasetSelectOptions.value.filter((item) => item.value !== baselineDatasetId.value),
 )
 const datasetAnalysisItems = computed(() => datasetSolveAnalysis.value?.datasets ?? [])
 const datasetSummaryRows = computed(() => datasetAnalysisItems.value.flatMap(datasetMetricTableRows))
@@ -168,6 +187,66 @@ watch(baselineDatasetId, () => {
     (datasetId) => datasetId !== baselineDatasetId.value,
   )
 })
+
+async function loadScenarioSetOptions(query = '') {
+  if (!props.selectedProjectId) {
+    scenarioSetOptions.value = []
+    return
+  }
+  const requestSeq = scenarioSetOptionRequestSeq + 1
+  scenarioSetOptionRequestSeq = requestSeq
+  scenarioSetOptionsLoading.value = true
+  try {
+    const options = await api.listResourceOptions(props.selectedProjectId, 'scenario_sets', query)
+    if (requestSeq === scenarioSetOptionRequestSeq) scenarioSetOptions.value = options
+  } catch (error) {
+    if (requestSeq === scenarioSetOptionRequestSeq) {
+      scenarioSetOptions.value = []
+      ElMessage.error(error instanceof Error ? error.message : String(error))
+    }
+  } finally {
+    if (requestSeq === scenarioSetOptionRequestSeq) scenarioSetOptionsLoading.value = false
+  }
+}
+
+async function loadDatasetOptions(query = '') {
+  if (!props.selectedProjectId) {
+    datasetOptions.value = []
+    return
+  }
+  const requestSeq = datasetOptionRequestSeq + 1
+  datasetOptionRequestSeq = requestSeq
+  datasetOptionsLoading.value = true
+  try {
+    const options = await api.listResourceOptions(props.selectedProjectId, 'datasets', query)
+    if (requestSeq === datasetOptionRequestSeq) datasetOptions.value = options
+  } catch (error) {
+    if (requestSeq === datasetOptionRequestSeq) {
+      datasetOptions.value = []
+      ElMessage.error(error instanceof Error ? error.message : String(error))
+    }
+  } finally {
+    if (requestSeq === datasetOptionRequestSeq) datasetOptionsLoading.value = false
+  }
+}
+
+function reloadScenarioSetOptionsOnOpen(visible: boolean) {
+  if (visible) void loadScenarioSetOptions('')
+}
+
+function reloadDatasetOptionsOnOpen(visible: boolean) {
+  if (visible) void loadDatasetOptions('')
+}
+
+function mergeSelectedOptions(options: ResourceOption[], selected: ResourceOption[]) {
+  const result = [...options]
+  for (const item of selected) {
+    if (item.value && !result.some((option) => option.value === item.value)) {
+      result.unshift(item)
+    }
+  }
+  return result
+}
 
 async function compareScenarioSets() {
   if (scenarioBusy.value) return
@@ -819,15 +898,20 @@ function datasetQualityMessages(item: DatasetSummary) {
                 <el-select
                   v-model="baselineScenarioSetId"
                   filterable
+                  remote
+                  reserve-keyword
                   class="analysis-select full-width"
                   placeholder="选择基准"
                   :disabled="scenarioBusy"
+                  :loading="scenarioSetOptionsLoading"
+                  :remote-method="loadScenarioSetOptions"
+                  @visible-change="reloadScenarioSetOptionsOnOpen"
                 >
                   <el-option
-                    v-for="item in scenarioSets"
-                    :key="item.scenario_set_id"
-                    :label="item.scenario_set_id"
-                    :value="item.scenario_set_id"
+                    v-for="item in scenarioSetSelectOptions"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="item.value"
                   />
                 </el-select>
               </div>
@@ -839,17 +923,22 @@ function datasetQualityMessages(item: DatasetSummary) {
                   v-model="candidateScenarioSetIds"
                   multiple
                   filterable
+                  remote
+                  reserve-keyword
                   collapse-tags
                   collapse-tags-tooltip
                   class="analysis-select full-width"
                   placeholder="选择对比集"
                   :disabled="scenarioBusy"
+                  :loading="scenarioSetOptionsLoading"
+                  :remote-method="loadScenarioSetOptions"
+                  @visible-change="reloadScenarioSetOptionsOnOpen"
                 >
                   <el-option
-                    v-for="item in candidateScenarioSets"
-                    :key="item.scenario_set_id"
-                    :label="item.scenario_set_id"
-                    :value="item.scenario_set_id"
+                    v-for="item in candidateScenarioSetOptions"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="item.value"
                   />
                 </el-select>
               </div>
@@ -1092,15 +1181,20 @@ function datasetQualityMessages(item: DatasetSummary) {
                 <el-select
                   v-model="baselineDatasetId"
                   filterable
+                  remote
+                  reserve-keyword
                   class="analysis-select full-width"
                   placeholder="选择基准"
                   :disabled="datasetBusy"
+                  :loading="datasetOptionsLoading"
+                  :remote-method="loadDatasetOptions"
+                  @visible-change="reloadDatasetOptionsOnOpen"
                 >
                   <el-option
-                    v-for="item in datasets"
-                    :key="item.dataset_id"
-                    :label="item.dataset_id"
-                    :value="item.dataset_id"
+                    v-for="item in datasetSelectOptions"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="item.value"
                   />
                 </el-select>
               </div>
@@ -1112,17 +1206,22 @@ function datasetQualityMessages(item: DatasetSummary) {
                   v-model="candidateDatasetIds"
                   multiple
                   filterable
+                  remote
+                  reserve-keyword
                   collapse-tags
                   collapse-tags-tooltip
                   class="analysis-select full-width"
                   placeholder="选择对比集"
                   :disabled="datasetBusy"
+                  :loading="datasetOptionsLoading"
+                  :remote-method="loadDatasetOptions"
+                  @visible-change="reloadDatasetOptionsOnOpen"
                 >
                   <el-option
-                    v-for="item in candidateDatasets"
-                    :key="item.dataset_id"
-                    :label="item.dataset_id"
-                    :value="item.dataset_id"
+                    v-for="item in candidateDatasetOptions"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="item.value"
                   />
                 </el-select>
               </div>

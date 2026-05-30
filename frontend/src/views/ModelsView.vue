@@ -8,18 +8,27 @@ import type {
   SchemaPoolRow,
   SchemaTaskRow,
 } from '@/views/types'
-import type { ModelCheckpoint, ModelDetail, ModelLossPoint, ModelSummary, Task } from '@/types'
+import type {
+  ModelCheckpoint,
+  ModelDetail,
+  ModelLossPoint,
+  ModelSummary,
+  ResourceOption,
+  Task,
+} from '@/types'
 import { taskOutcome } from '@/task-status'
 import type { TaskTagType } from '@/task-status'
-import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
+import EntityToolbar from '@/components/EntityToolbar.vue'
 
 const props = defineProps<{
   selectedModelId: string
   pendingModelId: string
   selectedModel: ModelSummary | null
   models: ModelSummary[]
+  modelOptions: ResourceOption[]
   modelDetail: ModelDetail | null
   modelDetailLoading: boolean
+  resourceLoading: boolean
   modelSummaryEntries: MetadataEntry[]
   modelConfigEntries: MetadataEntry[]
   modelSchemaSummaryEntries: MetadataEntry[]
@@ -40,6 +49,7 @@ const props = defineProps<{
 defineEmits<{
   'update:selectedModelId': [value: string]
   reloadModels: [visible: boolean]
+  searchModels: [query: string]
   train: []
   retrain: []
   deleteModel: [modelId: string]
@@ -69,12 +79,6 @@ const lossChartOption = computed(() => buildLossChartOption(epochLossPoints.valu
 const latestLoss = computed(() => lossPoints.value.at(-1))
 const latestEpochLoss = computed(() => epochLossPoints.value.at(-1))
 const selectedTrainTask = computed(() => findModelTrainTask(props.tasks, props.selectedModelId))
-const modelOptions = computed<EntityOption[]>(() =>
-  props.models.map((item) => ({
-    label: item.model_id,
-    value: item.model_id,
-  })),
-)
 const trainProgress = computed(() => modelTrainingProgress())
 const graphProgress = computed(() => props.modelDetail?.graph_progress ?? {})
 const graphSampleProgress = computed(() => graphProgress.value.sample_graphs ?? {})
@@ -240,14 +244,26 @@ function escapeRegExp(value: string) {
         label="扰动生成模型"
         :model-value="selectedModelId"
         :options="modelOptions"
+        :loading="resourceLoading"
         placeholder="选择扰动生成模型"
         delete-label="删除扰动生成模型"
         :busy="busy"
         @update:model-value="$emit('update:selectedModelId', $event)"
         @visible-change="$emit('reloadModels', $event)"
+        @search="$emit('searchModels', $event)"
         @add="$emit('train')"
         @delete="$emit('deleteModel', $event)"
       />
+      <div v-if="!models.length && !pendingModelId" class="primary-empty-panel">
+        <el-empty :image-size="120">
+          <template #description>
+            <div class="primary-empty-title">暂无扰动生成模型资源</div>
+          </template>
+          <el-button type="primary" size="large" :disabled="busy" @click="$emit('train')">
+            训练扰动生成模型
+          </el-button>
+        </el-empty>
+      </div>
       <el-alert
         v-if="pendingModelId"
         class="dialog-section"
@@ -258,6 +274,7 @@ function escapeRegExp(value: string) {
       />
 
       <el-card
+        v-if="models.length || pendingModelId"
         v-loading="modelDetailLoading"
         element-loading-text="正在加载模型数据..."
         shadow="never"

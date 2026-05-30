@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-
-import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
+import EntityToolbar from '@/components/EntityToolbar.vue'
 import type { ArtifactGroup } from '@/views/types'
-import type { DatasetSummary } from '@/types'
+import type { DatasetSummary, ResourceOption } from '@/types'
 
 const props = defineProps<{
   selectedDatasetId: string
   selectedDataset: DatasetSummary | null
   datasets: DatasetSummary[]
+  datasetOptions: ResourceOption[]
   artifactGroups: ArtifactGroup[]
+  loading: boolean
+  resourceLoading: boolean
   formatBytes: (size: number) => string
   busy?: boolean
 }>()
@@ -17,6 +18,7 @@ const props = defineProps<{
 defineEmits<{
   'update:selectedDatasetId': [value: string]
   reloadDatasets: [visible: boolean]
+  searchDatasets: [query: string]
   createDataset: []
   deleteDataset: [datasetId: string]
   refreshArtifacts: []
@@ -28,12 +30,6 @@ defineEmits<{
   openTimetable: [group: ArtifactGroup]
 }>()
 
-const datasetOptions = computed<EntityOption[]>(() =>
-  props.datasets.map((item) => ({
-    label: item.dataset_id,
-    value: item.dataset_id,
-  })),
-)
 </script>
 
 <template>
@@ -43,11 +39,13 @@ const datasetOptions = computed<EntityOption[]>(() =>
         label="MILP 实例集"
         :model-value="selectedDatasetId"
         :options="datasetOptions"
+        :loading="resourceLoading"
         placeholder="选择 MILP 实例集"
         delete-label="删除 MILP 实例集"
         :busy="busy"
         @update:model-value="$emit('update:selectedDatasetId', $event)"
         @visible-change="$emit('reloadDatasets', $event)"
+        @search="$emit('searchDatasets', $event)"
         @add="$emit('createDataset')"
         @delete="$emit('deleteDataset', $event)"
       />
@@ -55,23 +53,30 @@ const datasetOptions = computed<EntityOption[]>(() =>
       <div v-if="!datasets.length" class="primary-empty-panel">
         <el-empty :image-size="120">
           <template #description>
-            <div class="primary-empty-title">请先新建MILP实例集</div>
+            <div class="primary-empty-title">暂无 MILP 实例集资源</div>
           </template>
           <el-button type="primary" size="large" :disabled="busy" @click="$emit('createDataset')">
-            新建MILP实例集
+            构建 MILP 实例集
           </el-button>
         </el-empty>
       </div>
 
-      <div v-else class="page-stack">
+      <div
+        v-else
+        v-loading="loading"
+        class="page-stack"
+        element-loading-text="正在加载 MILP 实例集数据..."
+      >
       <el-card shadow="never">
         <template #header>
           <div class="card-header">
-            <span>MILP 实例集信息</span>
-            <el-button :disabled="busy" @click="$emit('refreshArtifacts')">刷新</el-button>
+            <span>MILP 实例集概览</span>
+            <el-button :disabled="busy" :loading="loading" @click="$emit('refreshArtifacts')">
+              刷新
+            </el-button>
           </div>
         </template>
-        <el-empty v-if="!selectedDatasetId" description="请选择或新增 MILP 实例集" />
+        <el-empty v-if="!selectedDatasetId" description="请选择或构建 MILP 实例集" />
         <template v-else>
           <el-descriptions :column="2" border size="small">
             <el-descriptions-item label="MILP 实例集 ID">
@@ -96,11 +101,11 @@ const datasetOptions = computed<EntityOption[]>(() =>
       <el-card shadow="never">
         <template #header>
           <div class="card-header">
-            <span>构建产物</span>
+            <span>实例资源</span>
             <div class="scenario-actions">
               <span class="muted-text">{{ artifactGroups.length }} 个实例</span>
               <el-button :disabled="!selectedDatasetId || busy" @click="$emit('buildDataset')">
-                从场景构建
+                构建/重建
               </el-button>
               <el-button :disabled="!selectedDatasetId || busy" @click="$emit('solveAll')">
                 全部求解
@@ -112,7 +117,7 @@ const datasetOptions = computed<EntityOption[]>(() =>
           </div>
         </template>
         <el-scrollbar class="table-scroll" max-height="420px">
-          <el-table :data="artifactGroups" empty-text="暂无构建产物">
+          <el-table :data="artifactGroups" empty-text="暂无实例资源">
             <el-table-column prop="case_id" label="场景 ID" width="180" />
             <el-table-column label="总大小" width="120">
               <template #default="{ row }">{{ formatBytes(row.size_bytes) }}</template>

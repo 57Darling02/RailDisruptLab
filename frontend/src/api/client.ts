@@ -8,6 +8,7 @@ import type {
   PlanTimetableState,
   ProjectState,
   ProjectSummary,
+  ResourceOption,
   ScenarioSet,
   ScenarioSetVisualization,
   ScenarioOptions,
@@ -62,6 +63,13 @@ function jsonBody(payload: unknown): RequestInit {
 export const api = {
   health: () => request<JsonObject>('/health'),
   listProjects: () => request<ProjectSummary[]>('/projects'),
+  listProjectOptions: (query = '', limit = 50) => {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+    })
+    return request<ResourceOption[]>(`/project-options?${params}`)
+  },
   createProject: (projectId: string) =>
     request<TaskResponse>('/projects', {
       method: 'POST',
@@ -72,6 +80,14 @@ export const api = {
       method: 'DELETE',
     }),
   getProject: (projectId: string) => request<ProjectState>(`/projects/${projectId}`),
+  listResourceOptions: (projectId: string, resource: string, query = '', limit = 50) => {
+    const params = new URLSearchParams({
+      resource,
+      q: query,
+      limit: String(limit),
+    })
+    return request<ResourceOption[]>(`/projects/${projectId}/resource-options?${params}`)
+  },
   listScenarioSets: (projectId: string) =>
     request<ScenarioSet[]>(`/projects/${projectId}/scenario-sets`),
   createScenarioSet: (projectId: string, scenarioSetId: string, existOk = false) =>

@@ -29,6 +29,11 @@ export interface ProjectSummary {
   has_context: boolean
 }
 
+export interface ResourceOption {
+  label: string
+  value: string
+}
+
 export interface FileState {
   name: string
   path: string

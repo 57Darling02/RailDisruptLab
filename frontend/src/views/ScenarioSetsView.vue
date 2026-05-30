@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 
 import { barPercentLabel } from '@/chart-options'
 import ChartPanel from '@/components/ChartPanel.vue'
-import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
+import EntityToolbar from '@/components/EntityToolbar.vue'
 import TimetableChart from '@/components/TimetableChart.vue'
 import type {
   ScenarioCoverageRow,
@@ -11,20 +11,24 @@ import type {
   ScenarioSetVisualization,
   ScenarioSummary,
   ScenarioVisualizationItem,
+  ResourceOption,
 } from '@/types'
 
 const props = defineProps<{
   selectedScenarioSetId: string
   scenarioSets: ScenarioSet[]
+  scenarioSetOptions: ResourceOption[]
   scenarios: ScenarioSummary[]
   visualization: ScenarioSetVisualization | null
   loading: boolean
+  resourceLoading: boolean
   busy?: boolean
 }>()
 
 defineEmits<{
   'update:selectedScenarioSetId': [value: string]
   reloadScenarioSets: [visible: boolean]
+  searchScenarioSets: [query: string]
   createScenarioSet: []
   deleteScenarioSet: [scenarioSetId: string]
   normalGenerate: []
@@ -57,13 +61,6 @@ const counts = computed(() => props.visualization?.summary.disturbance_counts)
 const scenarioById = computed(
   () => new Map(props.visualization?.scenarios.map((item) => [item.scenario_id, item]) ?? []),
 )
-const scenarioSetOptions = computed<EntityOption[]>(() =>
-  props.scenarioSets.map((item) => ({
-    label: `${item.scenario_set_id} (${item.case_count})`,
-    value: item.scenario_set_id,
-  })),
-)
-
 watch(
   () => props.visualization?.scenario_set_id,
   () => {
@@ -183,11 +180,13 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
         label="扰动场景集"
         :model-value="selectedScenarioSetId"
         :options="scenarioSetOptions"
+        :loading="resourceLoading"
         placeholder="选择扰动场景集"
         delete-label="删除扰动场景集"
         :busy="busy"
         @update:model-value="$emit('update:selectedScenarioSetId', $event)"
         @visible-change="$emit('reloadScenarioSets', $event)"
+        @search="$emit('searchScenarioSets', $event)"
         @add="$emit('createScenarioSet')"
         @delete="$emit('deleteScenarioSet', $event)"
       />
@@ -195,7 +194,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
       <div v-if="!scenarioSets.length" class="primary-empty-panel">
         <el-empty :image-size="120">
           <template #description>
-            <div class="primary-empty-title">请先新建扰动场景集</div>
+            <div class="primary-empty-title">暂无扰动场景集资源</div>
           </template>
           <el-button type="primary" size="large" :disabled="busy" @click="$emit('createScenarioSet')">
             新建扰动场景集
@@ -304,7 +303,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
           <template #header>
             <div class="card-header">
               <div>
-                <span>当前扰动场景集内的场景</span>
+                <span>场景资源</span>
                 <span v-if="selectedScenarioSetId" class="scenario-set-context">
                   {{ selectedScenarioSetId }}
                 </span>
@@ -315,7 +314,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
                   :disabled="!selectedScenarioSetId || busy"
                   @click="$emit('normalGenerate')"
                 >
-                  批量新增场景
+                  批量生成场景
                 </el-button>
                 <el-button
                   type="primary"

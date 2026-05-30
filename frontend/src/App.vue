@@ -41,6 +41,7 @@ import type {
   PlanTimetableState,
   ProjectState,
   ProjectSummary,
+  ResourceOption,
   ScenarioOptions,
   ScenarioSetVisualization,
   ScenarioSummary,
@@ -50,6 +51,7 @@ import type {
 type PageKey = 'dashboard' | 'scenarios' | 'datasets' | 'models' | 'ablation-scenarios' | 'ablation-datasets'
 type DatasetBuildSource = 'scenario_set' | 'scenario'
 type DatasetCreateMode = 'empty' | 'scenario_set'
+type ResourceKind = 'scenario_sets' | 'datasets' | 'models'
 type ScenarioDelayForm = { event_anchor_id: string; seconds: number }
 type ScenarioSpeedLimitForm = {
   section_anchor_id: string
@@ -139,8 +141,8 @@ const TASK_LABELS = {
 } as const
 const PAGE_TASK_FILTERS = [
   { value: 'dashboard', label: '仪表盘', labels: TASK_LABELS.dashboard },
-  { value: 'scenarios', label: '构建扰动场景', labels: TASK_LABELS.scenarios },
-  { value: 'datasets', label: '构建MILP实例', labels: TASK_LABELS.datasets },
+  { value: 'scenarios', label: '扰动场景集', labels: TASK_LABELS.scenarios },
+  { value: 'datasets', label: 'MILP 实例集', labels: TASK_LABELS.datasets },
   { value: 'models', label: '扰动生成模型', labels: TASK_LABELS.models },
   { value: 'ablation', label: '消融分析', labels: [] },
 ] as const
@@ -163,6 +165,8 @@ const TRAINING_CONFIG_LABELS: Record<string, string> = {
 const TRAINING_CONFIG_ORDER = Object.keys(TRAINING_CONFIG_LABELS)
 
 const projects = ref<ProjectSummary[]>([])
+const projectOptions = ref<ResourceOption[]>([])
+const projectOptionsLoading = ref(false)
 const selectedProjectId = ref('')
 const project = ref<ProjectState | null>(null)
 const planTimetable = ref<PlanTimetableState | null>(null)
@@ -186,6 +190,8 @@ const prepareForm = ref({
 })
 
 const selectedScenarioSetId = ref('')
+const scenarioSetOptions = ref<ResourceOption[]>([])
+const scenarioSetOptionsLoading = ref(false)
 const scenarios = ref<ScenarioSummary[]>([])
 const scenarioSetVisualization = ref<ScenarioSetVisualization | null>(null)
 const scenarioSetLoading = ref(false)
@@ -207,7 +213,10 @@ const normalGenerateForm = ref({
 })
 
 const selectedDatasetId = ref('')
+const datasetOptions = ref<ResourceOption[]>([])
+const datasetOptionsLoading = ref(false)
 const datasetArtifacts = ref<ArtifactSummary[]>([])
+const datasetLoading = ref(false)
 const datasetCreateDialogVisible = ref(false)
 const datasetCreateMode = ref<DatasetCreateMode>('scenario_set')
 const newDatasetId = ref('')
@@ -228,6 +237,8 @@ const taskLogTarget = ref<Task | null>(null)
 const datasetRunForm = ref<DatasetRunForm>({ ...DEFAULT_DATASET_RUN_FORM })
 
 const selectedModelId = ref('')
+const modelOptions = ref<ResourceOption[]>([])
+const modelOptionsLoading = ref(false)
 const pendingModelId = ref('')
 const pendingModelTaskId = ref<number | null>(null)
 const modelDetail = ref<ModelDetail | null>(null)
@@ -251,6 +262,12 @@ const generationForm = ref({
 
 let pollHandle = 0
 let durationTickHandle = 0
+const resourceOptionRequestSeq = reactive<Record<ResourceKind, number>>({
+  scenario_sets: 0,
+  datasets: 0,
+  models: 0,
+})
+let projectOptionRequestSeq = 0
 
 const hasProject = computed(() => Boolean(selectedProjectId.value && project.value?.exists))
 const originalGraphActive = computed(() => Boolean(project.value?.has_context))
@@ -259,6 +276,13 @@ const trainModelPrefix = computed(() => {
   return scenarioSetId ? `train_${scenarioSetId}` : ''
 })
 const generationScenarioSetPrefix = computed(() => selectedModelId.value.trim())
+const projectSelectOptions = computed(() =>
+  mergeSelectedResourceOption(
+    projectOptions.value,
+    selectedProjectId.value,
+    selectedProjectId.value,
+  ),
+)
 const scenarioSets = computed(() => project.value?.scenario_sets ?? [])
 const datasets = computed(() => project.value?.datasets ?? [])
 const models = computed(() => {
@@ -280,6 +304,40 @@ const models = computed(() => {
     },
   ]
 })
+const scenarioSetSelectOptions = computed(() =>
+  mergeSelectedResourceOptions(scenarioSetOptions.value, [
+    {
+      value: selectedScenarioSetId.value,
+      label: resourceLabel(scenarioSets.value, 'scenario_set_id', selectedScenarioSetId.value, 'case_count'),
+    },
+    {
+      value: datasetCreateScenarioSetId.value,
+      label: resourceLabel(scenarioSets.value, 'scenario_set_id', datasetCreateScenarioSetId.value, 'case_count'),
+    },
+    {
+      value: datasetBuildForm.value.scenario_set_id,
+      label: resourceLabel(scenarioSets.value, 'scenario_set_id', datasetBuildForm.value.scenario_set_id, 'case_count'),
+    },
+    {
+      value: trainForm.scenario_set_id,
+      label: resourceLabel(scenarioSets.value, 'scenario_set_id', trainForm.scenario_set_id, 'case_count'),
+    },
+  ]),
+)
+const datasetSelectOptions = computed(() =>
+  mergeSelectedResourceOption(
+    datasetOptions.value,
+    selectedDatasetId.value,
+    resourceLabel(datasets.value, 'dataset_id', selectedDatasetId.value, 'case_count'),
+  ),
+)
+const modelSelectOptions = computed(() =>
+  mergeSelectedResourceOption(
+    modelOptions.value,
+    selectedModelId.value,
+    resourceLabel(models.value, 'model_id', selectedModelId.value, 'sample_count'),
+  ),
+)
 const selectedDataset = computed(
   () => datasets.value.find((item) => item.dataset_id === selectedDatasetId.value) ?? null,
 )
@@ -334,6 +392,7 @@ watch(selectedProjectId, async (_projectId, previousProjectId) => {
     selectedDatasetId.value = ''
     selectedModelId.value = ''
     planTimetable.value = null
+    clearResourceOptions()
   }
   await loadSelectedProject()
 })
@@ -348,7 +407,7 @@ watch(selectedScenarioSetId, async () => {
 })
 
 watch(selectedDatasetId, async () => {
-  await loadDatasetArtifacts()
+  await loadDatasetArtifacts(true)
 })
 
 watch(datasetCreateMode, (mode) => {
@@ -423,10 +482,34 @@ async function refreshProjects() {
   }
 }
 
+async function loadProjectOptions(query = '') {
+  const requestSeq = projectOptionRequestSeq + 1
+  projectOptionRequestSeq = requestSeq
+  projectOptionsLoading.value = true
+  try {
+    const options = await api.listProjectOptions(query)
+    if (requestSeq === projectOptionRequestSeq) projectOptions.value = options
+  } catch (error) {
+    if (requestSeq === projectOptionRequestSeq) {
+      projectOptions.value = []
+      notifyError(error)
+    }
+  } finally {
+    if (requestSeq === projectOptionRequestSeq) projectOptionsLoading.value = false
+  }
+}
+
+async function reloadProjectOptionsOnOpen(visible: boolean) {
+  if (!visible) return
+  await loadProjectOptions('')
+  await refreshProjects()
+}
+
 async function loadSelectedProject(showMessage = true) {
   if (!selectedProjectId.value) {
     project.value = null
     planTimetable.value = null
+    clearResourceOptions()
     return
   }
   try {
@@ -439,8 +522,15 @@ async function loadSelectedProject(showMessage = true) {
   } catch (error) {
     project.value = null
     planTimetable.value = null
+    clearResourceOptions()
     if (showMessage) notifyError(error)
   }
+}
+
+function clearResourceOptions() {
+  scenarioSetOptions.value = []
+  datasetOptions.value = []
+  modelOptions.value = []
 }
 
 function selectFirstOptions() {
@@ -473,6 +563,70 @@ function selectFirstOptions() {
     selectedModelId.value = project.value.models[0]?.model_id ?? ''
   }
   reconcilePendingModel()
+}
+
+async function loadResourceOptions(
+  resource: ResourceKind,
+  query: string,
+  state: { target: { value: ResourceOption[] }; loading: { value: boolean } },
+) {
+  if (!selectedProjectId.value) {
+    state.target.value = []
+    return
+  }
+  const projectId = selectedProjectId.value
+  const requestSeq = resourceOptionRequestSeq[resource] + 1
+  resourceOptionRequestSeq[resource] = requestSeq
+  state.loading.value = true
+  try {
+    const options = await api.listResourceOptions(projectId, resource, query)
+    if (requestSeq === resourceOptionRequestSeq[resource] && projectId === selectedProjectId.value) {
+      state.target.value = options
+    }
+  } catch (error) {
+    if (requestSeq === resourceOptionRequestSeq[resource] && projectId === selectedProjectId.value) {
+      state.target.value = []
+      notifyError(error)
+    }
+  } finally {
+    if (requestSeq === resourceOptionRequestSeq[resource] && projectId === selectedProjectId.value) {
+      state.loading.value = false
+    }
+  }
+}
+
+function mergeSelectedResourceOption(
+  options: ResourceOption[],
+  value: string,
+  label: string,
+) {
+  if (!value || options.some((item) => item.value === value)) return options
+  return [{ label: label || value, value }, ...options]
+}
+
+function mergeSelectedResourceOptions(
+  options: ResourceOption[],
+  selected: Array<{ value: string; label: string }>,
+) {
+  let result = options
+  for (const item of selected) {
+    result = mergeSelectedResourceOption(result, item.value, item.label)
+  }
+  return result
+}
+
+function resourceLabel<T extends Record<string, unknown>>(
+  items: T[],
+  idKey: keyof T,
+  value: string,
+  countKey: keyof T,
+) {
+  const item = items.find((entry) => entry[idKey] === value)
+  return item ? resourceOptionLabel(value, item[countKey]) : value
+}
+
+function resourceOptionLabel(value: string, count: unknown) {
+  return typeof count === 'number' ? `${value} (${count})` : value
 }
 
 async function hydrateActivePage(showLoading = true) {
@@ -537,6 +691,7 @@ async function createProject() {
     newProjectId.value = ''
     projectDialogVisible.value = false
     selectedProjectId.value = projectId
+    projectOptions.value = [{ label: projectId, value: projectId }]
     await refreshTasks(false)
     return response.task
   })
@@ -544,9 +699,10 @@ async function createProject() {
 
 async function removeSelectedProject() {
   if (!selectedProjectId.value) return
+  const projectId = selectedProjectId.value
   try {
     await ElMessageBox.confirm(
-      `确认移除项目 ${selectedProjectId.value}？该操作会删除本地项目目录。`,
+      `确认移除项目 ${projectId}？该操作会删除本地项目目录。`,
       '移除项目',
       {
         type: 'warning',
@@ -556,11 +712,13 @@ async function removeSelectedProject() {
     return
   }
   await submitTask('移除项目', async () => {
-    const response = await api.deleteProject(selectedProjectId.value)
+    const response = await api.deleteProject(projectId)
     trackTask(response.task)
     selectedProjectId.value = ''
     project.value = null
     planTimetable.value = null
+    clearResourceOptions()
+    projectOptions.value = projectOptions.value.filter((item) => item.value !== projectId)
     return response.task
   })
 }
@@ -599,6 +757,7 @@ async function createScenarioSet() {
     const response = await api.createScenarioSet(selectedProjectId.value, scenarioSetId)
     trackTask(response.task)
     selectedScenarioSetId.value = scenarioSetId
+    scenarioSetOptions.value = [{ label: scenarioSetId, value: scenarioSetId }]
     newScenarioSetId.value = ''
     scenarioSetDialogVisible.value = false
     await refreshTasks(false)
@@ -628,6 +787,7 @@ async function deleteScenarioSetById(scenarioSetId: string) {
       scenarios.value = []
       scenarioSetVisualization.value = null
     }
+    scenarioSetOptions.value = scenarioSetOptions.value.filter((item) => item.value !== scenarioSetId)
     await loadSelectedProject(false)
     return `扰动场景集 ${scenarioSetId} 已删除`
   })
@@ -702,8 +862,19 @@ async function loadScenarioSetVisualization(
 
 async function reloadScenarioSetsOnOpen(visible: boolean) {
   if (!visible) return
+  await loadResourceOptions('scenario_sets', '', {
+    target: scenarioSetOptions,
+    loading: scenarioSetOptionsLoading,
+  })
   await loadSelectedProject(false)
   await loadScenarioSetData(false)
+}
+
+async function searchScenarioSetOptions(query: string) {
+  await loadResourceOptions('scenario_sets', query, {
+    target: scenarioSetOptions,
+    loading: scenarioSetOptionsLoading,
+  })
 }
 
 async function openScenarioDialog() {
@@ -939,7 +1110,7 @@ async function createDataset() {
       return
     }
   }
-  await submitTask('新增 MILP 实例集', async () => {
+  await submitTask(importScenarioSet ? '构建 MILP 实例集' : '创建空 MILP 实例集', async () => {
     selectedDatasetId.value = datasetId
     if (importScenarioSet) {
       selectedScenarioSetId.value = scenarioSetId
@@ -984,6 +1155,7 @@ async function deleteDatasetById(datasetId: string) {
       selectedDatasetId.value = ''
       datasetArtifacts.value = []
     }
+    datasetOptions.value = datasetOptions.value.filter((item) => item.value !== datasetId)
     await loadSelectedProject(false)
     return `MILP 实例集 ${datasetId} 已删除`
   })
@@ -1061,8 +1233,10 @@ function nonNegativeNumber(value: number | null | undefined, fallback: number) {
 async function loadDatasetArtifacts(showMessage = true) {
   if (!selectedProjectId.value || !selectedDatasetId.value) {
     datasetArtifacts.value = []
+    datasetLoading.value = false
     return
   }
+  if (showMessage) datasetLoading.value = true
   try {
     datasetArtifacts.value = await api.listArtifacts(
       selectedProjectId.value,
@@ -1071,13 +1245,26 @@ async function loadDatasetArtifacts(showMessage = true) {
   } catch (error) {
     datasetArtifacts.value = []
     if (showMessage) notifyError(error)
+  } finally {
+    if (showMessage) datasetLoading.value = false
   }
 }
 
 async function reloadDatasetsOnOpen(visible: boolean) {
   if (!visible) return
+  await loadResourceOptions('datasets', '', {
+    target: datasetOptions,
+    loading: datasetOptionsLoading,
+  })
   await loadSelectedProject(false)
   await loadDatasetArtifacts(false)
+}
+
+async function searchDatasetOptions(query: string) {
+  await loadResourceOptions('datasets', query, {
+    target: datasetOptions,
+    loading: datasetOptionsLoading,
+  })
 }
 
 async function openDatasetCreateDialog() {
@@ -1337,6 +1524,7 @@ async function deleteModelById(modelId: string) {
     if (pendingModelId.value === modelId) {
       clearPendingModel()
     }
+    modelOptions.value = modelOptions.value.filter((item) => item.value !== modelId)
     await loadSelectedProject(false)
     return `扰动生成模型 ${modelId} 已删除`
   })
@@ -1344,8 +1532,19 @@ async function deleteModelById(modelId: string) {
 
 async function reloadModelsOnOpen(visible: boolean) {
   if (!visible) return
+  await loadResourceOptions('models', '', {
+    target: modelOptions,
+    loading: modelOptionsLoading,
+  })
   await loadSelectedProject(false)
   await loadModelDetails(false)
+}
+
+async function searchModelOptions(query: string) {
+  await loadResourceOptions('models', query, {
+    target: modelOptions,
+    loading: modelOptionsLoading,
+  })
 }
 
 async function loadModelDetails(showMessage = true) {
@@ -1678,8 +1877,8 @@ function notifyError(error: unknown) {
         <div class="brand">RailDisruptLab</div>
         <el-menu :default-active="activePage" @select="selectPage">
           <el-menu-item index="dashboard">仪表盘</el-menu-item>
-          <el-menu-item index="scenarios">构建扰动场景</el-menu-item>
-          <el-menu-item index="datasets">构建MILP实例</el-menu-item>
+          <el-menu-item index="scenarios">扰动场景集</el-menu-item>
+          <el-menu-item index="datasets">MILP 实例集</el-menu-item>
           <el-menu-item index="models">扰动生成模型</el-menu-item>
           <el-sub-menu index="ablation">
             <template #title>消融分析</template>
@@ -1697,14 +1896,19 @@ function notifyError(error: unknown) {
               v-model="selectedProjectId"
               placeholder="选择项目"
               filterable
+              remote
+              reserve-keyword
               class="project-select"
               :disabled="operationPending"
+              :loading="projectOptionsLoading"
+              :remote-method="loadProjectOptions"
+              @visible-change="reloadProjectOptionsOnOpen"
             >
               <el-option
-                v-for="item in projects"
-                :key="item.project_id"
-                :label="item.project_id"
-                :value="item.project_id"
+                v-for="item in projectSelectOptions"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
               />
             </el-select>
             <el-button :disabled="operationPending" @click="projectDialogVisible = true">新建</el-button>
@@ -1753,11 +1957,14 @@ function notifyError(error: unknown) {
                   v-else-if="activePage === 'scenarios'"
                   v-model:selected-scenario-set-id="selectedScenarioSetId"
                   :scenario-sets="scenarioSets"
+                  :scenario-set-options="scenarioSetSelectOptions"
                   :scenarios="scenarios"
                   :visualization="scenarioSetVisualization"
                   :loading="scenarioSetLoading"
+                  :resource-loading="scenarioSetOptionsLoading"
                   :busy="operationPending"
                   @reload-scenario-sets="reloadScenarioSetsOnOpen"
+                  @search-scenario-sets="searchScenarioSetOptions"
                   @create-scenario-set="scenarioSetDialogVisible = true"
                   @delete-scenario-set="deleteScenarioSetById"
                   @normal-generate="openNormalGenerateDialog"
@@ -1770,10 +1977,14 @@ function notifyError(error: unknown) {
                   v-model:selected-dataset-id="selectedDatasetId"
                   :selected-dataset="selectedDataset"
                   :datasets="datasets"
+                  :dataset-options="datasetSelectOptions"
                   :artifact-groups="datasetArtifactGroups"
+                  :loading="datasetLoading"
+                  :resource-loading="datasetOptionsLoading"
                   :format-bytes="formatBytes"
                   :busy="operationPending"
                   @reload-datasets="reloadDatasetsOnOpen"
+                  @search-datasets="searchDatasetOptions"
                   @create-dataset="openDatasetCreateDialog"
                   @delete-dataset="deleteDatasetById"
                   @refresh-artifacts="loadDatasetArtifacts"
@@ -1791,8 +2002,10 @@ function notifyError(error: unknown) {
                   :pending-model-id="pendingModelId"
                   :selected-model="selectedModel"
                   :models="models"
+                  :model-options="modelSelectOptions"
                   :model-detail="modelDetail"
                   :model-detail-loading="modelDetailLoading"
+                  :resource-loading="modelOptionsLoading"
                   :model-summary-entries="modelSummaryEntries"
                   :model-config-entries="modelConfigEntries"
                   :model-schema-summary-entries="modelSchemaSummaryEntries"
@@ -1809,6 +2022,7 @@ function notifyError(error: unknown) {
                   :checkpoint-role-type="checkpointRoleType"
                   :busy="operationPending"
                   @reload-models="reloadModelsOnOpen"
+                  @search-models="searchModelOptions"
                   @train="() => openTrainDialog('create')"
                   @retrain="() => openTrainDialog('retrain')"
                   @delete-model="deleteModelById"
@@ -2106,16 +2320,21 @@ function notifyError(error: unknown) {
                 </template>
                 <el-select
                   v-model="trainForm.scenario_set_id"
+                  filterable
+                  remote
+                  reserve-keyword
                   class="full-width"
                   placeholder="选择训练扰动场景集"
                   :disabled="operationPending"
+                  :loading="scenarioSetOptionsLoading"
+                  :remote-method="searchScenarioSetOptions"
                   @visible-change="reloadScenarioSetsOnOpen"
                 >
                   <el-option
-                    v-for="item in scenarioSets"
-                    :key="item.scenario_set_id"
-                    :label="`${item.scenario_set_id} (${item.case_count})`"
-                    :value="item.scenario_set_id"
+                    v-for="item in scenarioSetSelectOptions"
+                    :key="item.value"
+                    :label="item.label"
+                    :value="item.value"
                   />
                 </el-select>
               </el-form-item>
@@ -2442,30 +2661,35 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="datasetCreateDialogVisible" title="新增 MILP 实例集" width="560px">
+    <el-dialog v-model="datasetCreateDialogVisible" title="构建 MILP 实例集" width="560px">
       <el-form label-width="130px" @submit.prevent="createDataset">
         <el-form-item label="创建方式">
           <el-radio-group v-model="datasetCreateMode" :disabled="operationPending">
             <el-radio-button value="scenario_set" :disabled="!scenarioSets.length">
-              从扰动场景集引入
+              从扰动场景集构建
             </el-radio-button>
-            <el-radio-button value="empty">空建</el-radio-button>
+            <el-radio-button value="empty">创建空资源</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <template v-if="datasetCreateMode === 'scenario_set'">
           <el-form-item label="扰动场景集">
             <el-select
               v-model="datasetCreateScenarioSetId"
+              filterable
+              remote
+              reserve-keyword
               class="full-width"
               placeholder="选择扰动场景集"
               :disabled="operationPending"
+              :loading="scenarioSetOptionsLoading"
+              :remote-method="searchScenarioSetOptions"
               @visible-change="reloadScenarioSetsOnOpen"
             >
               <el-option
-                v-for="item in scenarioSets"
-                :key="item.scenario_set_id"
-                :label="`${item.scenario_set_id} (${item.case_count})`"
-                :value="item.scenario_set_id"
+                v-for="item in scenarioSetSelectOptions"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
               />
             </el-select>
           </el-form-item>
@@ -2498,16 +2722,16 @@ function notifyError(error: unknown) {
         <el-button :disabled="operationPending" @click="datasetCreateDialogVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :loading="activeOperation === '新增 MILP 实例集'"
+          :loading="activeOperation === '构建 MILP 实例集' || activeOperation === '创建空 MILP 实例集'"
           :disabled="operationPending"
           @click="createDataset"
         >
-          确定
+          {{ datasetCreateMode === 'scenario_set' ? '提交构建' : '创建空资源' }}
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="datasetBuildDialogVisible" title="从场景构建 MILP 实例集" width="640px">
+    <el-dialog v-model="datasetBuildDialogVisible" title="构建/重建 MILP 实例集" width="640px">
       <el-form label-width="150px">
         <el-form-item label="MILP 实例集 ID">
           <el-input :model-value="selectedDatasetId" disabled />
@@ -2521,16 +2745,21 @@ function notifyError(error: unknown) {
         <el-form-item label="扰动场景集">
           <el-select
             v-model="datasetBuildForm.scenario_set_id"
+            filterable
+            remote
+            reserve-keyword
             class="full-width"
             :disabled="operationPending"
+            :loading="scenarioSetOptionsLoading"
+            :remote-method="searchScenarioSetOptions"
             @visible-change="reloadScenarioSetsOnOpen"
             @change="onDatasetBuildScenarioSetChange"
           >
             <el-option
-              v-for="item in scenarioSets"
-              :key="item.scenario_set_id"
-              :label="`${item.scenario_set_id} (${item.case_count})`"
-              :value="item.scenario_set_id"
+              v-for="item in scenarioSetSelectOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
             />
           </el-select>
         </el-form-item>

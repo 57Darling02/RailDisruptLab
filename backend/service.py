@@ -17,6 +17,18 @@ from backend.task_contracts import TASK_DEFAULTS, normalize_project_id, normaliz
 from backend.task_resources import ensure_no_active_conflict
 from core.project_layout import PROJECTS_ROOT, REPO_ROOT, require_id, sanitize_id, to_posix
 
+RESOURCE_OPTION_LABELS = {
+    "scenario_sets": ("scenario_set_id", "case_count"),
+    "datasets": ("dataset_id", "case_count"),
+    "models": ("model_id", "sample_count"),
+}
+
+
+def resource_option_label(value: str, count: object) -> str:
+    if isinstance(count, int):
+        return "{} ({})".format(value, count)
+    return value
+
 
 class RailGraphBackend:
     def __init__(
@@ -42,11 +54,56 @@ class RailGraphBackend:
     def list_projects(self) -> List[Dict[str, object]]:
         return self.repository.list_projects()
 
+    def list_project_options(self, *, query: str = "", limit: int = 50) -> List[Dict[str, object]]:
+        query_text = query.strip().lower()
+        result: List[Dict[str, object]] = []
+        for item in self.repository.list_projects():
+            value = str(item.get("project_id", "") or "")
+            if query_text and query_text not in value.lower():
+                continue
+            result.append({"label": value, "value": value})
+            if len(result) >= max(1, limit):
+                break
+        return result
+
     def get_project_state(self, project_id: str) -> Dict[str, object]:
         return self.repository.get_project_state(project_id)
 
     def list_scenario_sets(self, project_id: str) -> List[Dict[str, object]]:
         return self.repository.list_scenario_sets(project_id)
+
+    def list_resource_options(
+        self,
+        project_id: str,
+        resource: str,
+        *,
+        query: str = "",
+        limit: int = 50,
+    ) -> List[Dict[str, object]]:
+        if resource not in RESOURCE_OPTION_LABELS:
+            raise ValueError("Unsupported resource: {}".format(resource))
+        items = self._resource_items(project_id, resource)
+        id_key, count_key = RESOURCE_OPTION_LABELS[resource]
+        query_text = query.strip().lower()
+        result: List[Dict[str, object]] = []
+        for item in items:
+            value = str(item.get(id_key, "") or "")
+            label = resource_option_label(value, item.get(count_key))
+            if query_text and query_text not in value.lower() and query_text not in label.lower():
+                continue
+            result.append({"label": label, "value": value})
+            if len(result) >= max(1, limit):
+                break
+        return result
+
+    def _resource_items(self, project_id: str, resource: str) -> List[Dict[str, object]]:
+        if resource == "scenario_sets":
+            return self.repository.list_scenario_sets(project_id)
+        if resource == "datasets":
+            return self.repository.list_datasets(project_id)
+        if resource == "models":
+            return self.repository.list_models(project_id)
+        raise ValueError("Unsupported resource: {}".format(resource))
 
     def list_scenarios(self, project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
         return self.repository.list_scenarios(project_id, scenario_set_id)
