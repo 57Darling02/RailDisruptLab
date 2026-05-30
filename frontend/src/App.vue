@@ -128,7 +128,7 @@ const GENERATION_FIELD_TIPS = {
   seed: '生成随机种子，用于复现采样结果。',
   device: '生成使用的设备，auto 会优先使用 CUDA；指定 GPU 卡号可填写 cuda:0、cuda:1，CPU 填 cpu。',
   speed_interruption_threshold:
-    '生成解码时，低于该速度阈值的限速会被转成 limit_speed=0；后续 build 会按中断建模。',
+    '生成解码时，低于或等于该速度阈值的限速会被转成 limit_speed=0；后续 build 会按中断建模。',
   overwrite: '开启后会覆盖同名扰动场景集。',
 } as const
 const TASK_LABELS = {

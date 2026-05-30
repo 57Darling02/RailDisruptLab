@@ -50,6 +50,7 @@ export interface ScenarioSummary {
   size_bytes: number
   delay_count: number
   speed_limit_count: number
+  interruption_count: number
 }
 
 export interface ScenarioEventAnchorOption {

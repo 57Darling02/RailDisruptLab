@@ -346,6 +346,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
               </el-table-column>
               <el-table-column prop="delay_count" label="延误数" width="120" />
               <el-table-column prop="speed_limit_count" label="限速数" width="120" />
+              <el-table-column prop="interruption_count" label="中断数" width="120" />
               <el-table-column prop="path" label="路径" show-overflow-tooltip />
               <el-table-column label="操作" width="100">
                 <template #default="{ row }">

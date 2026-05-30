@@ -42,7 +42,7 @@ def read_scenario_disturbances(path: Path, context: Any) -> List[Dict[str, objec
         disturbances.append(
             {
                 "id": f"speed_{index}",
-                "type": "interruption" if limit_speed <= 0 else "speed_limit",
+                "type": "interruption" if limit_speed <= 20 else "speed_limit",
                 "section_anchor_id": str(item.get("section_anchor_id", "")),
                 "start_station": start_station,
                 "end_station": end_station,

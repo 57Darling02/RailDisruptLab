@@ -44,6 +44,7 @@ class ProjectRepository:
         scenarios: List[Dict[str, object]] = []
         for path in scenario_files(root):
             doc = load_scenario_document(path, yaml)
+            speed_limit_count, interruption_count = speed_limit_counts(doc.scenarios.get("speed_limits", []) or [])
             scenarios.append(
                 {
                     "scenario_id": sanitize_id(path.stem),
@@ -51,7 +52,8 @@ class ProjectRepository:
                     "path": to_posix(path),
                     "size_bytes": path.stat().st_size,
                     "delay_count": len(doc.scenarios.get("delays", []) or []),
-                    "speed_limit_count": len(doc.scenarios.get("speed_limits", []) or []),
+                    "speed_limit_count": speed_limit_count,
+                    "interruption_count": interruption_count,
                 }
             )
         return scenarios
@@ -240,6 +242,23 @@ def checkpoint_role(filename: str) -> str:
     if filename == "last_model.pt":
         return "last"
     return "checkpoint"
+
+
+def speed_limit_counts(items: object) -> tuple[int, int]:
+    speed_limit_count = 0
+    interruption_count = 0
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            limit_speed = float(item.get("limit_speed", 0) or 0)
+        except (TypeError, ValueError):
+            limit_speed = 0.0
+        if limit_speed > 20:
+            speed_limit_count += 1
+        else:
+            interruption_count += 1
+    return speed_limit_count, interruption_count
 
 
 def require_yaml() -> Any:

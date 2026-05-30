@@ -448,7 +448,7 @@ def typed_generated_graph_to_disturbance_graph(
         start_time = round(_number(params[0], "start_time_norm") * DAY_SECONDS)
         duration = round(_number(params[1], "duration_norm") * DAY_SECONDS)
         speed_value = _speed_limit_from_norm(_number(params[2], "speed_limit_norm"))
-        speed_limit = 0 if speed_value < speed_interruption_threshold else _clean_number(speed_value)
+        speed_limit = 0 if speed_value <= speed_interruption_threshold else _clean_number(speed_value)
         if start_time < 0:
             raise ValueError(f"Decoded start_time must be >= 0 for {disturbance_id}.")
         if duration <= 0:
