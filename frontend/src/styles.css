@@ -18,6 +18,42 @@ body {
   --el-card-border-radius: var(--rdl-radius);
 }
 
+.el-overlay-dialog {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 24px 16px;
+}
+
+.el-dialog.is-fullscreen {
+  margin: 0;
+}
+
+.el-overlay-dialog:has(.el-dialog.is-fullscreen) {
+  display: block;
+  padding: 0;
+}
+
+.el-dialog:not(.is-fullscreen) {
+  display: flex;
+  margin: 0;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  flex-direction: column;
+}
+
+.el-dialog:not(.is-fullscreen) .el-dialog__header,
+.el-dialog:not(.is-fullscreen) .el-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.el-dialog:not(.is-fullscreen) .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
 .common-layout {
   height: 100vh;
   overflow: hidden;

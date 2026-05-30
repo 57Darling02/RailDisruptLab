@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from backend.analysis.timetable import export_dataset_timetables
 from backend.scenarios import add_scenario, create_scenario_set, delete_scenario, normal_generate
-from core.project_layout import ProjectLayout, sanitize_id
+from core.project_layout import ProjectLayout, require_id, sanitize_id
 from core.vae_learning_graph import (
     DEFAULT_EVENT_TIME_WINDOW,
     DEFAULT_EVENT_TOP_K,
@@ -14,7 +15,7 @@ from core.vae_learning_graph import (
     DEFAULT_SECTION_ORDER_WINDOW,
     DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
 )
-from core.workflow.service import (
+from backend.workflow import (
     build_dataset,
     create_dataset,
     delete_project,
@@ -124,10 +125,7 @@ def task_default(action: str, key: str) -> Any:
 
 
 def normalize_project_id(project_id: object) -> str:
-    text = str(project_id or "").strip()
-    if not text:
-        raise ValueError("Missing required task field: project_id")
-    return sanitize_id(text)
+    return require_id(project_id, "project_id")
 
 
 def normalize_task_params(action: str, params: Mapping[str, Any] | None) -> Dict[str, Any]:
@@ -147,9 +145,53 @@ def normalize_task_params(action: str, params: Mapping[str, Any] | None) -> Dict
     for key, value in list(normalized.items()):
         if key.endswith("_id"):
             text = str(value or "").strip()
-            normalized[key] = sanitize_id(text) if text else ""
+            normalized[key] = require_id(text, key) if text else ""
 
+    validate_task_params(action, normalized)
     return normalized
+
+
+def validate_task_params(action: str, params: Mapping[str, Any]) -> None:
+    if action != "build":
+        return
+    objective_mode = str(params.get("objective_mode", "") or "").strip()
+    if objective_mode not in {"abs", "delay"}:
+        raise ValueError("build.objective_mode must be one of: abs, delay")
+    require_positive_float(params, "objective_delay_weight")
+    require_non_negative_float(params, "cancellation_penalty_weight")
+    require_positive_int(params, "arr_arr_headway_seconds")
+    require_positive_int(params, "dep_dep_headway_seconds")
+    require_positive_int(params, "dwell_seconds_at_stops")
+    require_positive_int(params, "big_m")
+    require_positive_int(params, "tolerance_delay_seconds")
+
+
+def require_positive_float(params: Mapping[str, Any], key: str) -> None:
+    value = numeric_param(params, key)
+    if value <= 0:
+        raise ValueError(f"build.{key} must be > 0")
+
+
+def require_non_negative_float(params: Mapping[str, Any], key: str) -> None:
+    value = numeric_param(params, key)
+    if value < 0:
+        raise ValueError(f"build.{key} must be >= 0")
+
+
+def require_positive_int(params: Mapping[str, Any], key: str) -> None:
+    value = numeric_param(params, key)
+    if value <= 0 or int(value) != value:
+        raise ValueError(f"build.{key} must be a positive integer")
+
+
+def numeric_param(params: Mapping[str, Any], key: str) -> float:
+    try:
+        value = float(params[key])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"build.{key} must be a finite number") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"build.{key} must be a finite number")
+    return value
 
 
 def run_task_payload(payload: Mapping[str, Any]) -> None:

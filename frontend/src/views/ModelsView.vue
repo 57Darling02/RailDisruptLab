@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import VChart from 'vue-echarts'
 
-import { chartDownloadToolbox } from '@/chart-options'
+import ChartPanel from '@/components/ChartPanel.vue'
 import type {
   MetadataEntry,
   SchemaEdgeRow,
@@ -34,6 +33,7 @@ const props = defineProps<{
   formatBytes: (size: number) => string
   checkpointRoleLabel: (role: string) => string
   checkpointRoleType: (role: string) => TaskTagType
+  busy?: boolean
 }>()
 
 defineEmits<{
@@ -178,7 +178,6 @@ function epochLossSeries(points: ModelLossPoint[]) {
 function buildLossChartOption(data: LossSeriesDatum[]) {
   return {
     animationDuration: 300,
-    toolbox: chartDownloadToolbox('training-loss'),
     grid: { top: 24, right: 24, bottom: 36, left: 58 },
     tooltip: {
       trigger: 'axis',
@@ -236,6 +235,7 @@ function escapeRegExp(value: string) {
         :options="modelOptions"
         placeholder="选择扰动生成模型"
         delete-label="删除扰动生成模型"
+        :busy="busy"
         @update:model-value="$emit('update:selectedModelId', $event)"
         @visible-change="$emit('reloadModels', $event)"
         @add="$emit('train')"
@@ -255,11 +255,11 @@ function escapeRegExp(value: string) {
           <div class="card-header">
             <el-space>
               <span>{{ selectedModelId ? `模型ID: ${selectedModelId}` : '模型ID' }}</span>
-              <el-button :disabled="!selectedModelId" type="warning" plain @click="$emit('retrain')">
+              <el-button :disabled="!selectedModelId || busy" type="warning" plain @click="$emit('retrain')">
                 重新训练
               </el-button>
             </el-space>
-            <el-button @click="$emit('refreshModel')">刷新</el-button>
+            <el-button :disabled="busy" @click="$emit('refreshModel')">刷新</el-button>
           </div>
         </template>
 
@@ -308,7 +308,7 @@ function escapeRegExp(value: string) {
                   </el-table-column>
                   <el-table-column label="操作" width="120">
                     <template #default="{ row }">
-                      <el-button link type="primary" @click="$emit('generate', row)">
+                      <el-button link type="primary" :disabled="busy" @click="$emit('generate', row)">
                         生成数据
                       </el-button>
                     </template>
@@ -373,7 +373,13 @@ function escapeRegExp(value: string) {
                   </el-tag>
                 </el-space>
               </div>
-              <VChart v-if="epochLossPoints.length" :option="lossChartOption" autoresize class="loss-chart" />
+              <ChartPanel
+                v-if="epochLossPoints.length"
+                :option="lossChartOption"
+                filename="training-loss"
+                chart-class="loss-chart"
+                height="220px"
+              />
               <el-empty v-else description="刷新后将从训练日志解析 loss" :image-size="72" />
             </div>
           </div>
@@ -498,12 +504,6 @@ function escapeRegExp(value: string) {
   gap: 12px;
   margin-bottom: 8px;
   font-weight: 600;
-}
-
-.loss-chart {
-  display: block;
-  width: 100%;
-  height: 220px;
 }
 
 @media (max-width: 760px) {

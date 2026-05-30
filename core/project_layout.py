@@ -11,7 +11,17 @@ PROJECTS_ROOT = REPO_ROOT / "projects"
 
 def sanitize_id(value: str) -> str:
     cleaned = "".join(char if char.isalnum() or char in "-_" else "_" for char in value.strip())
-    return cleaned.strip("_") or "default"
+    return cleaned.strip("_")
+
+
+def require_id(value: object, field_name: str = "id") -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"Missing required field: {field_name}")
+    cleaned = sanitize_id(text)
+    if not cleaned:
+        raise ValueError(f"Invalid {field_name}: {value}")
+    return cleaned
 
 
 def repo_path(path_text: str | Path) -> Path:
@@ -80,7 +90,7 @@ class ProjectLayout:
 
     @classmethod
     def from_name(cls, name: str) -> "ProjectLayout":
-        project_id = sanitize_id(name)
+        project_id = require_id(name, "project_id")
         return cls(name=project_id, root=PROJECTS_ROOT / project_id)
 
     @property
@@ -104,10 +114,10 @@ class ProjectLayout:
         return self.root / "context.json"
 
     def scenario_set(self, scenario_set_id: str) -> ScenarioSetLayout:
-        return ScenarioSetLayout(self.scenario_sets_dir / sanitize_id(scenario_set_id))
+        return ScenarioSetLayout(self.scenario_sets_dir / require_id(scenario_set_id, "scenario_set_id"))
 
     def dataset(self, dataset_id: str) -> DatasetLayout:
-        return DatasetLayout(self.datasets_dir / sanitize_id(dataset_id))
+        return DatasetLayout(self.datasets_dir / require_id(dataset_id, "dataset_id"))
 
     def model(self, model_id: str) -> ModelLayout:
-        return ModelLayout(self.model_dir / sanitize_id(model_id))
+        return ModelLayout(self.model_dir / require_id(model_id, "model_id"))

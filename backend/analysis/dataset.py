@@ -6,7 +6,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List
 
-from core.project_layout import ProjectLayout, sanitize_id, to_posix
+from core.project_layout import ProjectLayout, require_id, sanitize_id, to_posix
 
 
 METRIC_LABELS = {
@@ -20,7 +20,7 @@ SOLVER_CONFIG_KEYS = ("time_limit", "mip_gap", "threads")
 
 
 def read_dataset_solve_analysis(layout: ProjectLayout, dataset_ids: Iterable[str]) -> Dict[str, object]:
-    dataset_ids = [sanitize_id(item) for item in dataset_ids if str(item or "").strip()]
+    dataset_ids = [require_id(item, "dataset_id") for item in dataset_ids if str(item or "").strip()]
     datasets = [read_dataset_solve_state(layout, dataset_id) for dataset_id in dataset_ids]
     baseline = datasets[0] if datasets else None
 

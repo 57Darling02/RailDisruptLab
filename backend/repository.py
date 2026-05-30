@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-from core.project_layout import PROJECTS_ROOT, ProjectLayout, sanitize_id, to_posix
+from core.project_layout import PROJECTS_ROOT, ProjectLayout, require_id, sanitize_id, to_posix
 from core.scenario_config import load_scenario_document, scenario_file_by_id, scenario_files
-from core.workflow.state import get_project_state, list_projects
+from backend.state import get_project_state, list_projects
 
 
 class ProjectRepository:
@@ -14,7 +13,7 @@ class ProjectRepository:
         self.projects_root = projects_root
 
     def layout(self, project_id: str) -> ProjectLayout:
-        project_id = sanitize_id(project_id)
+        project_id = require_id(project_id, "project_id")
         return ProjectLayout(name=project_id, root=self.projects_root / project_id)
 
     def list_projects(self) -> List[Dict[str, object]]:
@@ -78,36 +77,11 @@ class ProjectRepository:
             raise FileNotFoundError("Source file not found: {}".format(path))
         return path
 
-    def list_runs(self, project_id: str, limit: int = 20) -> List[Dict[str, object]]:
-        runs_root = self.layout(project_id).root / ".runs"
-        if not runs_root.is_dir():
-            return []
-        records: List[Dict[str, object]] = []
-        for meta_path in sorted(runs_root.glob("*/run.json"), reverse=True)[:limit]:
-            try:
-                payload = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if isinstance(payload, dict):
-                records.append(payload)
-        return records
-
-    def get_run(self, project_id: str, run_id: str) -> Dict[str, object]:
-        path = self.layout(project_id).root / ".runs" / sanitize_id(run_id) / "run.json"
-        return read_json(path)
-
-    def read_run_log(self, project_id: str, run_id: str, tail_lines: int = 200) -> str:
-        path = self.layout(project_id).root / ".runs" / sanitize_id(run_id) / "stdout.log"
-        if not path.is_file():
-            return ""
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        return "\n".join(lines[-tail_lines:])
-
     def read_training_summary(self, project_id: str, model_id: str) -> Dict[str, object]:
         return read_json(self.layout(project_id).model(model_id).root / "training_summary.json")
 
     def read_model_detail(self, project_id: str, model_id: str) -> Dict[str, object]:
-        model_id = sanitize_id(model_id)
+        model_id = require_id(model_id, "model_id")
         root = self.layout(project_id).model(model_id).root
         if not root.is_dir():
             raise FileNotFoundError("Model not found: {}".format(root))

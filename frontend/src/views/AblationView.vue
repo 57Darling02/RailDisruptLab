@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import VChart from 'vue-echarts'
 import { ElMessage } from 'element-plus'
 
 import { api } from '@/api/client'
-import { barPercentLabel, barValueLabel, chartDownloadToolbox } from '@/chart-options'
+import { barPercentLabel, barValueLabel } from '@/chart-options'
+import ChartPanel from '@/components/ChartPanel.vue'
 import type {
   DatasetSolveAnalysis,
   DatasetSolveErrorRow,
@@ -24,6 +24,7 @@ const props = defineProps<{
   selectedProjectId: string
   scenarioSets: ScenarioSet[]
   datasets: DatasetSummary[]
+  busy?: boolean
 }>()
 
 const baselineScenarioSetId = ref('')
@@ -36,6 +37,8 @@ const candidateDatasetIds = ref<string[]>([])
 const datasetSolveAnalysis = ref<DatasetSolveAnalysis | null>(null)
 const datasetCompareLoading = ref(false)
 const datasetAnalysisMode = ref<ScenarioAnalysisMode>('relative')
+const scenarioBusy = computed(() => Boolean(props.busy || scenarioCompareLoading.value))
+const datasetBusy = computed(() => Boolean(props.busy || datasetCompareLoading.value))
 
 const comparedDatasets = computed(() => {
   const selected = new Set([baselineDatasetId.value, ...candidateDatasetIds.value])
@@ -167,6 +170,7 @@ watch(baselineDatasetId, () => {
 })
 
 async function compareScenarioSets() {
+  if (scenarioBusy.value) return
   if (!props.selectedProjectId || !baselineScenarioSetId.value) {
     ElMessage.warning('请选择基准场景集。')
     return
@@ -194,6 +198,7 @@ function resetTypeTimeFilters() {
 }
 
 async function compareDatasets() {
+  if (datasetBusy.value) return
   if (!props.selectedProjectId || !baselineDatasetId.value) {
     ElMessage.warning('请选择基准数据集。')
     return
@@ -219,7 +224,6 @@ function buildScenarioCategoryOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartDownloadToolbox('scenario-type-composition'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 62, right: 18, bottom: 54, left: 48 },
     xAxis: categoryAxis(categories, { rotate: categories.length > 4 ? 24 : 0 }),
@@ -251,7 +255,6 @@ function buildScenarioCoverageOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: percentFormatterForMode(mode),
     },
-    toolbox: chartDownloadToolbox('scenario-coverage'),
     legend: legendConfig({ top: 0 }),
     grid: { top: 62, right: 18, bottom: 54, left: 48 },
     xAxis: categoryAxis(metrics.map((item) => item.label)),
@@ -284,7 +287,6 @@ function buildMetricByMetricOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartDownloadToolbox(`${group}-metrics`),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 62, right: 18, bottom: 72, left: 56 },
     xAxis: categoryAxis(metrics, { rotate: metrics.length > 4 ? 24 : 0 }),
@@ -316,7 +318,6 @@ function buildAnchorCoverageOption(items: ScenarioSetVisualization[], mode: Scen
       axisPointer: { type: 'shadow' },
       valueFormatter: percentFormatterForMode(mode),
     },
-    toolbox: chartDownloadToolbox('anchor-coverage'),
     legend: legendConfig({ top: 0 }),
     grid: { top: 62, right: 18, bottom: 54, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -346,7 +347,6 @@ function buildDisturbanceCountOption(items: ScenarioSetVisualization[], mode: Sc
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartDownloadToolbox('disturbance-count'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 62, right: 18, bottom: 46, left: 48 },
     xAxis: categoryAxis(labels, { name: '单场景扰动数' }),
@@ -391,7 +391,6 @@ function buildTypeTimeOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartDownloadToolbox('type-time-structure'),
     legend: legendConfig({ top: 0, selectedMode: false }),
     grid: { top: 92, right: 18, bottom: 46, left: 48 },
     xAxis: categoryAxis(bins),
@@ -447,7 +446,6 @@ function buildTypeLocationOption(
       axisPointer: { type: 'shadow' },
       valueFormatter: valueFormatterForMode(mode),
     },
-    toolbox: chartDownloadToolbox('type-location-structure'),
     legend: legendConfig({ top: 0, selectedMode: false }),
     grid: { top: 92, right: 18, bottom: 96, left: 48 },
     xAxis: categoryAxis(locations, { rotate: locations.length > 8 ? 35 : 0 }),
@@ -527,7 +525,6 @@ function buildDatasetSolveMetricOption(items: DatasetSolveState[]) {
       axisPointer: { type: 'shadow' },
       valueFormatter: (value: number) => formatChartNumber(Number(value)),
     },
-    toolbox: chartDownloadToolbox('dataset-solve-metrics'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 68, right: 18, bottom: 58, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -550,7 +547,6 @@ function buildDatasetSolveErrorOption(rows: ReturnType<typeof summarizeDatasetEr
       axisPointer: { type: 'shadow' },
       valueFormatter: (value: number) => formatChartNumber(Number(value)),
     },
-    toolbox: chartDownloadToolbox('dataset-solve-errors'),
     legend: legendConfig({ top: 0, type: 'scroll' }),
     grid: { top: 68, right: 18, bottom: 58, left: 56 },
     xAxis: categoryAxis(labels, { rotate: labels.length > 3 ? 24 : 0 }),
@@ -825,6 +821,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                   filterable
                   class="analysis-select full-width"
                   placeholder="选择基准"
+                  :disabled="scenarioBusy"
                 >
                   <el-option
                     v-for="item in scenarioSets"
@@ -846,6 +843,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                   collapse-tags-tooltip
                   class="analysis-select full-width"
                   placeholder="选择对比集"
+                  :disabled="scenarioBusy"
                 >
                   <el-option
                     v-for="item in candidateScenarioSets"
@@ -857,13 +855,19 @@ function datasetQualityMessages(item: DatasetSummary) {
               </div>
             </el-col>
             <el-col :span="4">
-              <el-radio-group v-model="scenarioAnalysisMode" class="mode-radio">
+              <el-radio-group v-model="scenarioAnalysisMode" class="mode-radio" :disabled="scenarioBusy">
                 <el-radio-button value="absolute">数值</el-radio-button>
                 <el-radio-button value="relative">误差</el-radio-button>
               </el-radio-group>
             </el-col>
             <el-col :span="4">
-              <el-button class="full-width" type="primary" :loading="scenarioCompareLoading" @click="compareScenarioSets">
+              <el-button
+                class="full-width"
+                type="primary"
+                :loading="scenarioCompareLoading"
+                :disabled="scenarioBusy"
+                @click="compareScenarioSets"
+              >
                 开始分析
               </el-button>
             </el-col>
@@ -900,22 +904,42 @@ function datasetQualityMessages(item: DatasetSummary) {
             <div class="analysis-grid">
               <el-card shadow="never">
                 <template #header>场景类型组成</template>
-                <VChart :option="scenarioCategoryOption" autoresize class="analysis-chart" />
+                <ChartPanel
+                  :option="scenarioCategoryOption"
+                  filename="scenario-type-composition"
+                  chart-class="analysis-chart"
+                  height="320px"
+                />
               </el-card>
               <el-card shadow="never">
                 <template #header>扰动覆盖率</template>
-                <VChart :option="scenarioCoverageOption" autoresize class="analysis-chart" />
+                <ChartPanel
+                  :option="scenarioCoverageOption"
+                  filename="scenario-coverage"
+                  chart-class="analysis-chart"
+                  height="320px"
+                />
               </el-card>
             </div>
 
             <el-card shadow="never">
               <template #header>组合复杂度摘要</template>
-              <VChart :option="combinationMetricOption" autoresize class="analysis-chart" />
+              <ChartPanel
+                :option="combinationMetricOption"
+                filename="combination-complexity-metrics"
+                chart-class="analysis-chart"
+                height="320px"
+              />
             </el-card>
 
             <el-card shadow="never">
               <template #header>单场景扰动数分布</template>
-              <VChart :option="disturbanceCountOption" autoresize class="analysis-chart" />
+              <ChartPanel
+                :option="disturbanceCountOption"
+                filename="disturbance-count"
+                chart-class="analysis-chart"
+                height="320px"
+              />
             </el-card>
 
             <el-card class="analysis-section" shadow="never">
@@ -930,6 +954,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                     collapse-tags-tooltip
                     class="type-time-select"
                     placeholder="全部场景集"
+                    :disabled="scenarioBusy"
                   >
                     <el-option
                       v-for="label in typeTimeSetOptions"
@@ -948,6 +973,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                     collapse-tags-tooltip
                     class="type-time-select"
                     placeholder="全部场景类型"
+                    :disabled="scenarioBusy"
                   >
                     <el-option
                       v-for="label in typeTimeTypeOptions"
@@ -962,13 +988,23 @@ function datasetQualityMessages(item: DatasetSummary) {
                 <el-col :span="24">
                   <el-card shadow="never">
                     <template #header>时间-数量</template>
-                    <VChart :option="typeTimeOption" autoresize class="analysis-chart wide-chart" />
+                    <ChartPanel
+                      :option="typeTimeOption"
+                      filename="type-time-structure"
+                      chart-class="analysis-chart wide-chart"
+                      height="380px"
+                    />
                   </el-card>
                 </el-col>
                 <el-col :span="24">
                   <el-card shadow="never" class="joint-chart-card">
                     <template #header>空间-数量</template>
-                    <VChart :option="typeLocationOption" autoresize class="analysis-chart wide-chart" />
+                    <ChartPanel
+                      :option="typeLocationOption"
+                      filename="type-location-structure"
+                      chart-class="analysis-chart wide-chart"
+                      height="380px"
+                    />
                   </el-card>
                 </el-col>
               </el-row>
@@ -997,11 +1033,21 @@ function datasetQualityMessages(item: DatasetSummary) {
               <div class="analysis-grid compact-grid">
                 <el-card shadow="never">
                   <template #header>图规模 / 关系指标对比</template>
-                  <VChart :option="mathMetricOption" autoresize class="analysis-chart" />
+                  <ChartPanel
+                    :option="mathMetricOption"
+                    filename="math-graph-metrics"
+                    chart-class="analysis-chart"
+                    height="320px"
+                  />
                 </el-card>
                 <el-card shadow="never">
                   <template #header>锚点覆盖</template>
-                  <VChart :option="anchorCoverageOption" autoresize class="analysis-chart" />
+                  <ChartPanel
+                    :option="anchorCoverageOption"
+                    filename="anchor-coverage"
+                    chart-class="analysis-chart"
+                    height="320px"
+                  />
                 </el-card>
               </div>
               <div class="analysis-grid compact-grid">
@@ -1048,6 +1094,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                   filterable
                   class="analysis-select full-width"
                   placeholder="选择基准"
+                  :disabled="datasetBusy"
                 >
                   <el-option
                     v-for="item in datasets"
@@ -1069,6 +1116,7 @@ function datasetQualityMessages(item: DatasetSummary) {
                   collapse-tags-tooltip
                   class="analysis-select full-width"
                   placeholder="选择对比集"
+                  :disabled="datasetBusy"
                 >
                   <el-option
                     v-for="item in candidateDatasets"
@@ -1080,13 +1128,19 @@ function datasetQualityMessages(item: DatasetSummary) {
               </div>
             </el-col>
             <el-col :span="4">
-              <el-radio-group v-model="datasetAnalysisMode" class="mode-radio">
+              <el-radio-group v-model="datasetAnalysisMode" class="mode-radio" :disabled="datasetBusy">
                 <el-radio-button value="absolute">数值</el-radio-button>
                 <el-radio-button value="relative">误差</el-radio-button>
               </el-radio-group>
             </el-col>
             <el-col :span="4">
-              <el-button class="full-width" type="primary" :loading="datasetCompareLoading" @click="compareDatasets">
+              <el-button
+                class="full-width"
+                type="primary"
+                :loading="datasetCompareLoading"
+                :disabled="datasetBusy"
+                @click="compareDatasets"
+              >
                 开始分析
               </el-button>
             </el-col>
@@ -1160,7 +1214,12 @@ function datasetQualityMessages(item: DatasetSummary) {
               <template #header>
                 {{ datasetAnalysisMode === 'absolute' ? '求解行为数值对比' : '相对基准误差对比' }}
               </template>
-              <VChart :option="datasetSolveChartOption" autoresize class="analysis-chart" />
+              <ChartPanel
+                :option="datasetSolveChartOption"
+                :filename="datasetAnalysisMode === 'absolute' ? 'dataset-solve-metrics' : 'dataset-solve-errors'"
+                chart-class="analysis-chart"
+                height="320px"
+              />
             </el-card>
 
             <el-card shadow="never">
@@ -1230,16 +1289,6 @@ function datasetQualityMessages(item: DatasetSummary) {
 
 .joint-chart-card {
   margin-top: 12px;
-}
-
-.analysis-chart {
-  display: block;
-  width: 100%;
-  height: 320px;
-}
-
-.wide-chart {
-  height: 380px;
 }
 
 .type-time-controls {

@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List
 from backend.analysis.disturbances import read_scenario_disturbances
 from core.base_context import load_base_context
 from core.postprocess import adjusted_timetable_rows
-from core.project_layout import DatasetLayout, ProjectLayout, sanitize_id
+from core.project_layout import DatasetLayout, ProjectLayout, require_id, sanitize_id
 from core.solver import load_solution_values
 
 
@@ -59,8 +59,8 @@ def export_case_timetable(case_dir: Path, index: int, context: Any) -> Dict[str,
 
 
 def read_case_timetable(layout: ProjectLayout, dataset_id: str, case_id: str) -> Dict[str, object]:
-    dataset_id = sanitize_id(dataset_id)
-    case_id = sanitize_id(case_id)
+    dataset_id = require_id(dataset_id, "dataset_id")
+    case_id = require_id(case_id, "case_id")
     dataset = layout.dataset(dataset_id)
     case_dir = dataset.cases_dir / case_id
     if not case_dir.is_dir():
@@ -130,7 +130,7 @@ def dataset_case_dirs(dataset: DatasetLayout) -> List[Path]:
 
 
 def dataset_case_dir(dataset: DatasetLayout, case_id: str) -> Path:
-    case_dir = dataset.cases_dir / sanitize_id(case_id)
+    case_dir = dataset.cases_dir / require_id(case_id, "case_id")
     if not case_dir.is_dir():
         raise FileNotFoundError(f"Dataset case not found: {case_dir}")
     return case_dir
@@ -172,4 +172,3 @@ def read_json(path: Path) -> Dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON must contain an object: {path}")
     return payload
-

@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import VChart from 'vue-echarts'
 
-import { chartDownloadToolbox } from '@/chart-options'
+import ChartPanel from '@/components/ChartPanel.vue'
 import type { TimetableDisturbance, TimetableRowState } from '@/types'
 
 const PLAN_NORMAL_COLOR = '#2563eb'
@@ -48,9 +47,7 @@ const chartOption = computed(() =>
   }),
 )
 const hasRows = computed(() => props.rows.length > 0 || props.planRows.length > 0)
-const fullscreenVisible = ref(false)
-const chartRef = ref<InstanceType<typeof VChart> | null>(null)
-const fullscreenChartRef = ref<InstanceType<typeof VChart> | null>(null)
+const chartRef = ref<InstanceType<typeof ChartPanel> | null>(null)
 const trainTooltip = ref({
   visible: false,
   x: null as number | null,
@@ -118,7 +115,6 @@ function buildTimetableOption(input: BuildInput) {
 
   return {
     animationDuration: 260,
-    toolbox: chartDownloadToolbox(fileNameFromTitle(input.title)),
     grid: { top: 68, right: 32, bottom: 72, left: 96 },
     legend: {
       top: 30,
@@ -650,10 +646,10 @@ function chartPointer(eventPayload: unknown) {
   const x = firstNumber(nativeEvent?.clientX, event?.clientX)
   const y = firstNumber(nativeEvent?.clientY, event?.clientY)
   if (x != null && y != null) return { x, y }
-  return chartLocalPointer(event, fullscreenVisible.value ? fullscreenChartRef.value : chartRef.value)
+  return chartLocalPointer(event, chartRef.value)
 }
 
-function chartLocalPointer(event: Record<string, unknown> | null, chart: InstanceType<typeof VChart> | null) {
+function chartLocalPointer(event: Record<string, unknown> | null, chart: InstanceType<typeof ChartPanel> | null) {
   const offsetX = firstNumber(event?.zrX, event?.offsetX)
   const offsetY = firstNumber(event?.zrY, event?.offsetY)
   const rect = chart?.root?.getBoundingClientRect()
@@ -685,15 +681,14 @@ function firstNumber(...values: unknown[]) {
 
 <template>
   <div class="timetable-chart-wrap">
-    <div v-if="hasRows" class="chart-toolbar">
-      <el-button size="small" @click="fullscreenVisible = true">全屏查看</el-button>
-    </div>
-    <VChart
+    <ChartPanel
       v-if="hasRows"
       ref="chartRef"
       :option="chartOption"
-      autoresize
-      class="timetable-chart"
+      :filename="fileNameFromTitle(title)"
+      chart-class="timetable-chart"
+      fullscreen-class="fullscreen-chart"
+      height="460px"
       @mouseover="showTrainTooltip"
       @mousemove="showTrainTooltip"
       @mouseout="hideTrainTooltip"
@@ -708,24 +703,6 @@ function firstNumber(...values: unknown[]) {
       {{ trainTooltip.text }}
     </div>
     <el-empty v-else-if="!hasRows" description="暂无可展示的运行图数据" :image-size="72" />
-    <el-dialog
-      v-model="fullscreenVisible"
-      :title="title"
-      fullscreen
-      append-to-body
-      destroy-on-close
-    >
-      <VChart
-        ref="fullscreenChartRef"
-        :option="chartOption"
-        autoresize
-        class="fullscreen-chart"
-        @mouseover="showTrainTooltip"
-        @mousemove="showTrainTooltip"
-        @mouseout="hideTrainTooltip"
-        @globalout="hideTrainTooltip"
-      />
-    </el-dialog>
   </div>
 </template>
 
@@ -733,23 +710,6 @@ function firstNumber(...values: unknown[]) {
 .timetable-chart-wrap {
   position: relative;
   width: 100%;
-}
-
-.chart-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 8px;
-}
-
-.timetable-chart {
-  display: block;
-  width: 100%;
-  height: 460px;
-}
-
-.fullscreen-chart {
-  width: 100%;
-  height: calc(100vh - 96px);
 }
 
 .train-tooltip {

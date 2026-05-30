@@ -4,6 +4,8 @@ export interface Task {
   id: number
   group?: string
   label?: string
+  action?: string
+  params?: JsonObject
   display_name?: string
   command?: string
   original_command?: string

@@ -408,12 +408,9 @@ def list_tasks(project_id: Optional[str] = None) -> List[Dict[str, object]]:
     return backend.list_tasks(project_id)
 
 
-@api.delete("/tasks")
-def clean_tasks(
-    project_id: Optional[str] = None,
-    successful_only: bool = False,
-) -> Dict[str, object]:
-    return backend.clean_tasks(project_id, successful_only=successful_only)
+@api.delete("/tasks/{task_id}")
+def remove_task(task_id: int) -> Dict[str, object]:
+    return backend.remove_task(task_id)
 
 
 @api.get("/tasks/{task_id}")
@@ -427,14 +424,6 @@ def get_task(task_id: int) -> Dict[str, object]:
 @api.get("/tasks/{task_id}/log", response_class=PlainTextResponse)
 def get_task_log(task_id: int, lines: Optional[int] = None) -> str:
     return backend.task_log(task_id, lines=lines)
-
-
-@api.post("/tasks/{task_id}/wait")
-def wait_task(task_id: int) -> Dict[str, object]:
-    task = backend.wait_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
 
 
 @api.post("/tasks/{task_id}/cancel")

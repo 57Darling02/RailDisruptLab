@@ -2,12 +2,12 @@
 
 RailDisruptLab 是一个面向铁路运行扰动场景的实验平台，用于构造扰动场景、生成 MILP 实例、调度求解任务、训练扰动生成模型，并在 Web 界面中完成可视化分析。
 
-项目以 FastAPI + Vue 作为主要交互入口。CLI 保留为 backend 调度 core 的机器接口和开发调试入口。
+项目以 FastAPI + Vue 作为唯一用户入口。耗时实验由 backend 写入任务快照后交给 Pueue 执行。
 
 ## 架构
 
-- `core`：铁路原计划建模、扰动场景消费、MILP 构建、求解、模型训练和生成解码等原子算法能力。
-- `backend`：FastAPI、Pueue 任务队列、任务快照、日志、项目数据读取和场景构造。
+- `core`：铁路原计划解析、MILP 建模、求解、扰动图转换和 VAE 数学图转换等原子算法能力。
+- `backend`：FastAPI、Pueue 任务队列、任务快照、日志、项目数据流、场景构造、模型训练/生成流程编排。
 - `frontend`：项目交互、任务监控、状态展示和图形化分析。
 
 每次实验操作都由 Web 表单或 API 请求显式提交参数。backend 会为任务保存一份输入快照，便于追踪、复现和查看日志：
@@ -133,4 +133,4 @@ projects/<projectid>/model/<model_id>/
 
 ## 文档
 
-实验平台流程见 [docs/exp.md](docs/exp.md)。
+实验平台流程见 [docs/exp.md](docs/exp.md)，断兼容变更和数据升级说明见 [docs/version.md](docs/version.md)。

@@ -245,14 +245,6 @@ def _resolve_section_anchor(item: Dict[str, Any], base_context: BaseContext) -> 
     return anchor
 
 
-def load_config(path: Path) -> AppConfig:
-    yaml = _require_yaml()
-    config_path = path if path.is_absolute() else (REPO_ROOT / path).resolve()
-    with config_path.open("r", encoding="utf-8") as file:
-        payload = yaml.safe_load(file) or {}
-    return load_config_payload(payload, config_path, yaml=yaml)
-
-
 def load_config_payload(payload: Dict[str, object], owner_path: Path, yaml: Any | None = None) -> AppConfig:
     if not isinstance(payload, dict):
         raise ValueError(f"Config payload must be a YAML object: {owner_path}")

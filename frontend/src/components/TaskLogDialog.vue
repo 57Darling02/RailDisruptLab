@@ -42,6 +42,7 @@ const visible = computed({
   set: (value) => emit('update:modelValue', value),
 })
 const activeTask = computed(() => liveTask.value ?? props.task)
+const paramEntries = computed(() => Object.entries(activeTask.value?.params ?? {}))
 const command = computed(() => activeTask.value?.command || activeTask.value?.original_command || '-')
 const activeTaskId = computed(() => activeTask.value?.id ?? props.task?.id ?? null)
 const activeTaskRunning = computed(() => Boolean(activeTask.value) && !isTaskTerminal(activeTask.value as Task))
@@ -123,6 +124,12 @@ function notifyError(error: unknown) {
     ElMessage.error(String(error))
   }
 }
+
+function formatParamValue(value: unknown) {
+  if (value == null || value === '') return '-'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
 </script>
 
 <template>
@@ -155,10 +162,23 @@ function notifyError(error: unknown) {
       <el-descriptions-item label="耗时">
         {{ formatTaskDuration(activeTask, now) }}
       </el-descriptions-item>
-      <el-descriptions-item label="命令" :span="3">
-        <pre class="task-command">{{ command }}</pre>
+      <el-descriptions-item label="动作">
+        {{ activeTask.action || activeTask.label || '-' }}
+      </el-descriptions-item>
+      <el-descriptions-item
+        v-for="[key, value] in paramEntries"
+        :key="key"
+        :label="key"
+      >
+        <el-text truncated>{{ formatParamValue(value) }}</el-text>
       </el-descriptions-item>
     </el-descriptions>
+
+    <el-collapse class="task-debug-collapse">
+      <el-collapse-item title="调试信息" name="debug">
+        <pre class="task-command">{{ command }}</pre>
+      </el-collapse-item>
+    </el-collapse>
 
     <el-divider content-position="left">日志</el-divider>
     <div class="log-toolbar">
@@ -184,6 +204,10 @@ function notifyError(error: unknown) {
   max-height: 96px;
   overflow: auto;
   color: var(--el-text-color-regular);
+}
+
+.task-debug-collapse {
+  margin-top: 10px;
 }
 
 .log-toolbar {

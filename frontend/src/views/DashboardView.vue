@@ -13,6 +13,7 @@ const props = defineProps<{
   runningTaskCount: number
   doneTaskCount: number
   failedTaskCount: number
+  busy?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -34,6 +35,7 @@ const planStats = computed(() => {
 })
 
 function handlePlanCardClick() {
+  if (props.busy) return
   if (!props.originalGraphActive) emit('prepare')
 }
 </script>
@@ -48,7 +50,7 @@ function handlePlanCardClick() {
             :class="{
               'is-active': originalGraphActive,
               'is-inactive': !originalGraphActive,
-              'is-clickable': !originalGraphActive,
+              'is-clickable': !originalGraphActive && !busy,
             }"
             shadow="never"
             @click="handlePlanCardClick"
@@ -104,7 +106,7 @@ function handlePlanCardClick() {
         <template #header>
           <div class="card-header">
             <span>任务总览</span>
-            <el-button @click="$emit('refreshTasks')">刷新</el-button>
+            <el-button :disabled="busy" @click="$emit('refreshTasks')">刷新</el-button>
           </div>
         </template>
         <el-row :gutter="16">

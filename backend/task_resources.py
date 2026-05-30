@@ -94,10 +94,10 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         )
         writes.add(resource("dataset", params.get("dataset_id")))
     elif action == "solve":
-        writes.add(resource("dataset", params.get("dataset_id")))
+        writes.add(dataset_case_or_dataset(params))
     elif action == "export_timetable":
         reads.add("context")
-        writes.add(resource("dataset", params.get("dataset_id")))
+        writes.add(dataset_case_or_dataset(params))
     elif action == "train":
         reads.update(
             {
@@ -124,6 +124,15 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
 def resource(kind: str, value: object) -> str:
     text = str(value or "").strip()
     return f"{kind}:{sanitize_id(text)}" if text else ""
+
+
+def dataset_case_or_dataset(params: Mapping[str, Any]) -> str:
+    dataset_id = str(params.get("dataset_id") or "").strip()
+    case_id = str(params.get("case_id") or "").strip()
+    if not dataset_id:
+        return ""
+    dataset_resource = resource("dataset", dataset_id)
+    return f"{dataset_resource}:case:{sanitize_id(case_id)}" if case_id else dataset_resource
 
 
 def task_references_value(task: Dict[str, object], *, field: str, value: str) -> bool:

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import VChart from 'vue-echarts'
 
-import { barPercentLabel, chartDownloadToolbox } from '@/chart-options'
+import { barPercentLabel } from '@/chart-options'
+import ChartPanel from '@/components/ChartPanel.vue'
 import EntityToolbar, { type EntityOption } from '@/components/EntityToolbar.vue'
 import TimetableChart from '@/components/TimetableChart.vue'
 import type {
@@ -19,6 +19,7 @@ const props = defineProps<{
   scenarios: ScenarioSummary[]
   visualization: ScenarioSetVisualization | null
   loading: boolean
+  busy?: boolean
 }>()
 
 defineEmits<{
@@ -88,7 +89,6 @@ function buildTypePieOption(visualization: ScenarioSetVisualization | null) {
       value: item.count,
     })) ?? []
   return {
-    toolbox: chartDownloadToolbox('scenario-set-type-ratio'),
     tooltip: { trigger: 'item', formatter: '{b}<br/>{c} 个 ({d}%)' },
     legend: { bottom: 0, type: 'scroll' },
     series: [
@@ -106,7 +106,6 @@ function buildTypePieOption(visualization: ScenarioSetVisualization | null) {
 function buildCoverageBarOption(visualization: ScenarioSetVisualization | null) {
   const rows = visualization?.summary.coverage.rows ?? []
   return {
-    toolbox: chartDownloadToolbox('scenario-set-coverage'),
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
@@ -186,6 +185,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
         :options="scenarioSetOptions"
         placeholder="选择扰动场景集"
         delete-label="删除扰动场景集"
+        :busy="busy"
         @update:model-value="$emit('update:selectedScenarioSetId', $event)"
         @visible-change="$emit('reloadScenarioSets', $event)"
         @add="$emit('createScenarioSet')"
@@ -197,7 +197,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
           <template #description>
             <div class="primary-empty-title">请先新建扰动场景集</div>
           </template>
-          <el-button type="primary" size="large" @click="$emit('createScenarioSet')">
+          <el-button type="primary" size="large" :disabled="busy" @click="$emit('createScenarioSet')">
             新建扰动场景集
           </el-button>
         </el-empty>
@@ -242,6 +242,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
                     v-model="selectedScenarioId"
                     class="scenario-select"
                     placeholder="选择场景"
+                    :disabled="busy"
                   >
                     <el-option label="All" :value="ALL_SCENARIOS" />
                     <el-option
@@ -271,11 +272,21 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
             <div class="scenario-chart-stack">
               <div class="scenario-chart-card">
                 <div class="scenario-chart-title">场景类型占比</div>
-                <VChart :option="typePieOption" autoresize class="scenario-small-chart" />
+                <ChartPanel
+                  :option="typePieOption"
+                  filename="scenario-set-type-ratio"
+                  chart-class="scenario-small-chart"
+                  height="230px"
+                />
               </div>
               <div class="scenario-chart-card">
                 <div class="scenario-chart-title">扰动时间 / 空间覆盖率</div>
-                <VChart :option="coverageBarOption" autoresize class="scenario-small-chart" />
+                <ChartPanel
+                  :option="coverageBarOption"
+                  filename="scenario-set-coverage"
+                  chart-class="scenario-small-chart"
+                  height="230px"
+                />
               </div>
             </div>
           </el-card>
@@ -301,14 +312,14 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
               <div class="scenario-actions">
                 <el-button
                   type="primary"
-                  :disabled="!selectedScenarioSetId"
+                  :disabled="!selectedScenarioSetId || busy"
                   @click="$emit('normalGenerate')"
                 >
                   批量新增场景
                 </el-button>
                 <el-button
                   type="primary"
-                  :disabled="!selectedScenarioSetId"
+                  :disabled="!selectedScenarioSetId || busy"
                   @click="$emit('createScenario')"
                 >
                   新增场景
@@ -341,6 +352,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
                   <el-button
                     link
                     type="danger"
+                    :disabled="busy"
                     @click="$emit('deleteScenario', row.scenario_id)"
                   >
                     删除
@@ -386,12 +398,6 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
   color: var(--el-text-color-secondary);
   font-size: 13px;
   font-weight: 600;
-}
-
-.scenario-small-chart {
-  display: block;
-  width: 100%;
-  height: 230px;
 }
 
 .scenario-list-card {

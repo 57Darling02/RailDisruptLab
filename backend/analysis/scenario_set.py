@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 from backend.analysis.disturbances import read_scenario_disturbances
 from backend.analysis.timetable import plan_rows
 from core.base_context import load_base_context
-from core.project_layout import ProjectLayout, sanitize_id, to_posix
+from core.project_layout import ProjectLayout, require_id, sanitize_id, to_posix
 from core.scenario_config import scenario_files
 
 
@@ -39,7 +39,7 @@ NEAR_SPACE_UNITS = 1.0
 
 
 def read_scenario_set_visualization(layout: ProjectLayout, scenario_set_id: str) -> Dict[str, object]:
-    scenario_set_id = sanitize_id(scenario_set_id)
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
     root = layout.scenario_set(scenario_set_id).root
     if not root.is_dir():
         raise FileNotFoundError(f"Scenario set not found: {root}")

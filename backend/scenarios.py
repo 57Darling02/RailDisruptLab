@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
 from core.loader import parse_scenario_config
-from core.project_layout import ProjectLayout, reset_dir, sanitize_id
+from core.project_layout import ProjectLayout, require_id, reset_dir, sanitize_id
 from core.scenario_config import (
     ScenarioDocument,
     scenario_config_to_yaml,
@@ -697,10 +697,7 @@ def list_payload(value: object) -> List[Mapping[str, object]]:
 
 
 def sanitize_required_id(value: object, field_name: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        raise ValueError(f"Missing required field: {field_name}")
-    return sanitize_id(text)
+    return require_id(value, field_name)
 
 
 def seconds_to_hms(seconds: int) -> str:

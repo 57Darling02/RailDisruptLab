@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List
 
-from core.project_layout import PROJECTS_ROOT, ProjectLayout, sanitize_id, to_posix
+from core.project_layout import PROJECTS_ROOT, ProjectLayout, require_id, sanitize_id, to_posix
 from core.scenario_config import scenario_files
 
 
@@ -12,7 +12,11 @@ def list_projects(projects_root: Path = PROJECTS_ROOT) -> List[Dict[str, object]
         return []
     result: List[Dict[str, object]] = []
     for root in sorted(path for path in projects_root.iterdir() if path.is_dir()):
-        layout = ProjectLayout(name=sanitize_id(root.name), root=root)
+        try:
+            project_id = require_id(root.name, "project_id")
+        except ValueError:
+            continue
+        layout = ProjectLayout(name=project_id, root=root)
         result.append(
             {
                 "project_id": layout.name,
@@ -24,7 +28,7 @@ def list_projects(projects_root: Path = PROJECTS_ROOT) -> List[Dict[str, object]
 
 
 def get_project_state(project_id: str, projects_root: Path = PROJECTS_ROOT) -> Dict[str, object]:
-    project_id = sanitize_id(project_id)
+    project_id = require_id(project_id, "project_id")
     layout = ProjectLayout(name=project_id, root=projects_root / project_id)
     return {
         "project_id": layout.name,

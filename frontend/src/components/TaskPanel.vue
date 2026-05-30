@@ -25,18 +25,20 @@ const props = withDefaults(
     initialProjectId?: string
     emptyText?: string
     now?: number
+    busy?: boolean
   }>(),
   {
     initialProjectId: '',
     emptyText: '暂无任务',
     now: () => Date.now(),
+    busy: false,
   },
 )
 
 const emit = defineEmits<{
   refresh: []
-  clean: [projectId: string]
   cancel: [task: Task]
+  remove: [task: Task]
 }>()
 
 const logDialogVisible = ref(false)
@@ -91,10 +93,7 @@ function compareTasks(left: Task, right: Task) {
       <div class="task-panel-header">
         <div class="task-panel-title">任务管理器</div>
         <div class="task-header-actions">
-          <el-button link type="primary" @click="emit('refresh')">刷新</el-button>
-          <el-button link type="danger" :disabled="!displayTasks.length" @click="emit('clean', selectedProjectId)">
-            清理历史
-          </el-button>
+          <el-button link type="primary" :disabled="busy" @click="emit('refresh')">刷新</el-button>
         </div>
       </div>
     </template>
@@ -156,10 +155,22 @@ function compareTasks(left: Task, right: Task) {
               v-if="isTaskCancellable(task)"
               link
               type="danger"
+              :disabled="busy"
               @click="emit('cancel', task)"
             >
               中断
             </el-button>
+            <el-popconfirm
+              v-else
+              title="清除这条历史任务记录？"
+              confirm-button-text="清除"
+              cancel-button-text="取消"
+              @confirm="emit('remove', task)"
+            >
+              <template #reference>
+                <el-button link type="danger" :disabled="busy">清除</el-button>
+              </template>
+            </el-popconfirm>
           </div>
         </article>
       </div>

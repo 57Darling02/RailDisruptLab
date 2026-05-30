@@ -4,26 +4,26 @@ import shutil
 from pathlib import Path
 from typing import Dict, Iterable, Sequence
 
-from core.project_layout import ProjectLayout, sanitize_id, to_posix
+from core.project_layout import ProjectLayout, require_id, sanitize_id, to_posix
 from backend.task_resources import RUNNING_TASK_STATUSES, task_references_value
 
 
 def delete_scenario_set(layout: ProjectLayout, scenario_set_id: str) -> Dict[str, object]:
-    scenario_set_id = sanitize_id(scenario_set_id)
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
     root = layout.scenario_set(scenario_set_id).root
     delete_project_child_dir(root, allowed_root=layout.scenario_sets_dir)
     return {"deleted": True, "kind": "scenario_set", "scenario_set_id": scenario_set_id, "path": to_posix(root)}
 
 
 def delete_dataset(layout: ProjectLayout, dataset_id: str) -> Dict[str, object]:
-    dataset_id = sanitize_id(dataset_id)
+    dataset_id = require_id(dataset_id, "dataset_id")
     root = layout.dataset(dataset_id).root
     delete_project_child_dir(root, allowed_root=layout.datasets_dir)
     return {"deleted": True, "kind": "dataset", "dataset_id": dataset_id, "path": to_posix(root)}
 
 
 def delete_model(layout: ProjectLayout, model_id: str) -> Dict[str, object]:
-    model_id = sanitize_id(model_id)
+    model_id = require_id(model_id, "model_id")
     root = layout.model(model_id).root
     delete_project_child_dir(root, allowed_root=layout.model_dir)
     return {"deleted": True, "kind": "model", "model_id": model_id, "path": to_posix(root)}
@@ -48,7 +48,7 @@ def ensure_no_active_reference(
     value: str,
     action_labels: Sequence[str],
 ) -> None:
-    target = sanitize_id(value)
+    target = require_id(value, field)
     labels = set(action_labels)
     blockers = [
         task

@@ -14,7 +14,7 @@ from core.builder import build_model
 from core.disturbance_graph import disturbance_graph_to_scenario
 from core.exporter import export_lp
 from core.loader import load_config_payload, load_mileage_table, load_timetable, parse_scenario_config
-from core.project_layout import ProjectLayout, REPO_ROOT, reset_dir, sanitize_id, to_posix
+from core.project_layout import ProjectLayout, REPO_ROOT, require_id, reset_dir, sanitize_id, to_posix
 from core.scenario_config import (
     ScenarioDocument,
     load_scenario_document,
@@ -584,13 +584,13 @@ def case_app_config(
 
 def load_project_context(layout: ProjectLayout):
     if not layout.context_json.is_file():
-        raise FileNotFoundError(f"Missing project context. Run: python scripts/project.py {layout.name} prepare")
+        raise FileNotFoundError(f"Missing project context. Activate the original timetable first: {layout.context_json}")
     return load_base_context(layout.context_json)
 
 
 def require_project(layout: ProjectLayout) -> None:
     if not layout.root.is_dir():
-        raise FileNotFoundError(f"Project not found. Run: python scripts/project.py newproject {layout.name}")
+        raise FileNotFoundError(f"Project not found: {layout.root}")
 
 
 def model_checkpoint_path(model_root: Path, checkpoint: str) -> Path:
@@ -650,10 +650,7 @@ def required_filename(config: Dict[str, object], key: str) -> str:
 
 
 def required_id(config: Dict[str, object], key: str) -> str:
-    value = str(config.get(key, "") or "").strip()
-    if not value:
-        raise ValueError(f"Missing required {key}")
-    return sanitize_id(value)
+    return require_id(config.get(key), key)
 
 
 def default_build_config() -> Dict[str, object]:

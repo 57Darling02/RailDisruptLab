@@ -15,7 +15,7 @@ from backend.repository import ProjectRepository
 from backend.scenarios import read_scenario_options
 from backend.task_contracts import TASK_DEFAULTS, normalize_project_id, normalize_task_params
 from backend.task_resources import ensure_no_active_conflict
-from core.project_layout import PROJECTS_ROOT, REPO_ROOT, sanitize_id, to_posix
+from core.project_layout import PROJECTS_ROOT, REPO_ROOT, require_id, sanitize_id, to_posix
 
 
 class RailGraphBackend:
@@ -107,7 +107,7 @@ class RailGraphBackend:
 
     def delete_model(self, project_id: str, model_id: str) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
-        model_id = sanitize_id(model_id)
+        model_id = require_id(model_id, "model_id")
         ensure_no_active_reference(
             self.tasks.list_active_tasks(group=project_id),
             field="model_id",
@@ -125,15 +125,11 @@ class RailGraphBackend:
     def task_log(self, task_id: Union[str, int], *, lines: Optional[int] = None) -> str:
         return self.tasks.log(task_id, lines=lines)
 
-    def wait_task(self, task_id: Union[str, int]) -> Optional[Dict[str, object]]:
-        return self.tasks.wait(task_id)
-
     def cancel_task(self, task_id: Union[str, int]) -> Dict[str, object]:
         return self.tasks.cancel(task_id)
 
-    def clean_tasks(self, project_id: Optional[str] = None, *, successful_only: bool = False) -> Dict[str, object]:
-        group = normalize_project_id(project_id) if project_id else None
-        return self.tasks.clean(group=group, successful_only=successful_only)
+    def remove_task(self, task_id: Union[str, int]) -> Dict[str, object]:
+        return self.tasks.remove_task(task_id)
 
     def create_project(self, project_id: str) -> Dict[str, object]:
         return self.submit_task(project_id, "newproject", {}, label="newproject")
@@ -157,7 +153,7 @@ class RailGraphBackend:
 
     def delete_scenario_set(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
-        scenario_set_id = sanitize_id(scenario_set_id)
+        scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
         ensure_no_active_reference(
             self.tasks.list_active_tasks(group=project_id),
             field="scenario_set_id",
@@ -265,7 +261,7 @@ class RailGraphBackend:
 
     def delete_dataset(self, project_id: str, dataset_id: str) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
-        dataset_id = sanitize_id(dataset_id)
+        dataset_id = require_id(dataset_id, "dataset_id")
         ensure_no_active_reference(
             self.tasks.list_active_tasks(group=project_id),
             field="dataset_id",

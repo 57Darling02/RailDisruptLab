@@ -11,6 +11,7 @@ const props = defineProps<{
   datasets: DatasetSummary[]
   artifactGroups: ArtifactGroup[]
   formatBytes: (size: number) => string
+  busy?: boolean
 }>()
 
 defineEmits<{
@@ -44,6 +45,7 @@ const datasetOptions = computed<EntityOption[]>(() =>
         :options="datasetOptions"
         placeholder="选择 MILP 实例集"
         delete-label="删除 MILP 实例集"
+        :busy="busy"
         @update:model-value="$emit('update:selectedDatasetId', $event)"
         @visible-change="$emit('reloadDatasets', $event)"
         @add="$emit('createDataset')"
@@ -55,7 +57,7 @@ const datasetOptions = computed<EntityOption[]>(() =>
           <template #description>
             <div class="primary-empty-title">请先新建MILP实例集</div>
           </template>
-          <el-button type="primary" size="large" @click="$emit('createDataset')">
+          <el-button type="primary" size="large" :disabled="busy" @click="$emit('createDataset')">
             新建MILP实例集
           </el-button>
         </el-empty>
@@ -66,7 +68,7 @@ const datasetOptions = computed<EntityOption[]>(() =>
         <template #header>
           <div class="card-header">
             <span>MILP 实例集信息</span>
-            <el-button @click="$emit('refreshArtifacts')">刷新</el-button>
+            <el-button :disabled="busy" @click="$emit('refreshArtifacts')">刷新</el-button>
           </div>
         </template>
         <el-empty v-if="!selectedDatasetId" description="请选择或新增 MILP 实例集" />
@@ -97,13 +99,13 @@ const datasetOptions = computed<EntityOption[]>(() =>
             <span>构建产物</span>
             <div class="scenario-actions">
               <span class="muted-text">{{ artifactGroups.length }} 个实例</span>
-              <el-button :disabled="!selectedDatasetId" @click="$emit('buildDataset')">
+              <el-button :disabled="!selectedDatasetId || busy" @click="$emit('buildDataset')">
                 从场景构建
               </el-button>
-              <el-button :disabled="!selectedDatasetId" @click="$emit('solveAll')">
+              <el-button :disabled="!selectedDatasetId || busy" @click="$emit('solveAll')">
                 全部求解
               </el-button>
-              <el-button :disabled="!selectedDatasetId" @click="$emit('exportAllTimetables')">
+              <el-button :disabled="!selectedDatasetId || busy" @click="$emit('exportAllTimetables')">
                 全部导出时刻表
               </el-button>
             </div>
@@ -135,7 +137,7 @@ const datasetOptions = computed<EntityOption[]>(() =>
                 <el-button
                   link
                   type="primary"
-                  :disabled="!row.has_lp"
+                  :disabled="!row.has_lp || busy"
                   @click="$emit('solveCase', row.case_id)"
                 >
                   求解
@@ -143,7 +145,7 @@ const datasetOptions = computed<EntityOption[]>(() =>
                 <el-button
                   link
                   type="primary"
-                  :disabled="!row.has_solution"
+                  :disabled="!row.has_solution || busy"
                   @click="$emit('exportTimetable', row.case_id)"
                 >
                   导出时刻表
@@ -151,7 +153,7 @@ const datasetOptions = computed<EntityOption[]>(() =>
                 <el-button
                   link
                   type="primary"
-                  :disabled="!row.has_timetable_data"
+                  :disabled="!row.has_timetable_data || busy"
                   @click="$emit('openTimetable', row)"
                 >
                   查看

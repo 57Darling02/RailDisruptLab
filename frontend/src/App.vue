@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ScrollbarInstance, UploadFile, UploadUserFile } from 'element-plus'
 
 import { api, ApiError } from '@/api/client'
+import BuildOptionsFields from '@/components/BuildOptionsFields.vue'
 import FieldLabelTip from '@/components/FieldLabelTip.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 import TimetableDialog from '@/components/TimetableDialog.vue'
@@ -18,8 +19,6 @@ import {
   isTaskFailed,
   isTaskSuccessful,
   isTaskTerminal,
-  taskDisplayStatus,
-  taskTagType,
 } from '@/task-status'
 import type { TaskTagType } from '@/task-status'
 import type {
@@ -59,8 +58,6 @@ type ScenarioSpeedLimitForm = {
   limit_speed: number
 }
 
-const SHORT_TASK_WAIT_MS = 12000
-const SHORT_TASK_POLL_MS = 500
 const TASK_POLL_MS = 2500
 const TASK_DURATION_TICK_MS = 1000
 const DEFAULT_DATASET_RUN_FORM: DatasetRunForm = {
@@ -172,8 +169,7 @@ const planTimetable = ref<PlanTimetableState | null>(null)
 const tasks = ref<Task[]>([])
 const taskNow = ref(Date.now())
 const activePage = ref<PageKey>('dashboard')
-const busy = ref(false)
-const submittingTask = ref(false)
+const activeOperation = ref('')
 const mainScrollbar = ref<ScrollbarInstance>()
 
 const projectDialogVisible = ref(false)
@@ -308,6 +304,8 @@ const projectTasks = computed(() => tasks.value.filter((task) => task.group === 
 const runningTaskCount = computed(() => projectTasks.value.filter((task) => !isTaskTerminal(task)).length)
 const doneTaskCount = computed(() => projectTasks.value.filter(isTaskSuccessful).length)
 const failedTaskCount = computed(() => projectTasks.value.filter(isTaskFailed).length)
+const operationPending = computed(() => Boolean(activeOperation.value))
+const operationText = computed(() => (activeOperation.value ? `${activeOperation.value}中...` : '处理中...'))
 
 watch(selectedProjectId, async (_projectId, previousProjectId) => {
   resetPrepareForm()
@@ -344,7 +342,10 @@ watch(datasetCreateMode, (mode) => {
 })
 
 watch(datasetCreateScenarioSetId, () => {
-  if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
+  if (datasetCreateMode.value === 'scenario_set') {
+    syncDatasetCreateId()
+    datasetBuildForm.value.scenario_set_id = datasetCreateScenarioSetId.value.trim()
+  }
 })
 
 watch(selectedModelId, async () => {
@@ -388,7 +389,7 @@ onUnmounted(() => {
 })
 
 async function bootstrap() {
-  await run('连接后端', async () => {
+  await runAction('连接后端', async () => {
     await api.health()
     await refreshProjects()
     await refreshTasks(false)
@@ -506,15 +507,14 @@ function stopDurationTick() {
 async function createProject() {
   const projectId = newProjectId.value.trim()
   if (!projectId) return
-  await run('创建项目', async () => {
+  await submitTask('创建项目', async () => {
     const response = await api.createProject(projectId)
-    const message = await finishShortTask(response.task, '创建项目')
+    trackTask(response.task)
     newProjectId.value = ''
     projectDialogVisible.value = false
-    await refreshProjects()
     selectedProjectId.value = projectId
-    await loadSelectedProject(false)
-    return message
+    await refreshTasks(false)
+    return response.task
   })
 }
 
@@ -531,17 +531,18 @@ async function removeSelectedProject() {
   } catch {
     return
   }
-  await run('移除项目', async () => {
+  await submitTask('移除项目', async () => {
     const response = await api.deleteProject(selectedProjectId.value)
-    const message = await finishShortTask(response.task, '移除项目')
+    trackTask(response.task)
     selectedProjectId.value = ''
     project.value = null
-    await refreshProjects()
-    return message
+    planTimetable.value = null
+    return response.task
   })
 }
 
 function openPrepareDialog() {
+  if (operationPending.value) return
   resetPrepareForm()
   prepareDialogVisible.value = true
 }
@@ -551,7 +552,7 @@ async function submitPrepare() {
     ElMessage.warning('请上传时刻表和里程表文件。')
     return
   }
-  await run('激活原计划运行图', async () => {
+  await submitTask('激活原计划运行图', async () => {
     const response = await api.activatePlan(
       selectedProjectId.value,
       prepareForm.value.timetable_file as File,
@@ -563,21 +564,21 @@ async function submitPrepare() {
     planTimetable.value = null
     prepareDialogVisible.value = false
     resetPrepareForm()
+    return response.task
   })
 }
 
 async function createScenarioSet() {
   const scenarioSetId = newScenarioSetId.value.trim()
   if (!scenarioSetId) return
-  await run('创建扰动场景集', async () => {
+  await submitTask('创建扰动场景集', async () => {
     const response = await api.createScenarioSet(selectedProjectId.value, scenarioSetId)
-    const message = await finishShortTask(response.task, '创建扰动场景集')
+    trackTask(response.task)
     selectedScenarioSetId.value = scenarioSetId
     newScenarioSetId.value = ''
     scenarioSetDialogVisible.value = false
-    await loadSelectedProject(false)
-    await loadScenarioSetData(false)
-    return message
+    await refreshTasks(false)
+    return response.task
   })
 }
 
@@ -596,7 +597,7 @@ async function deleteScenarioSetById(scenarioSetId: string) {
   } catch {
     return
   }
-  await run('删除扰动场景集', async () => {
+  await runAction('删除扰动场景集', async () => {
     await api.deleteScenarioSet(selectedProjectId.value, scenarioSetId)
     if (selectedScenarioSetId.value === scenarioSetId) {
       selectedScenarioSetId.value = ''
@@ -682,6 +683,7 @@ async function reloadScenarioSetsOnOpen(visible: boolean) {
 }
 
 async function openScenarioDialog() {
+  if (operationPending.value) return
   if (!selectedScenarioSetId.value) {
     ElMessage.warning('请先选择扰动场景集。')
     return
@@ -734,7 +736,7 @@ async function addScenario() {
     ElMessage.warning('请至少添加一个扰动。')
     return
   }
-  await run('新增场景', async () => {
+  await submitTask('新增场景', async () => {
     const response = await api.addScenario(
       selectedProjectId.value,
       selectedScenarioSetId.value,
@@ -742,11 +744,9 @@ async function addScenario() {
       scenarioPayload(),
       scenarioOverwrite.value,
     )
-    const message = await finishShortTask(response.task, '新增场景')
+    trackTask(response.task)
     scenarioDialogVisible.value = false
-    await loadSelectedProject(false)
-    await loadScenarioSetData(false)
-    return message
+    return response.task
   })
 }
 
@@ -775,20 +775,19 @@ async function deleteScenario(id: string) {
   } catch {
     return
   }
-  await run('删除场景', async () => {
+  await submitTask('删除场景', async () => {
     const response = await api.deleteScenario(
       selectedProjectId.value,
       selectedScenarioSetId.value,
       id,
     )
-    const message = await finishShortTask(response.task, '删除场景')
-    await loadSelectedProject(false)
-    await loadScenarioSetData(false)
-    return message
+    trackTask(response.task)
+    return response.task
   })
 }
 
 function openNormalGenerateDialog() {
+  if (operationPending.value) return
   if (!selectedScenarioSetId.value) {
     ElMessage.warning('请先选择扰动场景集。')
     return
@@ -798,7 +797,7 @@ function openNormalGenerateDialog() {
 
 async function submitNormalGenerate() {
   if (!selectedScenarioSetId.value) return
-  await submitBackgroundTask('批量生成场景', async () => {
+  await submitTask('批量生成场景', async () => {
     const response = await api.submitNormalGenerate(selectedProjectId.value, {
       scenario_set_id: selectedScenarioSetId.value,
       merge: true,
@@ -807,6 +806,7 @@ async function submitNormalGenerate() {
     })
     trackTask(response.task)
     normalGenerateDialogVisible.value = false
+    return response.task
   })
 }
 
@@ -823,7 +823,7 @@ async function submitBuild() {
     ElMessage.warning('请选择要构建的场景。')
     return
   }
-  await submitBackgroundTask('构建 MILP 任务', async () => {
+  await submitTask('构建 MILP', async () => {
     const response = await api.submitBuild(
       selectedProjectId.value,
       scenarioSetId,
@@ -834,6 +834,7 @@ async function submitBuild() {
     trackTask(response.task)
     selectedDatasetId.value = datasetId
     datasetBuildDialogVisible.value = false
+    return response.task
   })
 }
 
@@ -898,11 +899,9 @@ async function createDataset() {
     ElMessage.warning('请先选择要引入的扰动场景集。')
     return
   }
-  await run('新增 MILP 实例集', async () => {
+  await submitTask('新增 MILP 实例集', async () => {
     const response = await api.createDataset(selectedProjectId.value, datasetId)
-    const message = importScenarioSet
-      ? await requireShortTaskSuccess(response.task, '新增 MILP 实例集')
-      : await finishShortTask(response.task, '新增 MILP 实例集')
+    trackTask(response.task)
     selectedDatasetId.value = datasetId
     if (importScenarioSet) {
       selectedScenarioSetId.value = scenarioSetId
@@ -911,17 +910,16 @@ async function createDataset() {
         scenarioSetId,
         datasetId,
         '',
-        defaultBuildOptions(),
+        normalizedBuildOptions(),
       )
       trackTask(buildResponse.task)
+      resetDatasetCreateForm()
+      datasetCreateDialogVisible.value = false
+      return buildResponse.task
     }
     resetDatasetCreateForm()
     datasetCreateDialogVisible.value = false
-    await loadSelectedProject(false)
-    await loadDatasetArtifacts(false)
-    return importScenarioSet
-      ? `${message}，已提交从扰动场景集 ${scenarioSetId} 构建任务`
-      : message
+    return response.task
   })
 }
 
@@ -940,7 +938,7 @@ async function deleteDatasetById(datasetId: string) {
   } catch {
     return
   }
-  await run('删除 MILP 实例集', async () => {
+  await runAction('删除 MILP 实例集', async () => {
     await api.deleteDataset(selectedProjectId.value, datasetId)
     if (selectedDatasetId.value === datasetId) {
       selectedDatasetId.value = ''
@@ -954,7 +952,7 @@ async function deleteDatasetById(datasetId: string) {
 async function submitSolve(caseId = '') {
   if (!selectedDatasetId.value) return
   const options = normalizedSolveOptions()
-  await submitBackgroundTask('求解任务', async () => {
+  await submitTask('求解', async () => {
     const response = await api.submitSolve(
       selectedProjectId.value,
       selectedDatasetId.value,
@@ -967,12 +965,13 @@ async function submitSolve(caseId = '') {
     )
     trackTask(response.task)
     solveDialogVisible.value = false
+    return response.task
   })
 }
 
 async function submitExportTimetable(caseId = '') {
   if (!selectedDatasetId.value) return
-  await submitBackgroundTask('导出时刻表任务', async () => {
+  await submitTask('导出时刻表', async () => {
     const response = await api.submitExportTimetable(
       selectedProjectId.value,
       selectedDatasetId.value,
@@ -980,10 +979,12 @@ async function submitExportTimetable(caseId = '') {
       caseId,
     )
     trackTask(response.task)
+    return response.task
   })
 }
 
 function openSolveDialog(caseId = '') {
+  if (operationPending.value) return
   if (!selectedDatasetId.value) return
   solveTargetCaseId.value = caseId
   resetSolveForm()
@@ -1040,9 +1041,14 @@ async function reloadDatasetsOnOpen(visible: boolean) {
 }
 
 async function openDatasetCreateDialog() {
+  if (operationPending.value) return
   datasetCreateMode.value = scenarioSets.value.length ? 'scenario_set' : 'empty'
   datasetCreateScenarioSetId.value = selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
   newDatasetId.value = ''
+  resetDatasetBuildForm({
+    source: 'scenario_set',
+    scenarioSetId: datasetCreateScenarioSetId.value,
+  })
   if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
   datasetCreateDialogVisible.value = true
 }
@@ -1053,28 +1059,41 @@ function resetDatasetCreateForm() {
   datasetCreateMode.value = 'scenario_set'
 }
 
-function defaultBuildOptions(): DatasetBuildForm {
-  return { ...DEFAULT_DATASET_BUILD_FORM }
-}
-
 function syncDatasetCreateId() {
   newDatasetId.value = datasetCreateScenarioSetId.value.trim()
 }
 
 async function openDatasetBuildDialog() {
+  if (operationPending.value) return
   if (!selectedDatasetId.value) {
     ElMessage.warning('请先新增或选择一个 MILP 实例集。')
     return
   }
-  datasetBuildForm.value.scenario_set_id =
-    selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
-  datasetBuildForm.value.source = 'scenario_set'
-  datasetBuildForm.value.scenario_id = ''
+  resetDatasetBuildForm({
+    source: 'scenario_set',
+    scenarioSetId: selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || '',
+  })
   if (datasetBuildForm.value.scenario_set_id) {
     selectedScenarioSetId.value = datasetBuildForm.value.scenario_set_id
     await loadScenarios(false)
   }
   datasetBuildDialogVisible.value = true
+}
+
+function resetDatasetBuildForm(options: { source: DatasetBuildSource; scenarioSetId: string }) {
+  datasetBuildForm.value = {
+    scenario_set_id: options.scenarioSetId,
+    source: options.source,
+    scenario_id: '',
+    ...DEFAULT_DATASET_BUILD_FORM,
+  }
+}
+
+function updateDatasetBuildOptions(options: DatasetBuildForm) {
+  datasetBuildForm.value = {
+    ...datasetBuildForm.value,
+    ...options,
+  }
 }
 
 async function onDatasetBuildScenarioSetChange() {
@@ -1090,7 +1109,7 @@ async function reloadDatasetBuildScenariosOnOpen(visible: boolean) {
 
 async function openCaseTimetable(group: ArtifactGroup) {
   if (!selectedProjectId.value || !selectedDatasetId.value) return
-  await run('读取时刻表数据', async () => {
+  await runAction('读取时刻表数据', async () => {
     caseTimetable.value = await api.readCaseTimetable(
       selectedProjectId.value,
       selectedDatasetId.value,
@@ -1115,37 +1134,29 @@ async function cancelTask(task: Task) {
   } catch {
     return
   }
-  await run('中断任务', async () => {
+  await runAction('中断任务', async () => {
     await api.cancelTask(task.id)
     await refreshTasks(false)
     return `任务 #${task.id} 已请求中断`
   })
 }
 
-async function cleanTasks(projectId = '') {
-  const targetText = projectId ? `项目 ${projectId}` : '全部项目'
-  try {
-    await ElMessageBox.confirm(
-      `清理${targetText}已结束的历史任务？运行中和排队中的任务不会被清理。`,
-      '清理历史任务',
-      {
-        type: 'warning',
-        confirmButtonText: '清理',
-        cancelButtonText: '取消',
-      },
-    )
-  } catch {
-    return
-  }
-  await run('清理历史任务', async () => {
-    const result = await api.cleanTasks(projectId || undefined)
+async function removeTask(task: Task) {
+  if (!isTaskTerminal(task)) return
+  await runAction('清除任务', async () => {
+    await api.removeTask(task.id)
+    tasks.value = tasks.value.filter((item) => item.id !== task.id)
+    if (taskLogTarget.value?.id === task.id) {
+      taskLogDialogVisible.value = false
+      taskLogTarget.value = null
+    }
     await refreshTasks(false)
-    const removed = Number(result.removed ?? 0)
-    return `已清理 ${removed} 个历史任务`
+    return `任务 #${task.id} 已清除`
   })
 }
 
 async function openTrainDialog(mode: 'create' | 'retrain' = 'create') {
+  if (operationPending.value) return
   trainDialogMode.value = mode
   if (mode === 'retrain' && selectedModelId.value) {
     await loadModelDetails(false)
@@ -1201,16 +1212,18 @@ async function submitTrain() {
       return
     }
   }
-  await submitBackgroundTask('训练任务', async () => {
+  await submitTask('训练模型', async () => {
     const response = await api.submitTrain(selectedProjectId.value, { ...trainForm })
     trackTask(response.task)
     pendingModelId.value = trainForm.model_id
     pendingModelTaskId.value = response.task.id
     trainDialogVisible.value = false
+    return response.task
   })
 }
 
 function openGenerationDialog(file: ModelCheckpoint) {
+  if (operationPending.value) return
   if (!selectedModelId.value) {
     ElMessage.warning('请先选择扰动生成模型。')
     return
@@ -1239,7 +1252,7 @@ async function submitGeneration() {
     ElMessage.warning('请填写生成到的扰动场景集 ID。')
     return
   }
-  await submitBackgroundTask('生成任务', async () => {
+  await submitTask('生成场景', async () => {
     const response = await api.submitGeneration(
       selectedProjectId.value,
       selectedModelId.value,
@@ -1253,6 +1266,7 @@ async function submitGeneration() {
     )
     trackTask(response.task)
     generationDialogVisible.value = false
+    return response.task
   })
 }
 
@@ -1271,7 +1285,7 @@ async function deleteModelById(modelId: string) {
   } catch {
     return
   }
-  await run('删除扰动生成模型', async () => {
+  await runAction('删除扰动生成模型', async () => {
     await api.deleteModel(selectedProjectId.value, modelId)
     if (selectedModelId.value === modelId) {
       selectedModelId.value = ''
@@ -1337,60 +1351,6 @@ function reconcilePendingModel() {
 function clearPendingModel() {
   pendingModelId.value = ''
   pendingModelTaskId.value = null
-}
-
-async function finishShortTask(task: Task, label: string) {
-  const doneTask = await waitForShortTask(task)
-  const log = await api.getTaskLog(task.id, 160)
-  await refreshTasks(false)
-
-  if (!isTerminalTask(doneTask)) {
-    return `${label}已提交：任务 ${task.id} ${taskDisplayStatus(doneTask)}，输出将在任务面板继续刷新`
-  }
-
-  if (isTaskSuccessful(doneTask)) {
-    const lastLine = lastMeaningfulLine(log)
-    return lastLine ? `${label}完成：${lastLine}` : `${label}完成`
-  }
-
-  const detail = lastMeaningfulLine(log)
-  throw new Error(
-    detail
-      ? `${label}失败：${taskDisplayStatus(doneTask)}，${detail}`
-      : `${label}失败：${taskDisplayStatus(doneTask)}`,
-  )
-}
-
-async function requireShortTaskSuccess(task: Task, label: string) {
-  const doneTask = await waitForShortTask(task)
-  const log = await api.getTaskLog(task.id, 160)
-  await refreshTasks(false)
-
-  if (isTaskSuccessful(doneTask)) {
-    const lastLine = lastMeaningfulLine(log)
-    return lastLine ? `${label}完成：${lastLine}` : `${label}完成`
-  }
-
-  const detail = lastMeaningfulLine(log)
-  throw new Error(
-    detail
-      ? `${label}未完成：${taskDisplayStatus(doneTask)}，${detail}`
-      : `${label}未完成：${taskDisplayStatus(doneTask)}`,
-  )
-}
-
-async function waitForShortTask(task: Task) {
-  let current = task
-  const deadline = Date.now() + SHORT_TASK_WAIT_MS
-  while (!isTerminalTask(current) && Date.now() < deadline) {
-    await sleep(SHORT_TASK_POLL_MS)
-    current = await api.getTask(task.id)
-  }
-  return current
-}
-
-function isTerminalTask(task: Task) {
-  return isTaskTerminal(task)
 }
 
 function filterTasks(labels: readonly string[]) {
@@ -1579,18 +1539,6 @@ function nextScenarioId() {
   return `scenario_${stamp}`
 }
 
-function lastMeaningfulLine(log: string) {
-  return log
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .at(-1)
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
 async function scrollMainToTop() {
   await nextTick()
   mainScrollbar.value?.setScrollTop(0)
@@ -1623,28 +1571,30 @@ function warnSingleFile() {
   ElMessage.warning('每项只需要一个文件，请先移除后重新选择。')
 }
 
-async function run(label: string, action: () => Promise<string | void>) {
-  busy.value = true
+async function runAction(label: string, action: () => Promise<string | void>) {
+  if (operationPending.value) return
+  activeOperation.value = label
   try {
     const message = await action()
     ElMessage.success(message || label)
   } catch (error) {
     notifyError(error)
   } finally {
-    busy.value = false
+    activeOperation.value = ''
   }
 }
 
-async function submitBackgroundTask(label: string, action: () => Promise<void>) {
-  if (submittingTask.value) return
-  submittingTask.value = true
+async function submitTask(label: string, action: () => Promise<Task>) {
+  if (operationPending.value) return
+  activeOperation.value = label
   try {
-    await action()
-    ElMessage.success(`${label}已提交`)
+    const task = await action()
+    ElMessage.success(`${label}已提交：任务 #${task.id}`)
+    await refreshTasks(false)
   } catch (error) {
     notifyError(error)
   } finally {
-    submittingTask.value = false
+    activeOperation.value = ''
   }
 }
 
@@ -1690,6 +1640,7 @@ function notifyError(error: unknown) {
               placeholder="选择项目"
               filterable
               class="project-select"
+              :disabled="operationPending"
             >
               <el-option
                 v-for="item in projects"
@@ -1698,9 +1649,10 @@ function notifyError(error: unknown) {
                 :value="item.project_id"
               />
             </el-select>
-            <el-button @click="projectDialogVisible = true">新建</el-button>
+            <el-button :disabled="operationPending" @click="projectDialogVisible = true">新建</el-button>
             <el-button
-              :disabled="!selectedProjectId"
+              :disabled="!selectedProjectId || operationPending"
+              :loading="activeOperation === '移除项目'"
               type="danger"
               @click="removeSelectedProject"
             >
@@ -1710,10 +1662,16 @@ function notifyError(error: unknown) {
         </el-header>
 
         <el-container class="workspace-container">
-          <el-main v-loading="busy" class="app-main">
+          <el-main
+            v-loading="operationPending"
+            :element-loading-text="operationText"
+            class="app-main"
+          >
             <el-scrollbar ref="mainScrollbar" class="main-scroll">
               <el-empty v-if="!hasProject" description="还没有可用项目">
-                <el-button type="primary" @click="projectDialogVisible = true">新建项目</el-button>
+                <el-button type="primary" :disabled="operationPending" @click="projectDialogVisible = true">
+                  新建项目
+                </el-button>
               </el-empty>
 
               <template v-else>
@@ -1728,6 +1686,7 @@ function notifyError(error: unknown) {
                   :running-task-count="runningTaskCount"
                   :done-task-count="doneTaskCount"
                   :failed-task-count="failedTaskCount"
+                  :busy="operationPending"
                   @prepare="openPrepareDialog"
                   @refresh-tasks="refreshTasks"
                 />
@@ -1739,6 +1698,7 @@ function notifyError(error: unknown) {
                   :scenarios="scenarios"
                   :visualization="scenarioSetVisualization"
                   :loading="scenarioSetLoading"
+                  :busy="operationPending"
                   @reload-scenario-sets="reloadScenarioSetsOnOpen"
                   @create-scenario-set="scenarioSetDialogVisible = true"
                   @delete-scenario-set="deleteScenarioSetById"
@@ -1754,6 +1714,7 @@ function notifyError(error: unknown) {
                   :datasets="datasets"
                   :artifact-groups="datasetArtifactGroups"
                   :format-bytes="formatBytes"
+                  :busy="operationPending"
                   @reload-datasets="reloadDatasetsOnOpen"
                   @create-dataset="openDatasetCreateDialog"
                   @delete-dataset="deleteDatasetById"
@@ -1787,6 +1748,7 @@ function notifyError(error: unknown) {
                   :format-bytes="formatBytes"
                   :checkpoint-role-label="checkpointRoleLabel"
                   :checkpoint-role-type="checkpointRoleType"
+                  :busy="operationPending"
                   @reload-models="reloadModelsOnOpen"
                   @train="() => openTrainDialog('create')"
                   @retrain="() => openTrainDialog('retrain')"
@@ -1802,6 +1764,7 @@ function notifyError(error: unknown) {
                   :selected-project-id="selectedProjectId"
                   :scenario-sets="scenarioSets"
                   :datasets="datasets"
+                  :busy="operationPending"
                 />
               </template>
             </el-scrollbar>
@@ -1814,9 +1777,10 @@ function notifyError(error: unknown) {
               :page-options="taskPageOptions"
               :initial-project-id="selectedProjectId"
               :page-filters="PAGE_TASK_FILTERS"
+              :busy="operationPending"
               @refresh="refreshTasks"
-              @clean="cleanTasks"
               @cancel="cancelTask"
+              @remove="removeTask"
             />
           </el-aside>
         </el-container>
@@ -1824,10 +1788,22 @@ function notifyError(error: unknown) {
     </el-container>
 
     <el-dialog v-model="projectDialogVisible" title="新建项目" width="420px">
-      <el-input v-model="newProjectId" placeholder="项目 ID" @keyup.enter="createProject" />
+      <el-input
+        v-model="newProjectId"
+        placeholder="项目 ID"
+        :disabled="operationPending"
+        @keyup.enter="createProject"
+      />
       <template #footer>
-        <el-button @click="projectDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="createProject">确定</el-button>
+        <el-button :disabled="operationPending" @click="projectDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '创建项目'"
+          :disabled="operationPending"
+          @click="createProject"
+        >
+          确定
+        </el-button>
       </template>
     </el-dialog>
 
@@ -1840,8 +1816,9 @@ function notifyError(error: unknown) {
             :limit="1"
             :on-change="setTimetableFile"
             :on-exceed="warnSingleFile"
+            :disabled="operationPending"
           >
-            <el-button>选择文件</el-button>
+            <el-button :disabled="operationPending">选择文件</el-button>
           </el-upload>
         </el-form-item>
         <el-form-item label="里程表文件">
@@ -1851,20 +1828,28 @@ function notifyError(error: unknown) {
             :limit="1"
             :on-change="setMileageFile"
             :on-exceed="warnSingleFile"
+            :disabled="operationPending"
           >
-            <el-button>选择文件</el-button>
+            <el-button :disabled="operationPending">选择文件</el-button>
           </el-upload>
         </el-form-item>
         <el-form-item label="时刻表工作表">
-          <el-input v-model="prepareForm.timetable_sheet_name" />
+          <el-input v-model="prepareForm.timetable_sheet_name" :disabled="operationPending" />
         </el-form-item>
         <el-form-item label="里程表工作表">
-          <el-input v-model="prepareForm.mileage_sheet_name" />
+          <el-input v-model="prepareForm.mileage_sheet_name" :disabled="operationPending" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="prepareDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitPrepare">激活</el-button>
+        <el-button :disabled="operationPending" @click="prepareDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '激活原计划运行图'"
+          :disabled="operationPending"
+          @click="submitPrepare"
+        >
+          激活
+        </el-button>
       </template>
     </el-dialog>
 
@@ -1872,21 +1857,29 @@ function notifyError(error: unknown) {
       <el-input
         v-model="newScenarioSetId"
         placeholder="扰动场景集 ID"
+        :disabled="operationPending"
         @keyup.enter="createScenarioSet"
       />
       <template #footer>
-        <el-button @click="scenarioSetDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="createScenarioSet">确定</el-button>
+        <el-button :disabled="operationPending" @click="scenarioSetDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '创建扰动场景集'"
+          :disabled="operationPending"
+          @click="createScenarioSet"
+        >
+          确定
+        </el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="scenarioDialogVisible" title="新增场景" width="920px">
       <el-form label-width="100px">
         <el-form-item label="场景 ID">
-          <el-input v-model="scenarioId" />
+          <el-input v-model="scenarioId" :disabled="operationPending" />
         </el-form-item>
         <el-form-item label="覆盖">
-          <el-switch v-model="scenarioOverwrite" />
+          <el-switch v-model="scenarioOverwrite" :disabled="operationPending" />
         </el-form-item>
         <el-alert
           title="中断按 limit_speed = 0 记录，与 core 的场景格式保持一致。"
@@ -1898,7 +1891,12 @@ function notifyError(error: unknown) {
         <el-table :data="scenarioDelays" empty-text="暂无晚点扰动">
           <el-table-column label="计划事件" min-width="280">
             <template #default="{ row }">
-              <el-select v-model="row.event_anchor_id" filterable class="full-width">
+              <el-select
+                v-model="row.event_anchor_id"
+                filterable
+                class="full-width"
+                :disabled="operationPending"
+              >
                 <el-option
                   v-for="item in scenarioEventOptions"
                   :key="item.anchor_id"
@@ -1910,24 +1908,31 @@ function notifyError(error: unknown) {
           </el-table-column>
           <el-table-column label="晚点秒数" width="180">
             <template #default="{ row }">
-              <el-input-number v-model="row.seconds" :min="1" />
+              <el-input-number v-model="row.seconds" :min="1" :disabled="operationPending" />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="90">
             <template #default="{ $index }">
-              <el-button link type="danger" @click="removeDelayRow($index)">删除</el-button>
+              <el-button link type="danger" :disabled="operationPending" @click="removeDelayRow($index)">
+                删除
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
         <div class="dialog-actions">
-          <el-button @click="addDelayRow">添加晚点</el-button>
+          <el-button :disabled="operationPending" @click="addDelayRow">添加晚点</el-button>
         </div>
 
         <el-divider content-position="left">限速 / 中断扰动</el-divider>
         <el-table :data="scenarioSpeedLimits" empty-text="暂无限速或中断扰动">
           <el-table-column label="区间" min-width="240">
             <template #default="{ row }">
-              <el-select v-model="row.section_anchor_id" filterable class="full-width">
+              <el-select
+                v-model="row.section_anchor_id"
+                filterable
+                class="full-width"
+                :disabled="operationPending"
+              >
                 <el-option
                   v-for="item in scenarioSectionOptions"
                   :key="item.anchor_id"
@@ -1939,33 +1944,42 @@ function notifyError(error: unknown) {
           </el-table-column>
           <el-table-column label="开始时间" width="150">
             <template #default="{ row }">
-              <el-input v-model="row.start_time" placeholder="HH:MM:SS" />
+              <el-input v-model="row.start_time" placeholder="HH:MM:SS" :disabled="operationPending" />
             </template>
           </el-table-column>
           <el-table-column label="持续秒数" width="150">
             <template #default="{ row }">
-              <el-input-number v-model="row.duration" :min="1" />
+              <el-input-number v-model="row.duration" :min="1" :disabled="operationPending" />
             </template>
           </el-table-column>
           <el-table-column label="限速" width="150">
             <template #default="{ row }">
-              <el-input-number v-model="row.limit_speed" :min="0" />
+              <el-input-number v-model="row.limit_speed" :min="0" :disabled="operationPending" />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="90">
             <template #default="{ $index }">
-              <el-button link type="danger" @click="removeSpeedLimitRow($index)">删除</el-button>
+              <el-button link type="danger" :disabled="operationPending" @click="removeSpeedLimitRow($index)">
+                删除
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
         <div class="dialog-actions">
-          <el-button @click="addSpeedLimitRow()">添加限速</el-button>
-          <el-button @click="addSpeedLimitRow(0)">添加中断</el-button>
+          <el-button :disabled="operationPending" @click="addSpeedLimitRow()">添加限速</el-button>
+          <el-button :disabled="operationPending" @click="addSpeedLimitRow(0)">添加中断</el-button>
         </div>
       </el-form>
       <template #footer>
-        <el-button @click="scenarioDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="addScenario">确定</el-button>
+        <el-button :disabled="operationPending" @click="scenarioDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '新增场景'"
+          :disabled="operationPending"
+          @click="addScenario"
+        >
+          确定
+        </el-button>
       </template>
     </el-dialog>
 
@@ -1981,24 +1995,39 @@ function notifyError(error: unknown) {
           <el-input :model-value="selectedScenarioSetId" disabled />
         </el-form-item>
         <el-form-item label="随机种子">
-          <el-input-number v-model="normalGenerateForm.seed" :min="0" />
+          <el-input-number v-model="normalGenerateForm.seed" :min="0" :disabled="operationPending" />
         </el-form-item>
         <el-form-item label="延误场景数">
-          <el-input-number v-model="normalGenerateForm.delay_count" :min="0" />
+          <el-input-number v-model="normalGenerateForm.delay_count" :min="0" :disabled="operationPending" />
         </el-form-item>
         <el-form-item label="限速场景数">
-          <el-input-number v-model="normalGenerateForm.speed_count" :min="0" />
+          <el-input-number v-model="normalGenerateForm.speed_count" :min="0" :disabled="operationPending" />
         </el-form-item>
         <el-form-item label="中断场景数">
-          <el-input-number v-model="normalGenerateForm.interruption_count" :min="0" />
+          <el-input-number
+            v-model="normalGenerateForm.interruption_count"
+            :min="0"
+            :disabled="operationPending"
+          />
         </el-form-item>
         <el-form-item label="组合场景数/类型">
-          <el-input-number v-model="normalGenerateForm.combo_per_type" :min="0" />
+          <el-input-number
+            v-model="normalGenerateForm.combo_per_type"
+            :min="0"
+            :disabled="operationPending"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="normalGenerateDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitNormalGenerate">确定生成</el-button>
+        <el-button :disabled="operationPending" @click="normalGenerateDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '批量生成场景'"
+          :disabled="operationPending"
+          @click="submitNormalGenerate"
+        >
+          确定生成
+        </el-button>
       </template>
     </el-dialog>
 
@@ -2020,6 +2049,7 @@ function notifyError(error: unknown) {
                   v-model="trainForm.scenario_set_id"
                   class="full-width"
                   placeholder="选择训练扰动场景集"
+                  :disabled="operationPending"
                   @visible-change="reloadScenarioSetsOnOpen"
                 >
                   <el-option
@@ -2040,6 +2070,7 @@ function notifyError(error: unknown) {
                   v-if="trainDialogMode === 'create'"
                   v-model="trainModelSuffix"
                   placeholder="请输入模型后缀"
+                  :disabled="operationPending"
                 >
                   <template #prepend>{{ trainModelPrefix || '请选择扰动场景集' }}_</template>
                 </el-input>
@@ -2055,7 +2086,7 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="最大槽位" :tip="TRAIN_FIELD_TIPS.max_slots" />
                 </template>
-                <el-input-number v-model="trainForm.max_slots" :min="1" />
+                <el-input-number v-model="trainForm.max_slots" :min="1" :disabled="operationPending" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2063,7 +2094,11 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="事件窗口" :tip="TRAIN_FIELD_TIPS.event_time_window" />
                 </template>
-                <el-input-number v-model="trainForm.event_time_window" :min="1" />
+                <el-input-number
+                  v-model="trainForm.event_time_window"
+                  :min="1"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2071,7 +2106,7 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="事件 Top K" :tip="TRAIN_FIELD_TIPS.event_top_k" />
                 </template>
-                <el-input-number v-model="trainForm.event_top_k" :min="1" />
+                <el-input-number v-model="trainForm.event_top_k" :min="1" :disabled="operationPending" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2079,7 +2114,11 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="区间窗口" :tip="TRAIN_FIELD_TIPS.section_order_window" />
                 </template>
-                <el-input-number v-model="trainForm.section_order_window" :min="1" />
+                <el-input-number
+                  v-model="trainForm.section_order_window"
+                  :min="1"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
           </el-row>
@@ -2091,7 +2130,7 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="隐藏维度" :tip="TRAIN_FIELD_TIPS.hidden_dim" />
                 </template>
-                <el-input-number v-model="trainForm.hidden_dim" :min="1" />
+                <el-input-number v-model="trainForm.hidden_dim" :min="1" :disabled="operationPending" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2099,7 +2138,7 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="潜变量维度" :tip="TRAIN_FIELD_TIPS.latent_dim" />
                 </template>
-                <el-input-number v-model="trainForm.latent_dim" :min="1" />
+                <el-input-number v-model="trainForm.latent_dim" :min="1" :disabled="operationPending" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2107,7 +2146,11 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="消息传递步数" :tip="TRAIN_FIELD_TIPS.message_passing_steps" />
                 </template>
-                <el-input-number v-model="trainForm.message_passing_steps" :min="1" />
+                <el-input-number
+                  v-model="trainForm.message_passing_steps"
+                  :min="1"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2115,7 +2158,7 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="训练轮数" :tip="TRAIN_FIELD_TIPS.epochs" />
                 </template>
-                <el-input-number v-model="trainForm.epochs" :min="1" />
+                <el-input-number v-model="trainForm.epochs" :min="1" :disabled="operationPending" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2123,7 +2166,7 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="Batch Size" :tip="TRAIN_FIELD_TIPS.batch_size" />
                 </template>
-                <el-input-number v-model="trainForm.batch_size" :min="1" />
+                <el-input-number v-model="trainForm.batch_size" :min="1" :disabled="operationPending" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2131,7 +2174,12 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="学习率" :tip="TRAIN_FIELD_TIPS.lr" />
                 </template>
-                <el-input-number v-model="trainForm.lr" :min="0" :step="0.0001" />
+                <el-input-number
+                  v-model="trainForm.lr"
+                  :min="0"
+                  :step="0.0001"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2139,7 +2187,7 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="随机种子" :tip="TRAIN_FIELD_TIPS.seed" />
                 </template>
-                <el-input-number v-model="trainForm.seed" :min="0" />
+                <el-input-number v-model="trainForm.seed" :min="0" :disabled="operationPending" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2153,6 +2201,7 @@ function notifyError(error: unknown) {
                   allow-create
                   default-first-option
                   class="full-width"
+                  :disabled="operationPending"
                 >
                   <el-option
                     v-for="device in DEVICE_OPTIONS"
@@ -2172,7 +2221,12 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="Count" :tip="TRAIN_FIELD_TIPS.count_weight" />
                 </template>
-                <el-input-number v-model="trainForm.count_weight" :min="0" :step="0.1" />
+                <el-input-number
+                  v-model="trainForm.count_weight"
+                  :min="0"
+                  :step="0.1"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="6">
@@ -2180,7 +2234,12 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="Anchor" :tip="TRAIN_FIELD_TIPS.anchor_weight" />
                 </template>
-                <el-input-number v-model="trainForm.anchor_weight" :min="0" :step="0.1" />
+                <el-input-number
+                  v-model="trainForm.anchor_weight"
+                  :min="0"
+                  :step="0.1"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="6">
@@ -2188,7 +2247,12 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="Param" :tip="TRAIN_FIELD_TIPS.param_weight" />
                 </template>
-                <el-input-number v-model="trainForm.param_weight" :min="0" :step="0.1" />
+                <el-input-number
+                  v-model="trainForm.param_weight"
+                  :min="0"
+                  :step="0.1"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="6">
@@ -2196,7 +2260,12 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="KL" :tip="TRAIN_FIELD_TIPS.kl_weight" />
                 </template>
-                <el-input-number v-model="trainForm.kl_weight" :min="0" :step="0.0005" />
+                <el-input-number
+                  v-model="trainForm.kl_weight"
+                  :min="0"
+                  :step="0.0005"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="6">
@@ -2204,15 +2273,27 @@ function notifyError(error: unknown) {
                 <template #label>
                   <FieldLabelTip label="Relation" :tip="TRAIN_FIELD_TIPS.relation_weight" />
                 </template>
-                <el-input-number v-model="trainForm.relation_weight" :min="0" :step="0.1" />
+                <el-input-number
+                  v-model="trainForm.relation_weight"
+                  :min="0"
+                  :step="0.1"
+                  :disabled="operationPending"
+                />
               </el-form-item>
             </el-col>
           </el-row>
         </el-form>
       </el-scrollbar>
       <template #footer>
-        <el-button @click="trainDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitTrain">提交训练</el-button>
+        <el-button :disabled="operationPending" @click="trainDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '训练模型'"
+          :disabled="operationPending"
+          @click="submitTrain"
+        >
+          提交训练
+        </el-button>
       </template>
     </el-dialog>
 
@@ -2231,6 +2312,7 @@ function notifyError(error: unknown) {
           <el-input
             v-model="generationScenarioSetSuffix"
             placeholder="默认使用当前时间戳"
+            :disabled="operationPending"
           >
             <template #prepend>{{ generationScenarioSetPrefix }}_</template>
           </el-input>
@@ -2239,13 +2321,13 @@ function notifyError(error: unknown) {
           <template #label>
             <FieldLabelTip label="生成样本数" :tip="GENERATION_FIELD_TIPS.num_samples" />
           </template>
-          <el-input-number v-model="generationForm.num_samples" :min="1" />
+          <el-input-number v-model="generationForm.num_samples" :min="1" :disabled="operationPending" />
         </el-form-item>
         <el-form-item>
           <template #label>
             <FieldLabelTip label="随机种子" :tip="GENERATION_FIELD_TIPS.seed" />
           </template>
-          <el-input-number v-model="generationForm.seed" :min="0" />
+          <el-input-number v-model="generationForm.seed" :min="0" :disabled="operationPending" />
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -2257,6 +2339,7 @@ function notifyError(error: unknown) {
             allow-create
             default-first-option
             class="full-width"
+            :disabled="operationPending"
           >
             <el-option
               v-for="device in DEVICE_OPTIONS"
@@ -2277,25 +2360,33 @@ function notifyError(error: unknown) {
             v-model="generationForm.speed_interruption_threshold"
             :min="0"
             :step="1"
+            :disabled="operationPending"
           />
         </el-form-item>
         <el-form-item>
           <template #label>
             <FieldLabelTip label="覆盖同名集合" :tip="GENERATION_FIELD_TIPS.overwrite" />
           </template>
-          <el-switch v-model="generationForm.overwrite" />
+          <el-switch v-model="generationForm.overwrite" :disabled="operationPending" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="generationDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitGeneration">提交生成</el-button>
+        <el-button :disabled="operationPending" @click="generationDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '生成场景'"
+          :disabled="operationPending"
+          @click="submitGeneration"
+        >
+          提交生成
+        </el-button>
       </template>
     </el-dialog>
 
     <el-dialog v-model="datasetCreateDialogVisible" title="新增 MILP 实例集" width="560px">
       <el-form label-width="130px" @submit.prevent="createDataset">
         <el-form-item label="创建方式">
-          <el-radio-group v-model="datasetCreateMode">
+          <el-radio-group v-model="datasetCreateMode" :disabled="operationPending">
             <el-radio-button value="scenario_set" :disabled="!scenarioSets.length">
               从扰动场景集引入
             </el-radio-button>
@@ -2308,6 +2399,7 @@ function notifyError(error: unknown) {
               v-model="datasetCreateScenarioSetId"
               class="full-width"
               placeholder="选择扰动场景集"
+              :disabled="operationPending"
               @visible-change="reloadScenarioSetsOnOpen"
             >
               <el-option
@@ -2325,18 +2417,34 @@ function notifyError(error: unknown) {
               @keydown.enter.prevent="createDataset"
             />
           </el-form-item>
+          <el-collapse :model-value="['build-options']">
+            <el-collapse-item title="构建参数" name="build-options">
+              <BuildOptionsFields
+                :model-value="datasetBuildForm"
+                @update:model-value="updateDatasetBuildOptions"
+              />
+            </el-collapse-item>
+          </el-collapse>
         </template>
         <el-form-item v-else label="MILP 实例集 ID">
           <el-input
             v-model="newDatasetId"
             placeholder="例如 milp_reference"
+            :disabled="operationPending"
             @keydown.enter.prevent="createDataset"
           />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="datasetCreateDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="createDataset">确定</el-button>
+        <el-button :disabled="operationPending" @click="datasetCreateDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '新增 MILP 实例集'"
+          :disabled="operationPending"
+          @click="createDataset"
+        >
+          确定
+        </el-button>
       </template>
     </el-dialog>
 
@@ -2346,7 +2454,7 @@ function notifyError(error: unknown) {
           <el-input :model-value="selectedDatasetId" disabled />
         </el-form-item>
         <el-form-item label="构建来源">
-          <el-radio-group v-model="datasetBuildForm.source">
+          <el-radio-group v-model="datasetBuildForm.source" :disabled="operationPending">
             <el-radio-button value="scenario_set">从扰动场景集中构建</el-radio-button>
             <el-radio-button value="scenario">从场景中构建</el-radio-button>
           </el-radio-group>
@@ -2355,6 +2463,7 @@ function notifyError(error: unknown) {
           <el-select
             v-model="datasetBuildForm.scenario_set_id"
             class="full-width"
+            :disabled="operationPending"
             @visible-change="reloadScenarioSetsOnOpen"
             @change="onDatasetBuildScenarioSetChange"
           >
@@ -2371,6 +2480,7 @@ function notifyError(error: unknown) {
             v-model="datasetBuildForm.scenario_id"
             class="full-width"
             placeholder="选择单个场景"
+            :disabled="operationPending"
             @visible-change="reloadDatasetBuildScenariosOnOpen"
           >
             <el-option
@@ -2383,44 +2493,10 @@ function notifyError(error: unknown) {
         </el-form-item>
         <el-collapse :model-value="['build-options']">
           <el-collapse-item title="构建参数" name="build-options">
-            <el-form-item label="目标权重">
-              <el-input-number
-                v-model="datasetBuildForm.objective_delay_weight"
-                :min="0.000001"
-                :step="0.1"
-              />
-            </el-form-item>
-            <el-form-item label="目标模式">
-              <el-select v-model="datasetBuildForm.objective_mode" class="full-width">
-                <el-option label="绝对延误 abs" value="abs" />
-                <el-option label="平方延误 square" value="square" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="允许取消">
-              <el-switch v-model="datasetBuildForm.cancellation_enabled" />
-            </el-form-item>
-            <el-form-item label="取消惩罚权重">
-              <el-input-number
-                v-model="datasetBuildForm.cancellation_penalty_weight"
-                :min="0"
-                :step="100"
-              />
-            </el-form-item>
-            <el-form-item label="到到间隔秒数">
-              <el-input-number v-model="datasetBuildForm.arr_arr_headway_seconds" :min="1" />
-            </el-form-item>
-            <el-form-item label="发发间隔秒数">
-              <el-input-number v-model="datasetBuildForm.dep_dep_headway_seconds" :min="1" />
-            </el-form-item>
-            <el-form-item label="停站秒数">
-              <el-input-number v-model="datasetBuildForm.dwell_seconds_at_stops" :min="1" />
-            </el-form-item>
-            <el-form-item label="Big-M">
-              <el-input-number v-model="datasetBuildForm.big_m" :min="1" :step="1000" />
-            </el-form-item>
-            <el-form-item label="延误容忍秒数">
-              <el-input-number v-model="datasetBuildForm.tolerance_delay_seconds" :min="1" />
-            </el-form-item>
+            <BuildOptionsFields
+              :model-value="datasetBuildForm"
+              @update:model-value="updateDatasetBuildOptions"
+            />
           </el-collapse-item>
         </el-collapse>
         <el-alert
@@ -2431,8 +2507,15 @@ function notifyError(error: unknown) {
         />
       </el-form>
       <template #footer>
-        <el-button @click="datasetBuildDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitBuild">确认构建</el-button>
+        <el-button :disabled="operationPending" @click="datasetBuildDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '构建 MILP'"
+          :disabled="operationPending"
+          @click="submitBuild"
+        >
+          确认构建
+        </el-button>
       </template>
     </el-dialog>
 
@@ -2443,27 +2526,39 @@ function notifyError(error: unknown) {
           <el-tag v-else type="primary">全部实例</el-tag>
         </el-form-item>
         <el-form-item v-if="!solveTargetCaseId" label="数量上限">
-          <el-input-number v-model="datasetRunForm.solveLimit" :min="0" />
+          <el-input-number v-model="datasetRunForm.solveLimit" :min="0" :disabled="operationPending" />
           <span class="form-hint">0 表示全部</span>
         </el-form-item>
         <el-form-item v-if="!solveTargetCaseId" label="已有解则跳过">
-          <el-switch v-model="datasetRunForm.skipSolved" />
+          <el-switch v-model="datasetRunForm.skipSolved" :disabled="operationPending" />
         </el-form-item>
         <el-form-item label="单次限时秒数">
-          <el-input-number v-model="datasetRunForm.solveTimeLimit" :min="0" />
+          <el-input-number v-model="datasetRunForm.solveTimeLimit" :min="0" :disabled="operationPending" />
           <span class="form-hint">0 表示不限制</span>
         </el-form-item>
         <el-form-item label="MIP Gap">
-          <el-input-number v-model="datasetRunForm.solveMipGap" :min="0" :step="0.001" />
+          <el-input-number
+            v-model="datasetRunForm.solveMipGap"
+            :min="0"
+            :step="0.001"
+            :disabled="operationPending"
+          />
         </el-form-item>
         <el-form-item label="线程数">
-          <el-input-number v-model="datasetRunForm.solveThreads" :min="0" />
+          <el-input-number v-model="datasetRunForm.solveThreads" :min="0" :disabled="operationPending" />
           <span class="form-hint">0 表示 Gurobi 默认</span>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="solveDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitSolveDialog">开始求解</el-button>
+        <el-button :disabled="operationPending" @click="solveDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '求解'"
+          :disabled="operationPending"
+          @click="submitSolveDialog"
+        >
+          开始求解
+        </el-button>
       </template>
     </el-dialog>
 

@@ -16,12 +16,14 @@ withDefaults(
     addLabel?: string
     deleteLabel?: string
     filterable?: boolean
+    busy?: boolean
   }>(),
   {
     placeholder: '请选择',
     addLabel: '新增',
     deleteLabel: '删除',
     filterable: true,
+    busy: false,
   },
 )
 
@@ -44,6 +46,7 @@ const emit = defineEmits<{
             :filterable="filterable"
             class="entity-toolbar-select"
             :placeholder="placeholder"
+            :disabled="busy"
             @update:model-value="emit('update:modelValue', String($event))"
             @visible-change="emit('visibleChange', $event)"
           >
@@ -59,6 +62,7 @@ const emit = defineEmits<{
                   class="entity-option-delete"
                   link
                   type="danger"
+                  :disabled="busy"
                   :aria-label="deleteLabel"
                   @click.stop.prevent="emit('delete', item.value)"
                 >
@@ -70,7 +74,7 @@ const emit = defineEmits<{
         </el-space>
       </el-col>
       <el-col :span="4">
-        <el-button class="full-width" @click="emit('add')">{{ addLabel }}</el-button>
+        <el-button class="full-width" :disabled="busy" @click="emit('add')">{{ addLabel }}</el-button>
       </el-col>
     </el-row>
   </el-card>

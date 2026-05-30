@@ -10,8 +10,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 
-from backend.task_resources import RUNNING_TASK_STATUSES, task_input_payload
-from core.project_layout import REPO_ROOT, sanitize_id, to_posix
+from backend.task_resources import RUNNING_TASK_STATUSES, task_input_path, task_input_payload
+from core.project_layout import REPO_ROOT, require_id, sanitize_id, to_posix
 
 
 class PueueError(RuntimeError):
@@ -78,7 +78,7 @@ class PueueClient:
         return self.submit_module(group, "backend.runner", [to_posix(task_input)], label=label)
 
     def submit_python(self, group: str, command_parts: Sequence[str], *, label: str = "") -> Dict[str, object]:
-        group = sanitize_id(group)
+        group = require_id(group, "task_group")
         self.ensure_ready()
         self.ensure_group(group)
 
@@ -99,7 +99,7 @@ class PueueClient:
         return self._submitted_task(task_id, group=group, command=command, label=label)
 
     def ensure_group(self, group: str, parallel: Optional[int] = None) -> None:
-        group = sanitize_id(group)
+        group = require_id(group, "task_group")
         parallel = parallel if parallel is not None else configured_parallel()
         status = self.status()
         groups = status.get("groups", {})
@@ -112,7 +112,7 @@ class PueueClient:
     def status(self, group: Optional[str] = None) -> Dict[str, object]:
         args = ["status", "--json"]
         if group:
-            args.extend(["--group", sanitize_id(group)])
+            args.extend(["--group", require_id(group, "task_group")])
         result = self._run(args)
         return json.loads(result.stdout or "{}")
 
@@ -155,10 +155,6 @@ class PueueClient:
         result = self._run(args)
         return result.stdout
 
-    def wait(self, task_id: Union[str, int]) -> Optional[Dict[str, object]]:
-        self._run(["wait", "--quiet", str(task_id)])
-        return self.get_task(task_id)
-
     def cancel(self, task_id: Union[str, int]) -> Dict[str, object]:
         task = self.get_task(task_id)
         if task is None:
@@ -176,19 +172,38 @@ class PueueClient:
             }
         return task
 
-    def clean(self, group: Optional[str] = None, *, successful_only: bool = False) -> Dict[str, object]:
-        args = ["clean"]
-        if successful_only:
-            args.append("--successful-only")
-        if group:
-            args.extend(["--group", sanitize_id(group)])
-        before = len(self.list_tasks(group=group))
-        self._run(args)
-        after = len(self.list_tasks(group=group))
-        return {"removed": max(before - after, 0), "remaining": after}
+    def remove_task(self, task_id: Union[str, int]) -> Dict[str, object]:
+        task = self.get_task(task_id)
+        if task is None:
+            return {"id": int(task_id), "removed": False, "status": "missing"}
+
+        status = str(task.get("status", ""))
+        if status in RUNNING_TASK_STATUSES:
+            raise ValueError(f"任务 #{task_id} 仍在运行或排队，请先中断或等待结束后再清除。")
+
+        self._run(["remove", str(task_id)])
+        self._remove_task_input(task)
+        self._remove_local_log(task_id)
+        return {"id": int(task_id), "removed": True}
 
     def _task_log_path(self, task_id: Union[str, int]) -> Path:
         return self.config_path.parent / "task_logs" / f"{int(task_id)}.log"
+
+    def _remove_local_log(self, task_id: Union[str, int]) -> None:
+        path = self._task_log_path(task_id)
+        if path.is_file():
+            path.unlink()
+
+    def _remove_task_input(self, task: Dict[str, object]) -> None:
+        for command_key in ("command", "original_command"):
+            path = task_input_path(str(task.get(command_key, "") or ""))
+            if path is None:
+                continue
+            root = (self.repo_root / "var" / "tasks").resolve()
+            parent = path.parent.resolve()
+            if path.name == "input.json" and root in parent.parents and parent.is_dir():
+                shutil.rmtree(parent)
+            return
 
     def _wait_for_status_change(
         self,
@@ -293,6 +308,8 @@ daemon:
             "id": task.get("id"),
             "group": task.get("group"),
             "label": task.get("label"),
+            "action": action,
+            "params": params,
             "display_name": task_display_name(action, params, fallback=str(task.get("label") or "")),
             "command": task.get("command"),
             "original_command": task.get("original_command"),
@@ -317,6 +334,8 @@ daemon:
             "id": int(task_id),
             "group": group,
             "label": label,
+            "action": action,
+            "params": params,
             "display_name": task_display_name(action, params, fallback=label),
             "command": command,
             "original_command": command,
