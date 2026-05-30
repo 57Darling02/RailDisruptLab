@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { Refresh } from '@element-plus/icons-vue'
 
+import { api, ApiError } from '@/api/client'
 import ChartPanel from '@/components/ChartPanel.vue'
+import EntityToolbar from '@/components/EntityToolbar.vue'
+import { formatBytes } from '@/views/types'
+import type { MetadataEntry, SchemaEdgeRow, SchemaPoolRow, SchemaTaskRow } from '@/views/types'
 import type {
-  MetadataEntry,
-  SchemaEdgeRow,
-  SchemaPoolRow,
-  SchemaTaskRow,
-} from '@/views/types'
-import type {
+  JsonObject,
   ModelCheckpoint,
   ModelDetail,
   ModelLossPoint,
@@ -16,47 +16,59 @@ import type {
   ResourceOption,
   Task,
 } from '@/types'
-import { taskOutcome } from '@/task-status'
+import { isTaskTerminal, taskOutcome } from '@/task-status'
 import type { TaskTagType } from '@/task-status'
-import EntityToolbar from '@/components/EntityToolbar.vue'
 
 const props = defineProps<{
+  selectedProjectId: string
   selectedModelId: string
   pendingModelId: string
   selectedModel: ModelSummary | null
   models: ModelSummary[]
   modelOptions: ResourceOption[]
-  modelDetail: ModelDetail | null
-  modelDetailLoading: boolean
   resourceLoading: boolean
-  modelSummaryEntries: MetadataEntry[]
-  modelConfigEntries: MetadataEntry[]
-  modelSchemaSummaryEntries: MetadataEntry[]
-  modelPoolRows: SchemaPoolRow[]
-  modelEdgeRows: SchemaEdgeRow[]
-  modelTaskRows: SchemaTaskRow[]
-  modelCheckpoints: ModelCheckpoint[]
-  hasTrainingSummary: boolean
-  hasTrainingConfig: boolean
-  hasSchemaSummary: boolean
   tasks: Task[]
-  formatBytes: (size: number) => string
-  checkpointRoleLabel: (role: string) => string
-  checkpointRoleType: (role: string) => TaskTagType
   busy?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   'update:selectedModelId': [value: string]
   reloadModels: [visible: boolean]
   searchModels: [query: string]
   train: []
-  retrain: []
+  retrain: [detail: ModelDetail | null]
   deleteModel: [modelId: string]
-  refreshModel: []
   openTaskLog: [task: Task]
   generate: [checkpoint: ModelCheckpoint]
 }>()
+
+const TRAINING_CONFIG_LABELS: Record<string, string> = {
+  scenario_set_id: '训练扰动场景集',
+  max_slots: '最大槽位',
+  event_time_window: '事件时间窗口',
+  event_top_k: '事件候选 Top K',
+  section_order_window: '区间序窗口',
+  hidden_dim: '隐藏维度',
+  latent_dim: '潜变量维度',
+  message_passing_steps: '消息传递步数',
+  epochs: '训练轮数',
+  batch_size: 'Batch Size',
+  lr: '学习率',
+  seed: '随机种子',
+  device: '设备',
+  count_weight: 'Count 权重',
+  anchor_weight: 'Anchor 权重',
+  param_weight: 'Param 权重',
+  kl_weight: 'KL 权重',
+}
+const TRAINING_CONFIG_ORDER = Object.keys(TRAINING_CONFIG_LABELS)
+const MODEL_DETAIL_POLL_MS = 2500
+
+const modelDetail = ref<ModelDetail | null>(null)
+const modelDetailLoading = ref(false)
+const modelDetailError = ref('')
+let modelDetailRequestSeq = 0
+let modelDetailPollHandle = 0
 
 interface LossSeriesDatum {
   value: [number, number]
@@ -73,14 +85,30 @@ interface LossTooltipParam {
   seriesName?: string
 }
 
-const lossPoints = computed(() => props.modelDetail?.loss_points || [])
+const trainingSummary = computed(() => modelDetail.value?.summary ?? null)
+const modelCheckpoints = computed(() => modelDetail.value?.checkpoints ?? [])
+const modelSummaryEntries = computed(() =>
+  modelInfoEntries(trainingSummary.value, modelDetail.value?.history),
+)
+const modelConfigEntries = computed(() => trainingConfigEntries(modelDetail.value?.config ?? {}))
+const modelSchemaSummaryEntries = computed(() =>
+  modelSchemaSummary(modelDetail.value?.schema ?? {}),
+)
+const modelPoolRows = computed(() => schemaPoolRows(modelDetail.value?.schema ?? {}))
+const modelEdgeRows = computed(() => schemaEdgeRows(modelDetail.value?.schema ?? {}))
+const modelTaskRows = computed(() => schemaTaskRows(modelDetail.value?.schema ?? {}))
+const hasTrainingSummary = computed(() => hasEntries(trainingSummary.value))
+const hasTrainingConfig = computed(() => hasEntries(modelDetail.value?.config))
+const hasSchemaSummary = computed(() => hasEntries(modelDetail.value?.schema))
+const lossPoints = computed(() => modelDetail.value?.loss_points || [])
 const epochLossPoints = computed(() => epochLossSeries(lossPoints.value))
 const lossChartOption = computed(() => buildLossChartOption(epochLossPoints.value))
 const latestLoss = computed(() => lossPoints.value.at(-1))
 const latestEpochLoss = computed(() => epochLossPoints.value.at(-1))
 const selectedTrainTask = computed(() => findModelTrainTask(props.tasks, props.selectedModelId))
+const selectedModelRunning = computed(() => Boolean(selectedTrainTask.value && !isTaskTerminal(selectedTrainTask.value)))
 const trainProgress = computed(() => modelTrainingProgress())
-const graphProgress = computed(() => props.modelDetail?.graph_progress ?? {})
+const graphProgress = computed(() => modelDetail.value?.graph_progress ?? {})
 const graphSampleProgress = computed(() => graphProgress.value.sample_graphs ?? {})
 const graphSamplePercent = computed(() => {
   const total = graphSampleProgress.value.total ?? 0
@@ -137,10 +165,229 @@ const bestLoss = computed(() =>
   ),
 )
 
+watch(
+  () => [
+    props.selectedProjectId,
+    props.selectedModelId,
+    props.selectedModel?.sample_count ?? 0,
+    props.selectedModel?.is_ready ?? false,
+    props.pendingModelId,
+    selectedTrainTask.value?.status ?? '',
+  ] as const,
+  () => {
+    void loadModelDetails()
+  },
+  { immediate: true },
+)
+
+watch(selectedModelRunning, (isRunning) => {
+  if (isRunning) {
+    startModelDetailPolling()
+  } else {
+    stopModelDetailPolling()
+  }
+}, { immediate: true })
+
+onUnmounted(() => {
+  stopModelDetailPolling()
+})
+
+async function refreshModelDetails() {
+  await loadModelDetails()
+}
+
+async function loadModelDetails(options: { showLoading?: boolean } = {}) {
+  const projectId = props.selectedProjectId
+  const modelId = props.selectedModelId
+  modelDetailRequestSeq += 1
+  const requestSeq = modelDetailRequestSeq
+  modelDetailError.value = ''
+
+  if (!projectId || !modelId) {
+    modelDetail.value = null
+    modelDetailLoading.value = false
+    return
+  }
+
+  const showLoading = options.showLoading ?? true
+  if (showLoading) modelDetailLoading.value = true
+  try {
+    const detail = await api.readModelDetail(projectId, modelId)
+    if (requestSeq === modelDetailRequestSeq && projectId === props.selectedProjectId && modelId === props.selectedModelId) {
+      modelDetail.value = detail
+    }
+  } catch (error) {
+    if (requestSeq === modelDetailRequestSeq && projectId === props.selectedProjectId && modelId === props.selectedModelId) {
+      modelDetail.value = null
+      modelDetailError.value = formatError(error)
+    }
+  } finally {
+    if (
+      showLoading &&
+      requestSeq === modelDetailRequestSeq &&
+      projectId === props.selectedProjectId &&
+      modelId === props.selectedModelId
+    ) {
+      modelDetailLoading.value = false
+    }
+  }
+}
+
+function handleRetrain() {
+  emit('retrain', modelDetail.value)
+}
+
+function startModelDetailPolling() {
+  if (modelDetailPollHandle) return
+  modelDetailPollHandle = window.setInterval(() => {
+    void loadModelDetails({ showLoading: false })
+  }, MODEL_DETAIL_POLL_MS)
+}
+
+function stopModelDetailPolling() {
+  if (!modelDetailPollHandle) return
+  window.clearInterval(modelDetailPollHandle)
+  modelDetailPollHandle = 0
+}
+
+function formatMetadataValue(key: string, value: unknown) {
+  if (value == null || value === '') return '无'
+  if (key === 'created_at' && typeof value === 'string') return value.replace('T', ' ')
+  if (key === 'source') {
+    if (value === 'scenario') return '单个场景'
+    if (value === 'scenario_set') return '扰动场景集'
+  }
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function modelInfoEntries(
+  summary: JsonObject | null,
+  history?: { count?: number; latest?: JsonObject; best?: JsonObject },
+): MetadataEntry[] {
+  const bestMetrics = objectValue(summary?.best_metrics)
+  const lastMetrics = objectValue(summary?.last_metrics)
+  return [
+    {
+      key: 'best_epoch',
+      label: '最佳轮次',
+      value: formatMetadataValue('best_epoch', summary?.best_epoch),
+    },
+    { key: 'best_loss', label: '最佳损失', value: formatMetric(bestMetrics?.loss) },
+    {
+      key: 'last_epoch',
+      label: '最后轮次',
+      value: formatMetadataValue('last_epoch', summary?.last_epoch),
+    },
+    { key: 'last_loss', label: '最后损失', value: formatMetric(lastMetrics?.loss) },
+    {
+      key: 'history_count',
+      label: '历史记录数',
+      value: formatMetadataValue('history_count', history?.count),
+    },
+  ]
+}
+
+function trainingConfigEntries(config: JsonObject): MetadataEntry[] {
+  return TRAINING_CONFIG_ORDER.filter((key) =>
+    Object.prototype.hasOwnProperty.call(config, key),
+  ).map((key) => ({
+    key,
+    label: TRAINING_CONFIG_LABELS[key] ?? key,
+    value: formatMetadataValue(key, config[key]),
+  }))
+}
+
+function modelSchemaSummary(schema: JsonObject): MetadataEntry[] {
+  const messagePassing = objectValue(schema.message_passing)
+  return [
+    { key: 'pools', label: '节点池', value: String(schemaPoolRows(schema).length) },
+    { key: 'edge_types', label: '边类型', value: String(schemaEdgeRows(schema).length) },
+    { key: 'tasks', label: '预测任务', value: String(schemaTaskRows(schema).length) },
+    {
+      key: 'uses_edge_index',
+      label: '使用边索引',
+      value: messagePassing?.uses_edge_index ? '是' : '否',
+    },
+    {
+      key: 'uses_edge_attr',
+      label: '使用边特征',
+      value: messagePassing?.uses_edge_attr ? '是' : '否',
+    },
+  ]
+}
+
+function schemaPoolRows(schema: JsonObject): SchemaPoolRow[] {
+  return Object.entries(objectValue(schema.pools) ?? {}).map(([id, value]) => {
+    const item = objectValue(value)
+    return {
+      id,
+      size: formatMetadataValue('size', item?.size),
+      feature_dim: formatMetadataValue('feature_dim', item?.feature_dim),
+    }
+  })
+}
+
+function schemaEdgeRows(schema: JsonObject): SchemaEdgeRow[] {
+  return Object.entries(objectValue(schema.edge_types) ?? {}).map(([id, value]) => {
+    const item = objectValue(value)
+    return {
+      id,
+      source_pool_id: formatMetadataValue('source_pool_id', item?.source_pool_id),
+      target_pool_id: formatMetadataValue('target_pool_id', item?.target_pool_id),
+      feature_dim: formatMetadataValue('feature_dim', item?.feature_dim),
+    }
+  })
+}
+
+function schemaTaskRows(schema: JsonObject): SchemaTaskRow[] {
+  return Object.entries(objectValue(schema.tasks) ?? {}).map(([id, value]) => {
+    const item = objectValue(value)
+    return {
+      id,
+      target_pool_id: formatMetadataValue('target_pool_id', item?.target_pool_id),
+      max_slots: formatMetadataValue('max_slots', item?.max_slots),
+      count_bounds: formatMetadataValue('count_bounds', item?.count_bounds),
+      param_dim: formatMetadataValue('param_dim', item?.param_dim),
+    }
+  })
+}
+
+function checkpointRoleLabel(role: string) {
+  if (role === 'best') return '最佳'
+  if (role === 'last') return '最后'
+  return '检查点'
+}
+
+function checkpointRoleType(role: string): TaskTagType {
+  if (role === 'best') return 'success'
+  if (role === 'last') return 'warning'
+  return 'info'
+}
+
+function objectValue(value: unknown): JsonObject | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : null
+}
+
+function hasEntries(value: unknown) {
+  const object = objectValue(value)
+  return Boolean(object && Object.keys(object).length)
+}
+
+function formatMetric(value: unknown) {
+  return typeof value === 'number' ? value.toFixed(6) : '无'
+}
+
+function formatError(error: unknown) {
+  if (error instanceof ApiError) return `${error.status}: ${error.message}`
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
 function modelTrainingProgress() {
   if (props.selectedModel?.is_ready) return 100
   const latest = latestLoss.value
-  const epochs = numberFromConfig(props.modelDetail?.config?.epochs)
+  const epochs = numberFromConfig(modelDetail.value?.config?.epochs)
   if (!latest || !epochs || !latest.total_steps) return 0
   const total = epochs * latest.total_steps
   return Math.min(99, Math.max(0, Math.round((latest.step / total) * 100)))
@@ -283,17 +530,35 @@ function escapeRegExp(value: string) {
           <div class="card-header">
             <el-space>
               <span>{{ selectedModelId ? `模型ID: ${selectedModelId}` : '模型ID' }}</span>
-              <el-button :disabled="!selectedModelId || busy" type="warning" plain @click="$emit('retrain')">
+              <el-button :disabled="!selectedModelId || busy" type="warning" plain @click="handleRetrain">
                 重新训练
               </el-button>
             </el-space>
-            <el-button :disabled="busy" :loading="modelDetailLoading" @click="$emit('refreshModel')">
+            <el-button
+              :icon="Refresh"
+              :disabled="busy || !selectedModelId"
+              :loading="modelDetailLoading"
+              @click="refreshModelDetails"
+            >
               刷新
             </el-button>
           </div>
         </template>
 
         <el-empty v-if="!selectedModelId" description="请选择或训练扰动生成模型" />
+        <el-result v-else-if="modelDetailError" icon="error" title="模型数据加载失败" :sub-title="modelDetailError">
+          <template #extra>
+            <el-button
+              type="primary"
+              :icon="Refresh"
+              :loading="modelDetailLoading"
+              :disabled="busy"
+              @click="refreshModelDetails"
+            >
+              重试
+            </el-button>
+          </template>
+        </el-result>
         <template v-else>
           <div class="model-overview">
             <div class="model-overview-main">

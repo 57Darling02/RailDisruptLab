@@ -1,4 +1,5 @@
 import type { TaskTagType } from '@/task-status'
+import type { ArtifactSummary } from '@/types'
 
 export interface ArtifactGroup {
   case_id: string
@@ -7,6 +8,33 @@ export interface ArtifactGroup {
   has_solution: boolean
   has_solution_csv: boolean
   has_timetable_data: boolean
+}
+
+export function groupArtifactsByCase(artifacts: ArtifactSummary[]) {
+  const groups = new Map<string, ArtifactGroup>()
+  for (const artifact of artifacts) {
+    const group = groups.get(artifact.case_id) ?? {
+      case_id: artifact.case_id,
+      size_bytes: 0,
+      has_lp: false,
+      has_solution: false,
+      has_solution_csv: false,
+      has_timetable_data: false,
+    }
+    group.size_bytes += artifact.size_bytes
+    group.has_lp = group.has_lp || artifact.name.endsWith('.lp')
+    group.has_solution = group.has_solution || artifact.name.endsWith('.sol')
+    group.has_solution_csv = group.has_solution_csv || artifact.name.endsWith('.sol.csv')
+    group.has_timetable_data = group.has_timetable_data || artifact.name === 'adjusted_timetable.json'
+    groups.set(artifact.case_id, group)
+  }
+  return [...groups.values()]
+}
+
+export function formatBytes(size: number) {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
 export interface MetadataEntry {

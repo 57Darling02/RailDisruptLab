@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Delete, Document, Refresh, VideoPause } from '@element-plus/icons-vue'
 import { computed, ref, watch } from 'vue'
 
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
@@ -93,7 +94,7 @@ function compareTasks(left: Task, right: Task) {
       <div class="task-panel-header">
         <div class="task-panel-title">任务管理器</div>
         <div class="task-header-actions">
-          <el-button link type="primary" :disabled="busy" @click="emit('refresh')">刷新</el-button>
+          <el-button link type="primary" :icon="Refresh" :disabled="busy" @click="emit('refresh')">刷新</el-button>
         </div>
       </div>
     </template>
@@ -149,28 +150,35 @@ function compareTasks(left: Task, right: Task) {
             <span v-if="task.started_at">开始：{{ formatTaskTime(task.started_at) }}</span>
             <span v-if="task.finished_at">结束：{{ formatTaskTime(task.finished_at) }}</span>
           </div>
-          <div class="task-actions">
-            <el-button link type="primary" @click="openLog(task)">日志</el-button>
-            <el-button
-              v-if="isTaskCancellable(task)"
-              link
-              type="danger"
-              :disabled="busy"
-              @click="emit('cancel', task)"
-            >
-              中断
-            </el-button>
-            <el-popconfirm
-              v-else
-              title="清除这条历史任务记录？"
-              confirm-button-text="清除"
-              cancel-button-text="取消"
-              @confirm="emit('remove', task)"
-            >
-              <template #reference>
-                <el-button link type="danger" :disabled="busy">清除</el-button>
-              </template>
-            </el-popconfirm>
+          <div class="task-footer">
+            <span class="task-action-label">操作</span>
+            <div class="task-action-buttons">
+              <el-button size="small" :icon="Document" @click="openLog(task)">日志</el-button>
+              <el-button
+                v-if="isTaskCancellable(task)"
+                plain
+                size="small"
+                type="danger"
+                :icon="VideoPause"
+                :disabled="busy"
+                @click="emit('cancel', task)"
+              >
+                中断任务
+              </el-button>
+              <el-popconfirm
+                v-else
+                title="清除这条历史任务记录？"
+                confirm-button-text="清除"
+                cancel-button-text="取消"
+                @confirm="emit('remove', task)"
+              >
+                <template #reference>
+                  <el-button plain size="small" type="danger" :icon="Delete" :disabled="busy">
+                    清除记录
+                  </el-button>
+                </template>
+              </el-popconfirm>
+            </div>
           </div>
         </article>
       </div>
@@ -194,8 +202,7 @@ function compareTasks(left: Task, right: Task) {
 }
 
 .task-panel-header,
-.task-item-main,
-.task-actions {
+.task-item-main {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -275,9 +282,35 @@ function compareTasks(left: Task, right: Task) {
   gap: 8px;
 }
 
-.task-actions {
-  margin-top: 6px;
+.task-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 10px -10px -10px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  border-radius: 0 0 6px 6px;
+  background: var(--el-fill-color-extra-light);
+}
+
+.task-action-label {
+  flex: 0 0 auto;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.task-action-buttons {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 6px;
+}
+
+.task-action-buttons :deep(.el-button) {
+  margin-left: 0;
 }
 
 .task-status-failed {

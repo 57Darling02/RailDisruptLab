@@ -6,6 +6,8 @@ import type { ScrollbarInstance, UploadFile, UploadUserFile } from 'element-plus
 import { api, ApiError } from '@/api/client'
 import BuildOptionsFields from '@/components/BuildOptionsFields.vue'
 import FieldLabelTip from '@/components/FieldLabelTip.vue'
+import ScenarioDialog from '@/components/ScenarioDialog.vue'
+import type { ScenarioPayload } from '@/components/ScenarioDialog.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 import TimetableDialog from '@/components/TimetableDialog.vue'
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
@@ -20,29 +22,18 @@ import {
   isTaskSuccessful,
   isTaskTerminal,
 } from '@/task-status'
-import type { TaskTagType } from '@/task-status'
 import type {
-  ArtifactGroup,
   DatasetBuildForm,
   DatasetRunForm,
-  MetadataEntry,
-  SchemaEdgeRow,
-  SchemaPoolRow,
-  SchemaTaskRow,
   TrainForm,
 } from '@/views/types'
 import type {
-  ArtifactSummary,
-  CaseTimetableState,
   DatasetSummary,
-  JsonObject,
   ModelCheckpoint,
   ModelDetail,
-  PlanTimetableState,
   ProjectState,
   ProjectSummary,
   ResourceOption,
-  ScenarioOptions,
   ScenarioSetVisualization,
   ScenarioSummary,
   Task,
@@ -52,13 +43,6 @@ type PageKey = 'dashboard' | 'scenarios' | 'datasets' | 'models' | 'ablation-sce
 type DatasetBuildSource = 'scenario_set' | 'scenario'
 type DatasetCreateMode = 'empty' | 'scenario_set'
 type ResourceKind = 'scenario_sets' | 'datasets' | 'models'
-type ScenarioDelayForm = { event_anchor_id: string; seconds: number }
-type ScenarioSpeedLimitForm = {
-  section_anchor_id: string
-  start_time: string
-  duration: number
-  limit_speed: number
-}
 
 const TASK_POLL_MS = 2500
 const TASK_DURATION_TICK_MS = 1000
@@ -146,30 +130,12 @@ const PAGE_TASK_FILTERS = [
   { value: 'models', label: '扰动生成模型', labels: TASK_LABELS.models },
   { value: 'ablation', label: '消融分析', labels: [] },
 ] as const
-const TRAINING_CONFIG_LABELS: Record<string, string> = {
-  created_at: '训练时间',
-  graphs_root: '训练图目录',
-  hidden_dim: '隐藏维度',
-  latent_dim: '潜变量维度',
-  message_passing_steps: '消息传递步数',
-  epochs: '训练轮数',
-  batch_size: 'Batch Size',
-  lr: '学习率',
-  seed: '随机种子',
-  device: '设备',
-  count_weight: 'Count 权重',
-  anchor_weight: 'Anchor 权重',
-  param_weight: 'Param 权重',
-  kl_weight: 'KL 权重',
-}
-const TRAINING_CONFIG_ORDER = Object.keys(TRAINING_CONFIG_LABELS)
 
 const projects = ref<ProjectSummary[]>([])
 const projectOptions = ref<ResourceOption[]>([])
 const projectOptionsLoading = ref(false)
 const selectedProjectId = ref('')
 const project = ref<ProjectState | null>(null)
-const planTimetable = ref<PlanTimetableState | null>(null)
 const tasks = ref<Task[]>([])
 const taskNow = ref(Date.now())
 const activePage = ref<PageKey>('dashboard')
@@ -198,11 +164,7 @@ const scenarioSetLoading = ref(false)
 const scenarioSetDialogVisible = ref(false)
 const newScenarioSetId = ref('')
 const scenarioDialogVisible = ref(false)
-const scenarioId = ref('manual_case')
-const scenarioOverwrite = ref(false)
-const scenarioOptions = ref<ScenarioOptions | null>(null)
-const scenarioDelays = ref<ScenarioDelayForm[]>([])
-const scenarioSpeedLimits = ref<ScenarioSpeedLimitForm[]>([])
+const scenarioDialogInitialId = ref('')
 const normalGenerateDialogVisible = ref(false)
 const normalGenerateForm = ref({
   seed: 20260320,
@@ -215,8 +177,6 @@ const normalGenerateForm = ref({
 const selectedDatasetId = ref('')
 const datasetOptions = ref<ResourceOption[]>([])
 const datasetOptionsLoading = ref(false)
-const datasetArtifacts = ref<ArtifactSummary[]>([])
-const datasetLoading = ref(false)
 const datasetCreateDialogVisible = ref(false)
 const datasetCreateMode = ref<DatasetCreateMode>('scenario_set')
 const newDatasetId = ref('')
@@ -231,7 +191,7 @@ const datasetBuildForm = ref({
 const solveDialogVisible = ref(false)
 const solveTargetCaseId = ref('')
 const timetableDialogVisible = ref(false)
-const caseTimetable = ref<CaseTimetableState | null>(null)
+const timetableCaseId = ref('')
 const taskLogDialogVisible = ref(false)
 const taskLogTarget = ref<Task | null>(null)
 const datasetRunForm = ref<DatasetRunForm>({ ...DEFAULT_DATASET_RUN_FORM })
@@ -241,9 +201,7 @@ const modelOptions = ref<ResourceOption[]>([])
 const modelOptionsLoading = ref(false)
 const pendingModelId = ref('')
 const pendingModelTaskId = ref<number | null>(null)
-const modelDetail = ref<ModelDetail | null>(null)
-const modelDetailLoading = ref(false)
-let modelDetailRequestSeq = 0
+const retrainModelDetail = ref<ModelDetail | null>(null)
 const trainDialogVisible = ref(false)
 const trainDialogMode = ref<'create' | 'retrain'>('create')
 const generationDialogVisible = ref(false)
@@ -348,27 +306,9 @@ const taskProjectOptions = computed(() => [
   { label: '全部项目', value: '' },
   ...projects.value.map((item) => ({ label: item.project_id, value: item.project_id })),
 ])
-const datasetArtifactGroups = computed(() => groupArtifactsByCase(datasetArtifacts.value))
 const selectedBuildScenarios = computed(() =>
   selectedScenarioSetId.value === datasetBuildForm.value.scenario_set_id ? scenarios.value : [],
 )
-const scenarioEventOptions = computed(() => scenarioOptions.value?.event_anchors ?? [])
-const scenarioSectionOptions = computed(() => scenarioOptions.value?.section_anchors ?? [])
-const trainingSummary = computed(() => modelDetail.value?.summary ?? null)
-const modelCheckpoints = computed(() => modelDetail.value?.checkpoints ?? [])
-const modelSummaryEntries = computed(() =>
-  modelInfoEntries(trainingSummary.value, modelDetail.value?.history),
-)
-const modelConfigEntries = computed(() => trainingConfigEntries(modelDetail.value?.config ?? {}))
-const modelSchemaSummaryEntries = computed(() =>
-  modelSchemaSummary(modelDetail.value?.schema ?? {}),
-)
-const modelPoolRows = computed(() => schemaPoolRows(modelDetail.value?.schema ?? {}))
-const modelEdgeRows = computed(() => schemaEdgeRows(modelDetail.value?.schema ?? {}))
-const modelTaskRows = computed(() => schemaTaskRows(modelDetail.value?.schema ?? {}))
-const hasTrainingSummary = computed(() => hasEntries(trainingSummary.value))
-const hasTrainingConfig = computed(() => hasEntries(modelDetail.value?.config))
-const hasSchemaSummary = computed(() => hasEntries(modelDetail.value?.schema))
 const scenarioTasks = computed(() => filterTasks(TASK_LABELS.scenarios))
 const datasetTasks = computed(() => filterTasks(TASK_LABELS.datasets))
 const modelTasks = computed(() => filterTasks(TASK_LABELS.models))
@@ -391,7 +331,6 @@ watch(selectedProjectId, async (_projectId, previousProjectId) => {
     selectedScenarioSetId.value = ''
     selectedDatasetId.value = ''
     selectedModelId.value = ''
-    planTimetable.value = null
     clearResourceOptions()
   }
   await loadSelectedProject()
@@ -407,7 +346,8 @@ watch(selectedScenarioSetId, async () => {
 })
 
 watch(selectedDatasetId, async () => {
-  await loadDatasetArtifacts(true)
+  timetableDialogVisible.value = false
+  timetableCaseId.value = ''
 })
 
 watch(datasetCreateMode, (mode) => {
@@ -427,8 +367,8 @@ watch(datasetCreateScenarioSetId, () => {
   }
 })
 
-watch(selectedModelId, async () => {
-  if (activePage.value === 'models') await loadModelDetails(true)
+watch(selectedModelId, () => {
+  retrainModelDetail.value = null
 })
 
 watch(
@@ -508,20 +448,15 @@ async function reloadProjectOptionsOnOpen(visible: boolean) {
 async function loadSelectedProject(showMessage = true) {
   if (!selectedProjectId.value) {
     project.value = null
-    planTimetable.value = null
     clearResourceOptions()
     return
   }
   try {
     project.value = await api.getProject(selectedProjectId.value)
-    if (planTimetable.value?.project_id !== selectedProjectId.value) {
-      planTimetable.value = null
-    }
     selectFirstOptions()
     await hydrateActivePage(showMessage)
   } catch (error) {
     project.value = null
-    planTimetable.value = null
     clearResourceOptions()
     if (showMessage) notifyError(error)
   }
@@ -631,25 +566,8 @@ function resourceOptionLabel(value: string, count: unknown) {
 
 async function hydrateActivePage(showLoading = true) {
   if (!hasProject.value) return
-  if (activePage.value === 'dashboard') await loadPlanTimetable(false)
   if (activePage.value === 'scenarios') {
     await loadScenarioSetData(false)
-  }
-  if (activePage.value === 'datasets') await loadDatasetArtifacts(false)
-  if (activePage.value === 'models') await loadModelDetails(showLoading)
-}
-
-async function loadPlanTimetable(showMessage = true) {
-  if (!selectedProjectId.value || !originalGraphActive.value) {
-    planTimetable.value = null
-    return
-  }
-  if (planTimetable.value?.project_id === selectedProjectId.value) return
-  try {
-    planTimetable.value = await api.readPlanTimetable(selectedProjectId.value)
-  } catch (error) {
-    planTimetable.value = null
-    if (showMessage) notifyError(error)
   }
 }
 
@@ -666,7 +584,6 @@ async function pollTasks() {
   taskNow.value = Date.now()
   await refreshTasks(false)
   if (selectedProjectId.value) await loadSelectedProject(false)
-  if (activePage.value === 'models') await loadModelDetails(false)
 }
 
 function startDurationTick() {
@@ -716,7 +633,6 @@ async function removeSelectedProject() {
     trackTask(response.task)
     selectedProjectId.value = ''
     project.value = null
-    planTimetable.value = null
     clearResourceOptions()
     projectOptions.value = projectOptions.value.filter((item) => item.value !== projectId)
     return response.task
@@ -743,7 +659,6 @@ async function submitPrepare() {
       prepareForm.value.mileage_sheet_name,
     )
     trackTask(response.task)
-    planTimetable.value = null
     prepareDialogVisible.value = false
     resetPrepareForm()
     return response.task
@@ -877,7 +792,7 @@ async function searchScenarioSetOptions(query: string) {
   })
 }
 
-async function openScenarioDialog() {
+function openScenarioDialog() {
   if (operationPending.value) return
   if (!selectedScenarioSetId.value) {
     ElMessage.warning('请先选择扰动场景集。')
@@ -887,47 +802,14 @@ async function openScenarioDialog() {
     ElMessage.warning('请先激活原计划运行图。')
     return
   }
-  await ensureScenarioOptions()
-  scenarioId.value = nextScenarioId()
-  scenarioOverwrite.value = false
-  scenarioDelays.value = []
-  scenarioSpeedLimits.value = []
+  scenarioDialogInitialId.value = nextScenarioId()
   scenarioDialogVisible.value = true
 }
 
-async function ensureScenarioOptions() {
-  if (scenarioOptions.value?.project_id === selectedProjectId.value) return
-  scenarioOptions.value = await api.readScenarioOptions(selectedProjectId.value)
-}
-
-function addDelayRow() {
-  scenarioDelays.value.push({
-    event_anchor_id: scenarioEventOptions.value[0]?.anchor_id ?? '',
-    seconds: 600,
-  })
-}
-
-function removeDelayRow(index: number) {
-  scenarioDelays.value.splice(index, 1)
-}
-
-function addSpeedLimitRow(limitSpeed = 160) {
-  scenarioSpeedLimits.value.push({
-    section_anchor_id: scenarioSectionOptions.value[0]?.anchor_id ?? '',
-    start_time: '08:00:00',
-    duration: 1800,
-    limit_speed: limitSpeed,
-  })
-}
-
-function removeSpeedLimitRow(index: number) {
-  scenarioSpeedLimits.value.splice(index, 1)
-}
-
-async function addScenario() {
-  const id = scenarioId.value.trim()
+async function addScenario(payload: { scenarioId: string; overwrite: boolean; data: ScenarioPayload }) {
+  const id = payload.scenarioId.trim()
   if (!id) return
-  if (!scenarioDelays.value.length && !scenarioSpeedLimits.value.length) {
+  if (!payload.data.delays.length && !payload.data.speed_limits.length) {
     ElMessage.warning('请至少添加一个扰动。')
     return
   }
@@ -936,32 +818,13 @@ async function addScenario() {
       selectedProjectId.value,
       selectedScenarioSetId.value,
       id,
-      scenarioPayload(),
-      scenarioOverwrite.value,
+      payload.data,
+      payload.overwrite,
     )
     trackTask(response.task)
     scenarioDialogVisible.value = false
     return response.task
   })
-}
-
-function scenarioPayload() {
-  return {
-    delays: scenarioDelays.value
-      .filter((item) => item.event_anchor_id)
-      .map((item) => ({
-        event_anchor_id: item.event_anchor_id,
-        seconds: Math.floor(positiveNumber(item.seconds, 600)),
-      })),
-    speed_limits: scenarioSpeedLimits.value
-      .filter((item) => item.section_anchor_id)
-      .map((item) => ({
-        section_anchor_id: item.section_anchor_id,
-        start_time: item.start_time || '08:00:00',
-        duration: Math.floor(positiveNumber(item.duration, 1800)),
-        limit_speed: Math.max(0, Number.isFinite(item.limit_speed) ? item.limit_speed : 160),
-      })),
-  }
 }
 
 async function deleteScenario(id: string) {
@@ -1153,7 +1016,8 @@ async function deleteDatasetById(datasetId: string) {
     await api.deleteDataset(selectedProjectId.value, datasetId)
     if (selectedDatasetId.value === datasetId) {
       selectedDatasetId.value = ''
-      datasetArtifacts.value = []
+      timetableCaseId.value = ''
+      timetableDialogVisible.value = false
     }
     datasetOptions.value = datasetOptions.value.filter((item) => item.value !== datasetId)
     await loadSelectedProject(false)
@@ -1230,26 +1094,6 @@ function nonNegativeNumber(value: number | null | undefined, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
 }
 
-async function loadDatasetArtifacts(showMessage = true) {
-  if (!selectedProjectId.value || !selectedDatasetId.value) {
-    datasetArtifacts.value = []
-    datasetLoading.value = false
-    return
-  }
-  if (showMessage) datasetLoading.value = true
-  try {
-    datasetArtifacts.value = await api.listArtifacts(
-      selectedProjectId.value,
-      selectedDatasetId.value,
-    )
-  } catch (error) {
-    datasetArtifacts.value = []
-    if (showMessage) notifyError(error)
-  } finally {
-    if (showMessage) datasetLoading.value = false
-  }
-}
-
 async function reloadDatasetsOnOpen(visible: boolean) {
   if (!visible) return
   await loadResourceOptions('datasets', '', {
@@ -1257,7 +1101,6 @@ async function reloadDatasetsOnOpen(visible: boolean) {
     loading: datasetOptionsLoading,
   })
   await loadSelectedProject(false)
-  await loadDatasetArtifacts(false)
 }
 
 async function searchDatasetOptions(query: string) {
@@ -1334,16 +1177,10 @@ async function reloadDatasetBuildScenariosOnOpen(visible: boolean) {
   await onDatasetBuildScenarioSetChange()
 }
 
-async function openCaseTimetable(group: ArtifactGroup) {
+function openCaseTimetable(caseId: string) {
   if (!selectedProjectId.value || !selectedDatasetId.value) return
-  await runAction('读取时刻表数据', async () => {
-    caseTimetable.value = await api.readCaseTimetable(
-      selectedProjectId.value,
-      selectedDatasetId.value,
-      group.case_id,
-    )
-    timetableDialogVisible.value = true
-  })
+  timetableCaseId.value = caseId
+  timetableDialogVisible.value = true
 }
 
 function openTaskLog(task: Task | null) {
@@ -1382,12 +1219,13 @@ async function removeTask(task: Task) {
   })
 }
 
-async function openTrainDialog(mode: 'create' | 'retrain' = 'create') {
+async function openTrainDialog(
+  mode: 'create' | 'retrain' = 'create',
+  detail: ModelDetail | null = null,
+) {
   if (operationPending.value) return
   trainDialogMode.value = mode
-  if (mode === 'retrain' && selectedModelId.value) {
-    await loadModelDetails(false)
-  }
+  retrainModelDetail.value = mode === 'retrain' ? detail : null
   resetTrainForm(mode)
   trainDialogVisible.value = true
   await nextTick()
@@ -1395,7 +1233,7 @@ async function openTrainDialog(mode: 'create' | 'retrain' = 'create') {
 }
 
 function resetTrainForm(mode: 'create' | 'retrain' = trainDialogMode.value) {
-  const config = modelDetail.value?.config ?? {}
+  const config = mode === 'retrain' ? retrainModelDetail.value?.config ?? {} : {}
   const scenarioSetId =
     stringConfigValue(config.scenario_set_id) ||
     selectedScenarioSetId.value ||
@@ -1446,7 +1284,7 @@ async function submitTrain() {
     pendingModelId.value = modelId
     pendingModelTaskId.value = response.task.id
     selectedModelId.value = modelId
-    modelDetail.value = null
+    retrainModelDetail.value = null
     trainDialogVisible.value = false
     return response.task
   })
@@ -1519,7 +1357,7 @@ async function deleteModelById(modelId: string) {
     await api.deleteModel(selectedProjectId.value, modelId)
     if (selectedModelId.value === modelId) {
       selectedModelId.value = ''
-      modelDetail.value = null
+      retrainModelDetail.value = null
     }
     if (pendingModelId.value === modelId) {
       clearPendingModel()
@@ -1537,7 +1375,6 @@ async function reloadModelsOnOpen(visible: boolean) {
     loading: modelOptionsLoading,
   })
   await loadSelectedProject(false)
-  await loadModelDetails(false)
 }
 
 async function searchModelOptions(query: string) {
@@ -1545,34 +1382,6 @@ async function searchModelOptions(query: string) {
     target: modelOptions,
     loading: modelOptionsLoading,
   })
-}
-
-async function loadModelDetails(showMessage = true) {
-  const projectId = selectedProjectId.value
-  const modelId = selectedModelId.value
-  modelDetailRequestSeq += 1
-  const requestSeq = modelDetailRequestSeq
-  if (!projectId || !modelId) {
-    modelDetail.value = null
-    modelDetailLoading.value = false
-    return
-  }
-  if (showMessage) modelDetailLoading.value = true
-  try {
-    const detail = await api.readModelDetail(projectId, modelId)
-    if (requestSeq === modelDetailRequestSeq && projectId === selectedProjectId.value && modelId === selectedModelId.value) {
-      modelDetail.value = detail
-    }
-  } catch (error) {
-    if (requestSeq === modelDetailRequestSeq && projectId === selectedProjectId.value && modelId === selectedModelId.value) {
-      modelDetail.value = null
-      if (showMessage) notifyError(error)
-    }
-  } finally {
-    if (requestSeq === modelDetailRequestSeq && projectId === selectedProjectId.value && modelId === selectedModelId.value) {
-      modelDetailLoading.value = false
-    }
-  }
 }
 
 function trackTask(task: Task) {
@@ -1614,162 +1423,7 @@ function filterTasks(labels: readonly string[]) {
   return projectTasks.value.filter((task) => labels.includes(String(task.label ?? '')))
 }
 
-function groupArtifactsByCase(artifacts: ArtifactSummary[]) {
-  const groups = new Map<string, ArtifactGroup>()
-  for (const artifact of artifacts) {
-    const group = groups.get(artifact.case_id) ?? {
-      case_id: artifact.case_id,
-      size_bytes: 0,
-      has_lp: false,
-      has_solution: false,
-      has_solution_csv: false,
-      has_timetable_data: false,
-    }
-    group.size_bytes += artifact.size_bytes
-    group.has_lp = group.has_lp || artifact.name.endsWith('.lp')
-    group.has_solution = group.has_solution || artifact.name.endsWith('.sol')
-    group.has_solution_csv = group.has_solution_csv || artifact.name.endsWith('.sol.csv')
-    group.has_timetable_data = group.has_timetable_data || artifact.name === 'adjusted_timetable.json'
-    groups.set(artifact.case_id, group)
-  }
-  return [...groups.values()]
-}
-
-function formatBytes(size: number) {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
-}
-
-function formatMetadataValue(key: string, value: unknown) {
-  if (value == null || value === '') return '无'
-  if (key === 'created_at' && typeof value === 'string') return value.replace('T', ' ')
-  if (key === 'source') {
-    if (value === 'scenario') return '单个场景'
-    if (value === 'scenario_set') return '扰动场景集'
-  }
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
-}
-
-function modelInfoEntries(
-  summary: JsonObject | null,
-  history?: { count?: number; latest?: JsonObject; best?: JsonObject },
-): MetadataEntry[] {
-  const bestMetrics = objectValue(summary?.best_metrics)
-  const lastMetrics = objectValue(summary?.last_metrics)
-  return [
-    {
-      key: 'best_epoch',
-      label: '最佳轮次',
-      value: formatMetadataValue('best_epoch', summary?.best_epoch),
-    },
-    { key: 'best_loss', label: '最佳损失', value: formatMetric(bestMetrics?.loss) },
-    {
-      key: 'last_epoch',
-      label: '最后轮次',
-      value: formatMetadataValue('last_epoch', summary?.last_epoch),
-    },
-    { key: 'last_loss', label: '最后损失', value: formatMetric(lastMetrics?.loss) },
-    {
-      key: 'history_count',
-      label: '历史记录数',
-      value: formatMetadataValue('history_count', history?.count),
-    },
-  ]
-}
-
-function trainingConfigEntries(config: JsonObject): MetadataEntry[] {
-  return TRAINING_CONFIG_ORDER.filter((key) =>
-    Object.prototype.hasOwnProperty.call(config, key),
-  ).map((key) => ({
-    key,
-    label: TRAINING_CONFIG_LABELS[key] ?? key,
-    value: formatMetadataValue(key, config[key]),
-  }))
-}
-
-function modelSchemaSummary(schema: JsonObject): MetadataEntry[] {
-  const messagePassing = objectValue(schema.message_passing)
-  return [
-    { key: 'pools', label: '节点池', value: String(schemaPoolRows(schema).length) },
-    { key: 'edge_types', label: '边类型', value: String(schemaEdgeRows(schema).length) },
-    { key: 'tasks', label: '预测任务', value: String(schemaTaskRows(schema).length) },
-    {
-      key: 'uses_edge_index',
-      label: '使用边索引',
-      value: messagePassing?.uses_edge_index ? '是' : '否',
-    },
-    {
-      key: 'uses_edge_attr',
-      label: '使用边特征',
-      value: messagePassing?.uses_edge_attr ? '是' : '否',
-    },
-  ]
-}
-
-function schemaPoolRows(schema: JsonObject): SchemaPoolRow[] {
-  return Object.entries(objectValue(schema.pools) ?? {}).map(([id, value]) => {
-    const item = objectValue(value)
-    return {
-      id,
-      size: formatMetadataValue('size', item?.size),
-      feature_dim: formatMetadataValue('feature_dim', item?.feature_dim),
-    }
-  })
-}
-
-function schemaEdgeRows(schema: JsonObject): SchemaEdgeRow[] {
-  return Object.entries(objectValue(schema.edge_types) ?? {}).map(([id, value]) => {
-    const item = objectValue(value)
-    return {
-      id,
-      source_pool_id: formatMetadataValue('source_pool_id', item?.source_pool_id),
-      target_pool_id: formatMetadataValue('target_pool_id', item?.target_pool_id),
-      feature_dim: formatMetadataValue('feature_dim', item?.feature_dim),
-    }
-  })
-}
-
-function schemaTaskRows(schema: JsonObject): SchemaTaskRow[] {
-  return Object.entries(objectValue(schema.tasks) ?? {}).map(([id, value]) => {
-    const item = objectValue(value)
-    return {
-      id,
-      target_pool_id: formatMetadataValue('target_pool_id', item?.target_pool_id),
-      max_slots: formatMetadataValue('max_slots', item?.max_slots),
-      count_bounds: formatMetadataValue('count_bounds', item?.count_bounds),
-      param_dim: formatMetadataValue('param_dim', item?.param_dim),
-    }
-  })
-}
-
-function checkpointRoleLabel(role: string) {
-  if (role === 'best') return '最佳'
-  if (role === 'last') return '最后'
-  return '检查点'
-}
-
-function checkpointRoleType(role: string): TaskTagType {
-  if (role === 'best') return 'success'
-  if (role === 'last') return 'warning'
-  return 'info'
-}
-
-function objectValue(value: unknown): JsonObject | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : null
-}
-
-function hasEntries(value: unknown) {
-  const object = objectValue(value)
-  return Boolean(object && Object.keys(object).length)
-}
-
-function formatMetric(value: unknown) {
-  return typeof value === 'number' ? value.toFixed(6) : '无'
-}
-
-function trainFormDefaultsFromConfig(config: JsonObject): Partial<TrainForm> {
+function trainFormDefaultsFromConfig(config: Record<string, unknown>): Partial<TrainForm> {
   const result: Partial<TrainForm> = {}
   for (const [key, defaultValue] of Object.entries(DEFAULT_TRAIN_FORM)) {
     if (key === 'model_id' || key === 'scenario_set_id') continue
@@ -1939,7 +1593,7 @@ function notifyError(error: unknown) {
               <template v-else>
                 <DashboardView
                   v-if="activePage === 'dashboard'"
-                  :plan-timetable="planTimetable"
+                  :selected-project-id="selectedProjectId"
                   :scenario-set-count="scenarioSets.length"
                   :datasets="datasets"
                   :models="models"
@@ -1975,19 +1629,16 @@ function notifyError(error: unknown) {
                 <DatasetsView
                   v-else-if="activePage === 'datasets'"
                   v-model:selected-dataset-id="selectedDatasetId"
+                  :selected-project-id="selectedProjectId"
                   :selected-dataset="selectedDataset"
                   :datasets="datasets"
                   :dataset-options="datasetSelectOptions"
-                  :artifact-groups="datasetArtifactGroups"
-                  :loading="datasetLoading"
                   :resource-loading="datasetOptionsLoading"
-                  :format-bytes="formatBytes"
                   :busy="operationPending"
                   @reload-datasets="reloadDatasetsOnOpen"
                   @search-datasets="searchDatasetOptions"
                   @create-dataset="openDatasetCreateDialog"
                   @delete-dataset="deleteDatasetById"
-                  @refresh-artifacts="loadDatasetArtifacts"
                   @build-dataset="openDatasetBuildDialog"
                   @solve-all="() => openSolveDialog()"
                   @solve-case="openSolveDialog"
@@ -1999,34 +1650,19 @@ function notifyError(error: unknown) {
                 <ModelsView
                   v-else-if="activePage === 'models'"
                   v-model:selected-model-id="selectedModelId"
+                  :selected-project-id="selectedProjectId"
                   :pending-model-id="pendingModelId"
                   :selected-model="selectedModel"
                   :models="models"
                   :model-options="modelSelectOptions"
-                  :model-detail="modelDetail"
-                  :model-detail-loading="modelDetailLoading"
                   :resource-loading="modelOptionsLoading"
-                  :model-summary-entries="modelSummaryEntries"
-                  :model-config-entries="modelConfigEntries"
-                  :model-schema-summary-entries="modelSchemaSummaryEntries"
-                  :model-pool-rows="modelPoolRows"
-                  :model-edge-rows="modelEdgeRows"
-                  :model-task-rows="modelTaskRows"
-                  :model-checkpoints="modelCheckpoints"
-                  :has-training-summary="hasTrainingSummary"
-                  :has-training-config="hasTrainingConfig"
-                  :has-schema-summary="hasSchemaSummary"
                   :tasks="modelTasks"
-                  :format-bytes="formatBytes"
-                  :checkpoint-role-label="checkpointRoleLabel"
-                  :checkpoint-role-type="checkpointRoleType"
                   :busy="operationPending"
                   @reload-models="reloadModelsOnOpen"
                   @search-models="searchModelOptions"
                   @train="() => openTrainDialog('create')"
-                  @retrain="() => openTrainDialog('retrain')"
+                  @retrain="(detail) => openTrainDialog('retrain', detail)"
                   @delete-model="deleteModelById"
-                  @refresh-model="loadModelDetails"
                   @open-task-log="openTaskLog"
                   @generate="openGenerationDialog"
                 />
@@ -2146,115 +1782,15 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="scenarioDialogVisible" title="新增场景" width="920px">
-      <el-form label-width="100px">
-        <el-form-item label="场景 ID">
-          <el-input v-model="scenarioId" :disabled="operationPending" />
-        </el-form-item>
-        <el-form-item label="覆盖">
-          <el-switch v-model="scenarioOverwrite" :disabled="operationPending" />
-        </el-form-item>
-        <el-alert
-          title="中断按 limit_speed = 0 记录，与 core 的场景格式保持一致。"
-          type="info"
-          show-icon
-          :closable="false"
-        />
-        <el-divider content-position="left">晚点扰动</el-divider>
-        <el-table :data="scenarioDelays" empty-text="暂无晚点扰动">
-          <el-table-column label="计划事件" min-width="280">
-            <template #default="{ row }">
-              <el-select
-                v-model="row.event_anchor_id"
-                filterable
-                class="full-width"
-                :disabled="operationPending"
-              >
-                <el-option
-                  v-for="item in scenarioEventOptions"
-                  :key="item.anchor_id"
-                  :label="`${item.train_id} · ${item.station} · ${item.event_type} · ${item.planned_time_text}`"
-                  :value="item.anchor_id"
-                />
-              </el-select>
-            </template>
-          </el-table-column>
-          <el-table-column label="晚点秒数" width="180">
-            <template #default="{ row }">
-              <el-input-number v-model="row.seconds" :min="1" :disabled="operationPending" />
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="90">
-            <template #default="{ $index }">
-              <el-button link type="danger" :disabled="operationPending" @click="removeDelayRow($index)">
-                删除
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="dialog-actions">
-          <el-button :disabled="operationPending" @click="addDelayRow">添加晚点</el-button>
-        </div>
-
-        <el-divider content-position="left">限速 / 中断扰动</el-divider>
-        <el-table :data="scenarioSpeedLimits" empty-text="暂无限速或中断扰动">
-          <el-table-column label="区间" min-width="240">
-            <template #default="{ row }">
-              <el-select
-                v-model="row.section_anchor_id"
-                filterable
-                class="full-width"
-                :disabled="operationPending"
-              >
-                <el-option
-                  v-for="item in scenarioSectionOptions"
-                  :key="item.anchor_id"
-                  :label="`${item.start_station} -> ${item.end_station}`"
-                  :value="item.anchor_id"
-                />
-              </el-select>
-            </template>
-          </el-table-column>
-          <el-table-column label="开始时间" width="150">
-            <template #default="{ row }">
-              <el-input v-model="row.start_time" placeholder="HH:MM:SS" :disabled="operationPending" />
-            </template>
-          </el-table-column>
-          <el-table-column label="持续秒数" width="150">
-            <template #default="{ row }">
-              <el-input-number v-model="row.duration" :min="1" :disabled="operationPending" />
-            </template>
-          </el-table-column>
-          <el-table-column label="限速" width="150">
-            <template #default="{ row }">
-              <el-input-number v-model="row.limit_speed" :min="0" :disabled="operationPending" />
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="90">
-            <template #default="{ $index }">
-              <el-button link type="danger" :disabled="operationPending" @click="removeSpeedLimitRow($index)">
-                删除
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="dialog-actions">
-          <el-button :disabled="operationPending" @click="addSpeedLimitRow()">添加限速</el-button>
-          <el-button :disabled="operationPending" @click="addSpeedLimitRow(0)">添加中断</el-button>
-        </div>
-      </el-form>
-      <template #footer>
-        <el-button :disabled="operationPending" @click="scenarioDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="activeOperation === '新增场景'"
-          :disabled="operationPending"
-          @click="addScenario"
-        >
-          确定
-        </el-button>
-      </template>
-    </el-dialog>
+    <ScenarioDialog
+      v-model="scenarioDialogVisible"
+      :project-id="selectedProjectId"
+      :scenario-set-id="selectedScenarioSetId"
+      :initial-scenario-id="scenarioDialogInitialId"
+      :busy="operationPending"
+      :submitting="activeOperation === '新增场景'"
+      @submit="addScenario"
+    />
 
     <el-dialog v-model="normalGenerateDialogVisible" title="批量生成场景" width="560px">
       <el-alert
@@ -2850,7 +2386,12 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <TimetableDialog v-model="timetableDialogVisible" :timetable="caseTimetable" />
+    <TimetableDialog
+      v-model="timetableDialogVisible"
+      :project-id="selectedProjectId"
+      :dataset-id="selectedDatasetId"
+      :case-id="timetableCaseId"
+    />
 
     <TaskLogDialog v-model="taskLogDialogVisible" :task="taskLogTarget" />
   </div>
