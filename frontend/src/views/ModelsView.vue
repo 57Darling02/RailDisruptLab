@@ -217,8 +217,14 @@ function findModelTrainTask(tasks: Task[], modelId: string) {
       .filter((task) => task.label === 'train')
       .slice()
       .reverse()
-      .find((task) => pattern.test(task.command || task.original_command || '')) ?? null
+      .find((task) => trainTaskModelId(task) === modelId || pattern.test(task.command || task.original_command || '')) ?? null
   )
+}
+
+function trainTaskModelId(task: Task) {
+  const params = task.params ?? {}
+  const modelId = params.model_id
+  return typeof modelId === 'string' ? modelId : ''
 }
 
 function escapeRegExp(value: string) {

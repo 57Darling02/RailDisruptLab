@@ -259,7 +259,25 @@ const trainModelPrefix = computed(() => {
 const generationScenarioSetPrefix = computed(() => selectedModelId.value.trim())
 const scenarioSets = computed(() => project.value?.scenario_sets ?? [])
 const datasets = computed(() => project.value?.datasets ?? [])
-const models = computed(() => project.value?.models ?? [])
+const models = computed(() => {
+  const items = project.value?.models ?? []
+  const pendingId = pendingModelId.value.trim()
+  if (!pendingId || items.some((item) => item.model_id === pendingId)) return items
+  return [
+    ...items,
+    {
+      model_id: pendingId,
+      root: '',
+      is_ready: false,
+      has_context_graph: false,
+      sample_count: 0,
+      has_dataset_profile: false,
+      has_best_model: false,
+      has_last_model: false,
+      has_training_summary: false,
+    },
+  ]
+})
 const selectedDataset = computed(
   () => datasets.value.find((item) => item.dataset_id === selectedDatasetId.value) ?? null,
 )
@@ -445,7 +463,10 @@ function selectFirstOptions() {
     clearPendingModel()
   } else if (
     !selectedModelId.value ||
-    !project.value.models.some((item) => item.model_id === selectedModelId.value)
+    (
+      selectedModelId.value !== pendingModelId.value &&
+      !project.value.models.some((item) => item.model_id === selectedModelId.value)
+    )
   ) {
     selectedModelId.value = project.value.models[0]?.model_id ?? ''
   }
@@ -489,6 +510,7 @@ async function pollTasks() {
   taskNow.value = Date.now()
   await refreshTasks(false)
   if (selectedProjectId.value) await loadSelectedProject(false)
+  if (activePage.value === 'models') await loadModelDetails(false)
 }
 
 function startDurationTick() {
@@ -1213,10 +1235,13 @@ async function submitTrain() {
     }
   }
   await submitTask('训练模型', async () => {
-    const response = await api.submitTrain(selectedProjectId.value, { ...trainForm })
+    const modelId = trainForm.model_id.trim()
+    const response = await api.submitTrain(selectedProjectId.value, { ...trainForm, model_id: modelId })
     trackTask(response.task)
-    pendingModelId.value = trainForm.model_id
+    pendingModelId.value = modelId
     pendingModelTaskId.value = response.task.id
+    selectedModelId.value = modelId
+    modelDetail.value = null
     trainDialogVisible.value = false
     return response.task
   })
