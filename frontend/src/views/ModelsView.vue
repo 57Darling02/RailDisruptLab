@@ -19,6 +19,7 @@ const props = defineProps<{
   selectedModel: ModelSummary | null
   models: ModelSummary[]
   modelDetail: ModelDetail | null
+  modelDetailLoading: boolean
   modelSummaryEntries: MetadataEntry[]
   modelConfigEntries: MetadataEntry[]
   modelSchemaSummaryEntries: MetadataEntry[]
@@ -256,7 +257,11 @@ function escapeRegExp(value: string) {
         :closable="false"
       />
 
-      <el-card shadow="never">
+      <el-card
+        v-loading="modelDetailLoading"
+        element-loading-text="正在加载模型数据..."
+        shadow="never"
+      >
         <template #header>
           <div class="card-header">
             <el-space>
@@ -265,7 +270,9 @@ function escapeRegExp(value: string) {
                 重新训练
               </el-button>
             </el-space>
-            <el-button :disabled="busy" @click="$emit('refreshModel')">刷新</el-button>
+            <el-button :disabled="busy" :loading="modelDetailLoading" @click="$emit('refreshModel')">
+              刷新
+            </el-button>
           </div>
         </template>
 

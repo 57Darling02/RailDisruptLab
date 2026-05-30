@@ -231,6 +231,8 @@ const selectedModelId = ref('')
 const pendingModelId = ref('')
 const pendingModelTaskId = ref<number | null>(null)
 const modelDetail = ref<ModelDetail | null>(null)
+const modelDetailLoading = ref(false)
+let modelDetailRequestSeq = 0
 const trainDialogVisible = ref(false)
 const trainDialogMode = ref<'create' | 'retrain'>('create')
 const generationDialogVisible = ref(false)
@@ -367,7 +369,7 @@ watch(datasetCreateScenarioSetId, () => {
 })
 
 watch(selectedModelId, async () => {
-  if (activePage.value === 'models') await loadModelDetails(false)
+  if (activePage.value === 'models') await loadModelDetails(true)
 })
 
 watch(
@@ -433,7 +435,7 @@ async function loadSelectedProject(showMessage = true) {
       planTimetable.value = null
     }
     selectFirstOptions()
-    await hydrateActivePage()
+    await hydrateActivePage(showMessage)
   } catch (error) {
     project.value = null
     planTimetable.value = null
@@ -473,14 +475,14 @@ function selectFirstOptions() {
   reconcilePendingModel()
 }
 
-async function hydrateActivePage() {
+async function hydrateActivePage(showLoading = true) {
   if (!hasProject.value) return
   if (activePage.value === 'dashboard') await loadPlanTimetable(false)
   if (activePage.value === 'scenarios') {
     await loadScenarioSetData(false)
   }
   if (activePage.value === 'datasets') await loadDatasetArtifacts(false)
-  if (activePage.value === 'models') await loadModelDetails(false)
+  if (activePage.value === 'models') await loadModelDetails(showLoading)
 }
 
 async function loadPlanTimetable(showMessage = true) {
@@ -921,9 +923,23 @@ async function createDataset() {
     ElMessage.warning('请先选择要引入的扰动场景集。')
     return
   }
+  const existingDataset = datasets.value.find((item) => item.dataset_id === datasetId)
+  if (existingDataset && !importScenarioSet) {
+    ElMessage.warning(`MILP 实例集 ${datasetId} 已存在，请换一个 ID。`)
+    return
+  }
+  if (existingDataset) {
+    try {
+      await ElMessageBox.confirm(
+        `MILP 实例集 ${datasetId} 已存在。继续会清空并重建该实例集产物。`,
+        '重建 MILP 实例集',
+        { type: 'warning', confirmButtonText: '清空并重建', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
   await submitTask('新增 MILP 实例集', async () => {
-    const response = await api.createDataset(selectedProjectId.value, datasetId)
-    trackTask(response.task)
     selectedDatasetId.value = datasetId
     if (importScenarioSet) {
       selectedScenarioSetId.value = scenarioSetId
@@ -939,6 +955,8 @@ async function createDataset() {
       datasetCreateDialogVisible.value = false
       return buildResponse.task
     }
+    const response = await api.createDataset(selectedProjectId.value, datasetId)
+    trackTask(response.task)
     resetDatasetCreateForm()
     datasetCreateDialogVisible.value = false
     return response.task
@@ -1331,15 +1349,30 @@ async function reloadModelsOnOpen(visible: boolean) {
 }
 
 async function loadModelDetails(showMessage = true) {
-  if (!selectedProjectId.value || !selectedModelId.value) {
+  const projectId = selectedProjectId.value
+  const modelId = selectedModelId.value
+  modelDetailRequestSeq += 1
+  const requestSeq = modelDetailRequestSeq
+  if (!projectId || !modelId) {
     modelDetail.value = null
+    modelDetailLoading.value = false
     return
   }
+  if (showMessage) modelDetailLoading.value = true
   try {
-    modelDetail.value = await api.readModelDetail(selectedProjectId.value, selectedModelId.value)
+    const detail = await api.readModelDetail(projectId, modelId)
+    if (requestSeq === modelDetailRequestSeq && projectId === selectedProjectId.value && modelId === selectedModelId.value) {
+      modelDetail.value = detail
+    }
   } catch (error) {
-    modelDetail.value = null
-    if (showMessage) notifyError(error)
+    if (requestSeq === modelDetailRequestSeq && projectId === selectedProjectId.value && modelId === selectedModelId.value) {
+      modelDetail.value = null
+      if (showMessage) notifyError(error)
+    }
+  } finally {
+    if (requestSeq === modelDetailRequestSeq && projectId === selectedProjectId.value && modelId === selectedModelId.value) {
+      modelDetailLoading.value = false
+    }
   }
 }
 
@@ -1759,6 +1792,7 @@ function notifyError(error: unknown) {
                   :selected-model="selectedModel"
                   :models="models"
                   :model-detail="modelDetail"
+                  :model-detail-loading="modelDetailLoading"
                   :model-summary-entries="modelSummaryEntries"
                   :model-config-entries="modelConfigEntries"
                   :model-schema-summary-entries="modelSchemaSummaryEntries"

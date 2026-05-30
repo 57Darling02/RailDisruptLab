@@ -145,7 +145,7 @@ def build_dataset(
     if dataset.root.exists() and not dataset.root.is_dir():
         raise NotADirectoryError(f"MILP dataset path is not a directory: {dataset.root}")
     if not dataset.root.is_dir():
-        raise FileNotFoundError(f"MILP dataset not found, create it first: {dataset.root}")
+        dataset.root.mkdir(parents=True, exist_ok=False)
     prepare_output_dir(dataset.root, overwrite=True)
     docs = load_scenario_documents(layout, scenario_set_id, scenario_id=scenario_id)
 
