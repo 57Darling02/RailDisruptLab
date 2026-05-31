@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
+from core.file_ops import copy_or_link_file
 from core.project_layout import ProjectLayout, require_id, reset_dir, sanitize_id
 from core.scenario_config import ScenarioDocument
 from core.types import BaseContext, SectionAnchor
@@ -191,7 +192,7 @@ def normal_generate(
             target.source_dir.mkdir(parents=True, exist_ok=False)
             shutil.copy2(timetable_path, target.timetable_xlsx)
             shutil.copy2(mileage_path, target.mileage_xlsx)
-            shutil.copy2(tmp_case.context_json, target.context_json)
+            copy_or_link_file(tmp_case.context_json, target.context_json)
             payload = generate_simulated_payload(
                 rng,
                 base,

@@ -7,7 +7,7 @@ export interface EntityOption {
 </script>
 
 <script setup lang="ts">
-import { Close } from '@element-plus/icons-vue'
+import { Close, Plus } from '@element-plus/icons-vue'
 
 const props = withDefaults(
   defineProps<{
@@ -20,6 +20,7 @@ const props = withDefaults(
     filterable?: boolean
     loading?: boolean
     busy?: boolean
+    addInDropdown?: boolean
   }>(),
   {
     placeholder: '请选择',
@@ -28,6 +29,7 @@ const props = withDefaults(
     filterable: true,
     loading: false,
     busy: false,
+    addInDropdown: false,
   },
 )
 
@@ -50,57 +52,75 @@ function handleVisibleChange(visible: boolean) {
 
 <template>
   <el-card shadow="never">
-    <el-row :gutter="12" align="middle">
-      <el-col :span="20">
-        <el-space alignment="center" class="entity-toolbar-main">
-          <span class="control-label">{{ label }}：</span>
-          <el-select
-            :model-value="modelValue"
-            :filterable="filterable"
-            :remote="filterable"
-            reserve-keyword
-            :remote-method="handleRemoteSearch"
-            class="entity-toolbar-select"
-            :placeholder="placeholder"
-            :disabled="busy"
-            :loading="loading || busy"
-            no-match-text="无匹配资源"
-            no-data-text="暂无资源"
-            @update:model-value="emit('update:modelValue', String($event))"
-            @visible-change="handleVisibleChange"
+    <div class="entity-toolbar">
+      <el-space alignment="center" class="entity-toolbar-main">
+        <span class="control-label">{{ label }}：</span>
+        <el-select
+          :model-value="modelValue"
+          :filterable="filterable"
+          :remote="filterable"
+          reserve-keyword
+          :remote-method="handleRemoteSearch"
+          class="entity-toolbar-select"
+          :placeholder="placeholder"
+          :disabled="busy"
+          :loading="loading || busy"
+          no-match-text="无匹配资源"
+          no-data-text="暂无资源"
+          @update:model-value="emit('update:modelValue', String($event))"
+          @visible-change="handleVisibleChange"
+        >
+          <el-option
+            v-for="item in props.options"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
           >
-            <el-option
-              v-for="item in props.options"
-              :key="item.value"
-              :label="item.label"
-              :value="item.value"
+            <el-space alignment="center" class="entity-option-row">
+              <el-text truncated>{{ item.label }}</el-text>
+              <el-button
+                class="entity-option-delete"
+                link
+                type="danger"
+                :disabled="busy"
+                :aria-label="deleteLabel"
+                :title="deleteLabel"
+                @click.stop.prevent="emit('delete', item.value)"
+              >
+                <el-icon><Close /></el-icon>
+              </el-button>
+            </el-space>
+          </el-option>
+          <template v-if="addInDropdown" #footer>
+            <el-button
+              class="entity-create-button"
+              type="primary"
+              plain
+              :icon="Plus"
+              :disabled="busy"
+              @click.stop="emit('add')"
             >
-              <el-space alignment="center" class="entity-option-row">
-                <el-text truncated>{{ item.label }}</el-text>
-                <el-button
-                  class="entity-option-delete"
-                  link
-                  type="danger"
-                  :disabled="busy"
-                  :aria-label="deleteLabel"
-                  :title="deleteLabel"
-                  @click.stop.prevent="emit('delete', item.value)"
-                >
-                  <el-icon><Close /></el-icon>
-                </el-button>
-              </el-space>
-            </el-option>
-          </el-select>
-        </el-space>
-      </el-col>
-      <el-col :span="4">
-        <el-button class="full-width" :disabled="busy" @click="emit('add')">{{ addLabel }}</el-button>
-      </el-col>
-    </el-row>
+              {{ addLabel }}
+            </el-button>
+          </template>
+        </el-select>
+      </el-space>
+      <div class="entity-toolbar-actions">
+        <el-button v-if="!addInDropdown" :disabled="busy" @click="emit('add')">{{ addLabel }}</el-button>
+        <slot name="actions" />
+      </div>
+    </div>
   </el-card>
 </template>
 
 <style scoped>
+.entity-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
 .entity-toolbar-main {
   width: 100%;
 }
@@ -112,6 +132,13 @@ function handleVisibleChange(visible: boolean) {
 
 .entity-toolbar-select {
   width: 100%;
+}
+
+.entity-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .entity-option-row {
@@ -127,5 +154,23 @@ function handleVisibleChange(visible: boolean) {
   min-height: 24px;
   padding: 0 4px;
   font-size: 14px;
+}
+
+.entity-create-button {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .entity-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .entity-toolbar-actions {
+    justify-content: stretch;
+  }
+
+  .entity-toolbar-actions :deep(.el-button) {
+    flex: 1;
+  }
 }
 </style>

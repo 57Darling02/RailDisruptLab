@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 from pathlib import Path
@@ -9,8 +10,10 @@ from core.base_context import build_base_context, load_base_context, write_base_
 from core.builder import build_model
 from core.exporter import export_lp
 from core.loader import load_config_payload, load_mileage_table, load_timetable, parse_scenario_config
+from core.postprocess import adjusted_timetable_rows
 from core.project_layout import to_posix
 from core.scenario_config import load_scenario_document
+from core.solver import GurobiSolveError, load_solution_values, solve_lp
 from core.vae_learning_graph import (
     DEFAULT_EVENT_TIME_WINDOW,
     DEFAULT_EVENT_TOP_K,
@@ -48,6 +51,20 @@ def main() -> None:
     milp_parser.add_argument("--big-m", type=int, default=100000)
     milp_parser.add_argument("--tolerance-delay-seconds", type=int, default=7200)
 
+    solve_parser = subparsers.add_parser("solve-milp-case")
+    solve_parser.add_argument("--lp", required=True)
+    solve_parser.add_argument("--solution", required=True)
+    solve_parser.add_argument("--summary-output", required=True)
+    solve_parser.add_argument("--time-limit", type=float, default=120.0)
+    solve_parser.add_argument("--mip-gap", type=float, default=0.0)
+    solve_parser.add_argument("--threads", type=int, default=0)
+
+    timetable_parser = subparsers.add_parser("export-timetable-case")
+    timetable_parser.add_argument("--context", required=True)
+    timetable_parser.add_argument("--solution", required=True)
+    timetable_parser.add_argument("--output", required=True)
+    timetable_parser.add_argument("--summary-output", required=True)
+
     vae_parser = subparsers.add_parser("export-vae-case-graph")
     vae_parser.add_argument("--context", required=True)
     vae_parser.add_argument("--scenario", required=True)
@@ -63,6 +80,10 @@ def main() -> None:
         build_context(args)
     elif args.command == "build-milp-case":
         build_milp_case(args)
+    elif args.command == "solve-milp-case":
+        solve_milp_case(args)
+    elif args.command == "export-timetable-case":
+        export_timetable_case(args)
     elif args.command == "export-vae-case-graph":
         export_vae_case_graph(args)
     else:  # pragma: no cover
@@ -121,6 +142,58 @@ def build_milp_case(args: argparse.Namespace) -> None:
         )
 
 
+def solve_milp_case(args: argparse.Namespace) -> None:
+    lp_path = Path(args.lp)
+    solution_path = Path(args.solution)
+    summary_path = Path(args.summary_output)
+    solver_config = {
+        "time_limit": max(0.0, float(args.time_limit or 0.0)),
+        "mip_gap": max(0.0, float(args.mip_gap or 0.0)),
+        "threads": max(0, int(args.threads or 0)),
+    }
+    try:
+        result = solve_lp(
+            lp_path,
+            solution_path,
+            quiet=True,
+            threads=int(solver_config["threads"]),
+            time_limit=float(solver_config["time_limit"]),
+            mip_gap=float(solver_config["mip_gap"]),
+        )
+        write_solution_csv(solution_path.with_suffix(".sol.csv"), result.values)
+        payload = {
+            "status": "timeout" if result.timed_out else "ok",
+            "objective": round(result.objective, 4),
+            "mip_gap": round(result.mip_gap, 6),
+            "num_nodes": int(round(result.node_count)),
+        }
+    except GurobiSolveError as exc:
+        payload = {
+            "status": "timeout" if exc.timed_out else "failed",
+            "error": str(exc),
+            "num_nodes": int(round(exc.node_count)) if exc.node_count is not None else None,
+        }
+    except Exception as exc:
+        payload = {"status": "failed", "error": str(exc)}
+    write_json(summary_path, payload)
+
+
+def export_timetable_case(args: argparse.Namespace) -> None:
+    output_path = Path(args.output)
+    context = load_base_context(Path(args.context))
+    values = load_solution_values(Path(args.solution))
+    rows = adjusted_timetable_rows(context.translated, values)
+    write_json(
+        output_path,
+        {
+            "case_id": output_path.parent.name,
+            "station_order": list(context.station_order),
+            "rows": rows,
+        },
+    )
+    write_json(Path(args.summary_output), {"status": "ok", "row_count": len(rows)})
+
+
 def export_vae_case_graph(args: argparse.Namespace) -> None:
     yaml = require_yaml()
     scenario_path = Path(args.scenario)
@@ -155,6 +228,15 @@ def export_vae_case_graph(args: argparse.Namespace) -> None:
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_solution_csv(path: Path, values: dict[str, float]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["variable", "value"])
+        writer.writeheader()
+        for name in sorted(values):
+            writer.writerow({"variable": name, "value": values[name]})
 
 
 def require_yaml():

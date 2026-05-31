@@ -70,6 +70,10 @@ body {
   background: var(--el-bg-color);
 }
 
+.app-navigation {
+  height: 100%;
+}
+
 .brand {
   height: 60px;
   display: flex;
@@ -83,8 +87,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid var(--el-border-color-light);
   background: var(--el-bg-color);
+}
+
+.mobile-nav-button,
+.mobile-task-badge {
+  display: none;
 }
 
 .workspace-container {
@@ -94,6 +104,7 @@ body {
 
 .header-actions {
   display: flex;
+  min-width: 0;
   gap: 8px;
   align-items: center;
   margin-left: auto;
@@ -118,6 +129,22 @@ body {
   overflow: hidden;
   padding: 16px 16px 16px 0;
   border-left: 1px solid var(--el-border-color-light);
+  background: var(--el-bg-color-page);
+}
+
+.navigation-drawer .el-drawer__body,
+.task-drawer .el-drawer__body {
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.navigation-drawer .app-navigation {
+  background: var(--el-bg-color);
+}
+
+.task-drawer .el-drawer__body {
+  padding: 12px;
   background: var(--el-bg-color-page);
 }
 
@@ -313,8 +340,32 @@ body {
 }
 
 @media (max-width: 1100px) {
+  .app-aside,
   .task-aside {
     display: none;
+  }
+
+  .mobile-nav-button,
+  .mobile-task-badge {
+    display: inline-flex;
+    flex: 0 0 auto;
+  }
+
+  .app-header {
+    padding: 0 12px;
+  }
+
+  .header-actions {
+    flex: 1;
+    margin-left: 0;
+  }
+
+  .project-select {
+    width: min(260px, 36vw);
+  }
+
+  .app-main {
+    padding: 12px;
   }
 
   .toolbar-row,
@@ -325,4 +376,19 @@ body {
     flex-direction: column;
   }
 
+}
+
+@media (max-width: 720px) {
+  .app-header {
+    min-height: 60px;
+    padding: 0 8px;
+  }
+
+  .header-actions {
+    justify-content: flex-end;
+  }
+
+  .project-select {
+    width: min(100%, 220px);
+  }
 }

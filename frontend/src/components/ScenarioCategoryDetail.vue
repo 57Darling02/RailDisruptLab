@@ -5,7 +5,11 @@ import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import { barPercentLabel } from '@/chart-options'
 import ChartPanel from '@/components/ChartPanel.vue'
-import type { ScenarioCoverageRow, ScenarioSetVisualization, ScenarioVisualizationItem } from '@/types'
+import type {
+  ScenarioCoverageRow,
+  ScenarioSetVisualization,
+  ScenarioVisualizationItem,
+} from '@/types'
 
 const props = defineProps<{
   projectId: string
@@ -18,25 +22,29 @@ const emit = defineEmits<{
   simulateScenario: []
   deleteScenario: [scenarioId: string]
   viewScenario: [scenarioId: string]
-  loaded: []
+  loadingChange: [loading: boolean]
 }>()
 
 const loading = ref(false)
 const errorMessage = ref('')
-const visualization = ref<ScenarioSetVisualization | null>(null)
+const analysis = ref<ScenarioSetVisualization | null>(null)
 let requestSeq = 0
+
+watch(loading, (value) => {
+  emit('loadingChange', value)
+}, { immediate: true })
 
 const timeOption = computed(() => ({
   tooltip: { trigger: 'axis' },
   grid: { top: 28, right: 18, bottom: 32, left: 48 },
-  xAxis: { type: 'category', data: visualization.value?.time_distribution?.map((item) => item.label) ?? [] },
+  xAxis: { type: 'category', data: analysis.value?.time_distribution?.map((item) => item.label) ?? [] },
   yAxis: { type: 'value', name: '数量' },
   series: [
     {
       name: '扰动数量',
       type: 'line',
       smooth: true,
-      data: visualization.value?.time_distribution?.map((item) => item.count) ?? [],
+      data: analysis.value?.time_distribution?.map((item) => item.count) ?? [],
     },
   ],
 }))
@@ -49,7 +57,7 @@ const spaceOption = computed(() => ({
       type: 'pie',
       radius: ['42%', '68%'],
       center: ['50%', '42%'],
-      data: visualization.value?.space_distribution?.map((item) => ({ name: item.label, value: item.count })) ?? [],
+      data: analysis.value?.space_distribution?.map((item) => ({ name: item.label, value: item.count })) ?? [],
     },
   ],
 }))
@@ -62,12 +70,12 @@ const typePieOption = computed(() => ({
       type: 'pie',
       radius: ['42%', '68%'],
       center: ['50%', '42%'],
-      data: visualization.value?.summary.category_ratios.map((item) => ({ name: item.label, value: item.count })) ?? [],
+      data: analysis.value?.summary.category_ratios.map((item) => ({ name: item.label, value: item.count })) ?? [],
     },
   ],
 }))
 const coverageBarOption = computed(() => {
-  const rows = visualization.value?.summary.coverage.rows ?? []
+  const rows = analysis.value?.summary.coverage.rows ?? []
   return {
     tooltip: {
       trigger: 'axis',
@@ -110,7 +118,7 @@ watch(
 
 async function loadDetail() {
   if (!props.projectId || !props.scenarioSetId) {
-    visualization.value = null
+    analysis.value = null
     return
   }
   const seq = requestSeq + 1
@@ -120,11 +128,10 @@ async function loadDetail() {
   try {
     const data = await api.readScenarioSetVisualization(props.projectId, props.scenarioSetId)
     if (seq !== requestSeq) return
-    visualization.value = data
-    emit('loaded')
+    analysis.value = data
   } catch (error) {
     if (seq !== requestSeq) return
-    visualization.value = null
+    analysis.value = null
     errorMessage.value = error instanceof Error ? error.message : String(error)
     ElMessage.error(errorMessage.value)
   } finally {
@@ -176,20 +183,28 @@ defineExpose({ reload: loadDetail })
       </template>
     </el-result>
 
-    <template v-else-if="visualization">
+    <template v-else-if="analysis">
       <el-card class="scenario-section" shadow="never">
-        <template #header>场景扰动数量-时间分布</template>
-        <ChartPanel :option="timeOption" filename="scenario-time-distribution" height="320px" />
+        <template #header>
+          <div class="card-header">
+            <span>场景扰动数量-时间分布</span>
+          </div>
+        </template>
+        <ChartPanel
+          :option="timeOption"
+          filename="scenario-time-distribution"
+          height="320px"
+        />
       </el-card>
 
       <div class="scenario-chart-grid">
         <el-card shadow="never">
-          <template #header>场景扰动数量-空间分布</template>
-          <ChartPanel :option="spaceOption" filename="scenario-space-distribution" height="260px" />
-        </el-card>
-        <el-card shadow="never">
           <template #header>场景类型占比</template>
           <ChartPanel :option="typePieOption" filename="scenario-type-ratio" height="260px" />
+        </el-card>
+        <el-card shadow="never">
+          <template #header>场景扰动数量-空间分布</template>
+          <ChartPanel :option="spaceOption" filename="scenario-space-distribution" height="260px" />
         </el-card>
         <el-card shadow="never">
           <template #header>扰动时间 / 空间覆盖率</template>
@@ -207,7 +222,7 @@ defineExpose({ reload: loadDetail })
             </el-space>
           </div>
         </template>
-        <el-table :data="visualization.scenarios" empty-text="暂无场景">
+        <el-table :data="analysis.scenarios" empty-text="暂无场景">
           <el-table-column prop="scenario_id" label="场景 ID" min-width="180" show-overflow-tooltip />
           <el-table-column label="激活" width="90">
             <template #default="{ row }">
@@ -221,9 +236,15 @@ defineExpose({ reload: loadDetail })
               <el-tag :type="scenarioTagType(row.category)" size="small">{{ scenarioTypeLabel(row) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="counts.delay" label="晚点" width="90" />
-          <el-table-column prop="counts.speed_limit" label="限速" width="90" />
-          <el-table-column prop="counts.interruption" label="中断" width="90" />
+          <el-table-column label="晚点" width="90">
+            <template #default="{ row }">{{ row.counts.delay }}</template>
+          </el-table-column>
+          <el-table-column label="限速" width="90">
+            <template #default="{ row }">{{ row.counts.speed_limit }}</template>
+          </el-table-column>
+          <el-table-column label="中断" width="90">
+            <template #default="{ row }">{{ row.counts.interruption }}</template>
+          </el-table-column>
           <el-table-column label="操作" width="150">
             <template #default="{ row }">
               <el-button link type="primary" :disabled="busy" @click="emit('viewScenario', row.scenario_id)">查看</el-button>

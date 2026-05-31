@@ -44,11 +44,6 @@ export interface ScenarioSet {
   scenario_set_id: string
   root: string
   case_count: number
-  activated_count?: number
-  delay_count?: number
-  speed_limit_count?: number
-  interruption_count?: number
-  files?: string[]
 }
 
 export interface ScenarioSummary {
@@ -68,17 +63,6 @@ export interface ScenarioSummary {
   delay_count: number
   speed_limit_count: number
   interruption_count: number
-}
-
-export interface ScenarioResourceSummary {
-  project_id: string
-  scenario_count: number
-  disturbance_counts: {
-    delay: number
-    speed_limit: number
-    interruption: number
-    total: number
-  }
 }
 
 export interface ScenarioContextStats {
@@ -147,6 +131,20 @@ export interface DatasetSummary {
   is_fully_built: boolean
   is_fully_solved: boolean
   is_timetable_ready: boolean
+}
+
+export interface DatasetDetail {
+  dataset_id: string
+  root: string
+  case_count: number
+  built_count: number
+  solved_count: number
+  timetable_count: number
+  build_config_known_count: number
+  build_config_consistent: boolean
+  build_config: Record<string, unknown>
+  build_config_signatures: Array<{ signature: string; count: number }>
+  source_scenario_sets: Array<{ scenario_set_id: string; count: number }>
 }
 
 export interface DatasetSolveMetricSummary {
@@ -318,6 +316,17 @@ export interface ScenarioJointLocationTimeRow extends ScenarioJointTypeTimeRow {
   location: string
 }
 
+export interface ScenarioSetResourceSummary {
+  scenario_count: number
+  disturbance_counts: {
+    delay: number
+    speed_limit: number
+    interruption: number
+    total: number
+  }
+  category_ratios: ScenarioCategoryRatio[]
+}
+
 export interface ScenarioSetVisualization {
   project_id: string
   scenario_set_id: string
@@ -328,15 +337,7 @@ export interface ScenarioSetVisualization {
     rows: TimetableRowState[]
   }
   scenarios: ScenarioVisualizationItem[]
-  summary: {
-    scenario_count: number
-    disturbance_counts: {
-      delay: number
-      speed_limit: number
-      interruption: number
-      total: number
-    }
-    category_ratios: ScenarioCategoryRatio[]
+  summary: ScenarioSetResourceSummary & {
     coverage: {
       time_span_seconds: number
       space_span_units: number
@@ -462,7 +463,6 @@ export interface ProjectState {
   project_id: string
   root: string
   exists: boolean
-  scenario_summary?: ScenarioResourceSummary
   scenario_sets: ScenarioSet[]
   datasets: DatasetSummary[]
   models: ModelSummary[]

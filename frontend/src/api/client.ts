@@ -1,6 +1,7 @@
 import type {
   ArtifactSummary,
   CaseTimetableState,
+  DatasetDetail,
   DatasetSolveAnalysis,
   JsonObject,
   ModelCheckpoint,
@@ -12,7 +13,6 @@ import type {
   ScenarioSetVisualization,
   ScenarioDetail,
   ScenarioOptions,
-  ScenarioResourceSummary,
   ScenarioSummary,
   Task,
   TaskResponse,
@@ -91,8 +91,6 @@ export const api = {
   },
   listScenarioSets: (projectId: string) =>
     request<ScenarioSet[]>(`/projects/${projectId}/scenario-sets`),
-  readScenarioSummary: (projectId: string) =>
-    request<ScenarioResourceSummary>(`/projects/${projectId}/scenario-summary`),
   createScenarioSet: (projectId: string, scenarioSetId: string, existOk = false) =>
     request<TaskResponse>(`/projects/${projectId}/scenario-sets`, {
       method: 'POST',
@@ -104,6 +102,15 @@ export const api = {
     }),
   listScenarios: (projectId: string, scenarioSetId: string) =>
     request<ScenarioSummary[]>(`/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios`),
+  listScenarioOptions: (projectId: string, scenarioSetId: string, query = '', limit = 50) => {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+    })
+    return request<ResourceOption[]>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenario-options?${params}`,
+    )
+  },
   readScenarioSetVisualization: (projectId: string, scenarioSetId: string) =>
     request<ScenarioSetVisualization>(
       `/projects/${projectId}/scenario-sets/${scenarioSetId}/visualization`,
@@ -340,6 +347,8 @@ export const api = {
     request<Task | JsonObject>(`/tasks/${taskId}/cancel`, { method: 'POST' }),
   listArtifacts: (projectId: string, datasetId: string) =>
     request<ArtifactSummary[]>(`/projects/${projectId}/datasets/${datasetId}/artifacts`),
+  readDatasetDetail: (projectId: string, datasetId: string) =>
+    request<DatasetDetail>(`/projects/${projectId}/datasets/${datasetId}/detail`),
   readCaseTimetable: (projectId: string, datasetId: string, caseId: string) =>
     request<CaseTimetableState>(
       `/projects/${projectId}/datasets/${datasetId}/cases/${caseId}/timetable`,

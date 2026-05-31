@@ -17,6 +17,73 @@ METRIC_LABELS = {
 }
 
 SOLVER_CONFIG_KEYS = ("time_limit", "mip_gap", "threads")
+BUILD_CONFIG_KEYS = (
+    "objective_delay_weight",
+    "objective_mode",
+    "cancellation_enabled",
+    "cancellation_penalty_weight",
+    "arr_arr_headway_seconds",
+    "dep_dep_headway_seconds",
+    "dwell_seconds_at_stops",
+    "big_m",
+    "tolerance_delay_seconds",
+)
+
+
+def read_dataset_detail(layout: ProjectLayout, dataset_id: str) -> Dict[str, object]:
+    dataset_id = require_id(dataset_id, "dataset_id")
+    dataset = layout.dataset(dataset_id)
+    if not dataset.root.is_dir():
+        raise FileNotFoundError(f"Dataset not found: {dataset.root}")
+
+    cases = [read_case_dataset_detail(path) for path in dataset_case_dirs(dataset.cases_dir)]
+    build_configs = [
+        dict(case["build_config"])
+        for case in cases
+        if isinstance(case.get("build_config"), dict) and case.get("build_config")
+    ]
+    build_config_counter = Counter(build_config_signature(config) for config in build_configs)
+    source_counter = Counter(
+        str(case.get("scenario_set_id") or "")
+        for case in cases
+        if str(case.get("scenario_set_id") or "")
+    )
+
+    return {
+        "dataset_id": dataset_id,
+        "root": to_posix(dataset.root),
+        "case_count": len(cases),
+        "built_count": sum(1 for case in cases if case.get("is_built")),
+        "solved_count": sum(1 for case in cases if case.get("is_solved")),
+        "timetable_count": sum(1 for case in cases if case.get("has_timetable")),
+        "build_config_known_count": len(build_configs),
+        "build_config_consistent": len(build_config_counter) <= 1,
+        "build_config": build_configs[0] if len(build_config_counter) == 1 and build_configs else {},
+        "build_config_signatures": [
+            {"signature": key, "count": count}
+            for key, count in sorted(build_config_counter.items())
+        ],
+        "source_scenario_sets": [
+            {"scenario_set_id": key, "count": count}
+            for key, count in sorted(source_counter.items())
+        ],
+    }
+
+
+def read_case_dataset_detail(case_dir: Path) -> Dict[str, object]:
+    case_id = sanitize_id(case_dir.name)
+    build = read_json_if_exists(case_dir / "build.json")
+    build_config = build.get("build_config", {}) if isinstance(build.get("build_config"), dict) else {}
+    sol_path = case_dir / f"{case_id}.sol"
+    return {
+        "case_id": case_id,
+        "scenario_set_id": str(build.get("scenario_set_id") or ""),
+        "source_scenario_id": str(build.get("source_scenario_id") or ""),
+        "build_config": normalize_build_config(build_config),
+        "is_built": (case_dir / f"{case_id}.lp").is_file() and (case_dir / "build.json").is_file(),
+        "is_solved": sol_path.is_file() and sol_path.with_suffix(".sol.csv").is_file(),
+        "has_timetable": (case_dir / "adjusted_timetable.json").is_file(),
+    }
 
 
 def read_dataset_solve_analysis(layout: ProjectLayout, dataset_ids: Iterable[str]) -> Dict[str, object]:
@@ -276,11 +343,45 @@ def normalize_solver_config(payload: Dict[str, object]) -> Dict[str, object]:
     return result
 
 
+def normalize_build_config(payload: Dict[str, object]) -> Dict[str, object]:
+    result: Dict[str, object] = {}
+    for key in BUILD_CONFIG_KEYS:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if key in {"objective_mode"}:
+            result[key] = str(value or "")
+        elif key in {"cancellation_enabled"}:
+            result[key] = bool(value)
+        elif key in {
+            "arr_arr_headway_seconds",
+            "dep_dep_headway_seconds",
+            "dwell_seconds_at_stops",
+            "big_m",
+            "tolerance_delay_seconds",
+        }:
+            number = number_or_none(value)
+            if number is not None:
+                result[key] = int(number)
+        else:
+            number = number_or_none(value)
+            if number is not None:
+                result[key] = number
+    return result
+
+
 def config_signature(payload: object) -> str:
     if not isinstance(payload, dict) or not payload:
         return ""
     normalized = normalize_solver_config(payload)
     return "|".join(f"{key}={normalized.get(key, '')}" for key in SOLVER_CONFIG_KEYS)
+
+
+def build_config_signature(payload: object) -> str:
+    if not isinstance(payload, dict) or not payload:
+        return ""
+    normalized = normalize_build_config(payload)
+    return "|".join(f"{key}={normalized.get(key, '')}" for key in BUILD_CONFIG_KEYS)
 
 
 def number_or_none(value: object) -> float | None:

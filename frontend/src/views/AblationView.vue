@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import { barPercentLabel, barValueLabel } from '@/chart-options'
 import ChartPanel from '@/components/ChartPanel.vue'
+import RemoteResourceSelect from '@/components/RemoteResourceSelect.vue'
 import type {
   DatasetSolveAnalysis,
   DatasetSolveErrorRow,
@@ -895,52 +896,33 @@ function datasetQualityMessages(item: DatasetSummary) {
             <el-col :span="8">
               <div class="inline-control">
                 <span>基准场景分类：</span>
-                <el-select
+                <RemoteResourceSelect
                   v-model="baselineScenarioSetId"
-                  filterable
-                  remote
-                  reserve-keyword
+                  :options="scenarioSetSelectOptions"
                   class="analysis-select full-width"
                   placeholder="选择基准"
                   :disabled="scenarioBusy"
                   :loading="scenarioSetOptionsLoading"
-                  :remote-method="loadScenarioSetOptions"
+                  @search="loadScenarioSetOptions"
                   @visible-change="reloadScenarioSetOptionsOnOpen"
-                >
-                  <el-option
-                    v-for="item in scenarioSetSelectOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
+                />
               </div>
             </el-col>
             <el-col :span="8">
               <div class="inline-control">
                 <span>对比场景分类：</span>
-                <el-select
+                <RemoteResourceSelect
                   v-model="candidateScenarioSetIds"
+                  :options="candidateScenarioSetOptions"
                   multiple
-                  filterable
-                  remote
-                  reserve-keyword
                   collapse-tags
-                  collapse-tags-tooltip
                   class="analysis-select full-width"
                   placeholder="选择对比集"
                   :disabled="scenarioBusy"
                   :loading="scenarioSetOptionsLoading"
-                  :remote-method="loadScenarioSetOptions"
+                  @search="loadScenarioSetOptions"
                   @visible-change="reloadScenarioSetOptionsOnOpen"
-                >
-                  <el-option
-                    v-for="item in candidateScenarioSetOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
+                />
               </div>
             </el-col>
             <el-col :span="4">
@@ -1178,52 +1160,33 @@ function datasetQualityMessages(item: DatasetSummary) {
             <el-col :span="8">
               <div class="inline-control">
                 <span>基准数据集：</span>
-                <el-select
+                <RemoteResourceSelect
                   v-model="baselineDatasetId"
-                  filterable
-                  remote
-                  reserve-keyword
+                  :options="datasetSelectOptions"
                   class="analysis-select full-width"
                   placeholder="选择基准"
                   :disabled="datasetBusy"
                   :loading="datasetOptionsLoading"
-                  :remote-method="loadDatasetOptions"
+                  @search="loadDatasetOptions"
                   @visible-change="reloadDatasetOptionsOnOpen"
-                >
-                  <el-option
-                    v-for="item in datasetSelectOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
+                />
               </div>
             </el-col>
             <el-col :span="8">
               <div class="inline-control">
                 <span>对比数据集：</span>
-                <el-select
+                <RemoteResourceSelect
                   v-model="candidateDatasetIds"
+                  :options="candidateDatasetOptions"
                   multiple
-                  filterable
-                  remote
-                  reserve-keyword
                   collapse-tags
-                  collapse-tags-tooltip
                   class="analysis-select full-width"
                   placeholder="选择对比集"
                   :disabled="datasetBusy"
                   :loading="datasetOptionsLoading"
-                  :remote-method="loadDatasetOptions"
+                  @search="loadDatasetOptions"
                   @visible-change="reloadDatasetOptionsOnOpen"
-                >
-                  <el-option
-                    v-for="item in candidateDatasetOptions"
-                    :key="item.value"
-                    :label="item.label"
-                    :value="item.value"
-                  />
-                </el-select>
+                />
               </div>
             </el-col>
             <el-col :span="4">

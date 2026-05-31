@@ -6,12 +6,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from backend.analysis.dataset import read_dataset_solve_analysis
+from backend.analysis.dataset import read_dataset_detail, read_dataset_solve_analysis
 from backend.scenario_cases import (
     activate_scenario_case,
     create_scenario_case,
-    read_scenario_set_detail,
-    read_scenario_summary,
+    list_scenario_case_options,
+    read_scenario_set_analysis,
     update_scenario_disturbances,
 )
 from backend.analysis.timetable import read_case_timetable
@@ -114,6 +114,21 @@ class RailGraphBackend:
     def list_scenarios(self, project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
         return self.repository.list_scenarios(project_id, scenario_set_id)
 
+    def list_scenario_options(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        *,
+        query: str = "",
+        limit: int = 50,
+    ) -> List[Dict[str, object]]:
+        return list_scenario_case_options(
+            self.repository.layout(project_id),
+            scenario_set_id,
+            query=query,
+            limit=limit,
+        )
+
     def read_scenario(self, project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
         return self.repository.read_scenario(project_id, scenario_set_id, scenario_id)
 
@@ -121,10 +136,7 @@ class RailGraphBackend:
         return read_scenario_options(self.repository.layout(project_id), scenario_set_id, scenario_id)
 
     def read_scenario_set_visualization(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
-        return read_scenario_set_detail(self.repository.layout(project_id), scenario_set_id)
-
-    def read_scenario_summary(self, project_id: str) -> Dict[str, object]:
-        return read_scenario_summary(self.repository.layout(project_id))
+        return read_scenario_set_analysis(self.repository.layout(project_id), scenario_set_id)
 
     def create_scenario_case(
         self,
@@ -211,6 +223,9 @@ class RailGraphBackend:
 
     def list_case_artifacts(self, project_id: str, dataset_id: str) -> List[Dict[str, object]]:
         return self.repository.list_case_artifacts(project_id, dataset_id)
+
+    def read_dataset_detail(self, project_id: str, dataset_id: str) -> Dict[str, object]:
+        return read_dataset_detail(self.repository.layout(project_id), dataset_id)
 
     def read_dataset_solve_analysis(self, project_id: str, dataset_ids: List[str]) -> Dict[str, object]:
         return read_dataset_solve_analysis(self.repository.layout(project_id), dataset_ids)

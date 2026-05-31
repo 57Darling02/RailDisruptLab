@@ -182,11 +182,6 @@ def list_scenario_sets(project_id: str) -> List[Dict[str, object]]:
     return backend.list_scenario_sets(project_id)
 
 
-@api.get("/projects/{project_id}/scenario-summary")
-def read_scenario_summary(project_id: str) -> Dict[str, object]:
-    return backend.read_scenario_summary(project_id)
-
-
 @api.post("/projects/{project_id}/scenario-sets")
 def create_scenario_set(project_id: str, request: ScenarioSetCreateRequest) -> Dict[str, object]:
     return _task_response(
@@ -202,6 +197,16 @@ def delete_scenario_set(project_id: str, scenario_set_id: str) -> Dict[str, obje
 @api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios")
 def list_scenarios(project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
     return backend.list_scenarios(project_id, scenario_set_id)
+
+
+@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenario-options")
+def list_scenario_options(
+    project_id: str,
+    scenario_set_id: str,
+    q: str = "",
+    limit: int = 50,
+) -> List[Dict[str, object]]:
+    return backend.list_scenario_options(project_id, scenario_set_id, query=q, limit=limit)
 
 
 @api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/visualization")
@@ -546,6 +551,11 @@ def read_case_timetable(project_id: str, dataset_id: str, case_id: str) -> Dict[
 @api.get("/projects/{project_id}/datasets/{dataset_id}/artifacts")
 def list_case_artifacts(project_id: str, dataset_id: str) -> List[Dict[str, object]]:
     return backend.list_case_artifacts(project_id, dataset_id)
+
+
+@api.get("/projects/{project_id}/datasets/{dataset_id}/detail")
+def read_dataset_detail(project_id: str, dataset_id: str) -> Dict[str, object]:
+    return backend.read_dataset_detail(project_id, dataset_id)
 
 
 @api.get("/projects/{project_id}/models/{model_id}/training-summary")

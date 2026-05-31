@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -82,10 +84,21 @@ def write_base_context(context: BaseContext, output_path: Path, metadata: Dict[s
             "project": dict(metadata),
             **{key: value for key, value in payload.items() if key != "schema_version"},
         }
-    output_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
+    with tempfile.NamedTemporaryFile(
+        "w",
         encoding="utf-8",
-    )
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        tmp_path = Path(handle.name)
+        handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
+    try:
+        os.replace(tmp_path, output_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def load_base_context(path: Path) -> BaseContext:

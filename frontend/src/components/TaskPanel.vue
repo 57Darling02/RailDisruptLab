@@ -15,14 +15,11 @@ import { formatTaskDuration, formatTaskTime, taskSortTime } from '@/task-time'
 import type { Task } from '@/types'
 
 type TaskOption = { label: string; value: string }
-type PageFilter = { label: string; value: string; labels: readonly string[] }
 
 const props = withDefaults(
   defineProps<{
     tasks: Task[]
     projectOptions: TaskOption[]
-    pageOptions: TaskOption[]
-    pageFilters: readonly PageFilter[]
     initialProjectId?: string
     emptyText?: string
     now?: number
@@ -45,11 +42,23 @@ const emit = defineEmits<{
 const logDialogVisible = ref(false)
 const selectedTask = ref<Task | null>(null)
 const selectedProjectId = ref(props.initialProjectId)
-const selectedPage = ref('')
+const selectedTaskType = ref('')
+
+const taskTypeOptions = computed(() => {
+  const seen = new Set<string>()
+  const options: TaskOption[] = [{ label: '全部类型', value: '' }]
+  for (const task of props.tasks) {
+    const value = taskTypeValue(task)
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    options.push({ label: taskDisplayLabel(value), value })
+  }
+  return options
+})
 
 const displayTasks = computed(() =>
   props.tasks
-    .filter((task) => matchesProject(task) && matchesPage(task))
+    .filter((task) => matchesProject(task) && matchesTaskType(task))
     .slice()
     .sort(compareTasks),
 )
@@ -65,10 +74,12 @@ function matchesProject(task: Task) {
   return !selectedProjectId.value || task.group === selectedProjectId.value
 }
 
-function matchesPage(task: Task) {
-  const filter = props.pageFilters.find((item) => item.value === selectedPage.value)
-  if (!filter || filter.labels.length === 0) return true
-  return filter.labels.includes(String(task.label ?? ''))
+function matchesTaskType(task: Task) {
+  return !selectedTaskType.value || taskTypeValue(task) === selectedTaskType.value
+}
+
+function taskTypeValue(task: Task) {
+  return String(task.label || task.action || '').trim()
 }
 
 function openLog(task: Task) {
@@ -112,10 +123,10 @@ function compareTasks(left: Task, right: Task) {
         </el-select>
       </label>
       <label class="task-filter">
-        <span>页面</span>
-        <el-select v-model="selectedPage" class="task-filter-select">
+        <span>任务类型</span>
+        <el-select v-model="selectedTaskType" class="task-filter-select">
           <el-option
-            v-for="option in pageOptions"
+            v-for="option in taskTypeOptions"
             :key="option.value"
             :label="option.label"
             :value="option.value"

@@ -4,10 +4,15 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
-from backend.analysis.disturbances import read_scenario_disturbances
-from backend.analysis.scenario_set import disturbance_counts, scenario_category, scenario_set_summary
+from backend.analysis.disturbances import parse_seconds_of_day, read_scenario_disturbances
+from backend.analysis.scenario_set import (
+    disturbance_counts,
+    scenario_category,
+    scenario_set_summary,
+)
 from backend.analysis.timetable import plan_rows
 from core.base_context import build_base_context, load_base_context, write_base_context
+from core.file_ops import file_digest
 from core.loader import load_mileage_table, load_timetable, parse_scenario_config
 from core.project_layout import ProjectLayout, ScenarioCaseLayout, require_id, reset_dir, sanitize_id, to_posix
 from core.scenario_config import ScenarioDocument, load_scenario_document, scenario_config_to_yaml, scenario_files
@@ -109,39 +114,52 @@ def read_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id:
     }
 
 
-def read_scenario_summary(layout: ProjectLayout) -> Dict[str, object]:
-    scenarios = [
-        scenario_case_summary(layout, item["scenario_set_id"], item["scenario_id"])
-        for item in iter_scenario_cases(layout)
-    ]
-    totals = {"delay": 0, "speed_limit": 0, "interruption": 0, "total": 0}
-    for item in scenarios:
-        counts = dict(item.get("counts", {}))
-        for key in totals:
-            totals[key] += int(counts.get(key, 0) or 0)
-    return {
-        "project_id": layout.name,
-        "scenario_count": len(scenarios),
-        "disturbance_counts": totals,
-    }
-
-
-def read_scenario_set_detail(layout: ProjectLayout, scenario_set_id: str) -> Dict[str, object]:
+def read_scenario_set_analysis(layout: ProjectLayout, scenario_set_id: str) -> Dict[str, object]:
     scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
     root = layout.scenario_set(scenario_set_id).root
     if not root.is_dir():
         raise FileNotFoundError(f"Scenario category not found: {root}")
-    scenarios = [
-        scenario_case_visualization_item(layout, scenario_set_id, path)
-        for path in scenario_files(root)
-    ]
+
+    scenarios = []
+    first_context = None
+    context_cache: Dict[str, object] = {}
+    for path in scenario_files(root):
+        context_path = path.parent / "context.json"
+        context = cached_base_context(context_path, context_cache) if context_path.is_file() else None
+        if first_context is None and context is not None:
+            first_context = context
+        scenarios.append(scenario_case_visualization_item(layout, scenario_set_id, path, context))
+    return scenario_set_analysis_payload(layout, scenario_set_id, scenarios, first_context)
+
+
+def cached_base_context(path: Path, cache: Dict[str, object]) -> object:
+    stat = path.stat()
+    key = f"inode:{stat.st_dev}:{stat.st_ino}"
+    context = cache.get(key)
+    if context is None:
+        digest_key = f"sha256:{file_digest(path)}"
+        context = cache.get(digest_key)
+        if context is not None:
+            cache[key] = context
+            return context
+        context = load_base_context(path)
+        cache[key] = context
+        cache[digest_key] = context
+    return context
+
+
+def scenario_set_analysis_payload(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    scenarios: List[Dict[str, object]],
+    context: Any | None,
+) -> Dict[str, object]:
     all_disturbances = [
         dict(item, scenario_id=scenario["scenario_id"])
         for scenario in scenarios
         for item in scenario.get("disturbances", [])
         if isinstance(item, dict)
     ]
-    context = first_context(layout, scenario_set_id)
     station_order = list(context.station_order) if context is not None else []
     plan = {"rows": plan_rows(context)} if context is not None else {"rows": []}
     return {
@@ -149,30 +167,25 @@ def read_scenario_set_detail(layout: ProjectLayout, scenario_set_id: str) -> Dic
         "scenario_set_id": scenario_set_id,
         "scenarios": scenarios,
         "station_order": station_order,
+        "mileage_by_station": dict(context.mileage_by_station) if context is not None else {},
+        "train_routes": dict(context.translated.train_routes) if context is not None else {},
+        "plan": plan,
         "summary": scenario_set_summary(scenarios, context, station_order, plan["rows"]),
         "time_distribution": time_distribution(all_disturbances),
         "space_distribution": space_distribution(all_disturbances),
     }
 
 
-def scenario_case_visualization_item(layout: ProjectLayout, scenario_set_id: str, scenario_path: Path) -> Dict[str, object]:
+def scenario_case_visualization_item(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    scenario_path: Path,
+    context: Any | None = None,
+) -> Dict[str, object]:
     scenario_id = sanitize_id(scenario_path.parent.name)
     case = layout.scenario_set(scenario_set_id).scenario(scenario_id)
-    disturbances = []
-    if case.context_json.is_file():
-        disturbances = read_scenario_disturbances(case.scenario_yml, load_base_context(case.context_json))
-    else:
-        doc = load_scenario_document(case.scenario_yml, require_yaml())
-        speed_limits = list(doc.scenarios.get("speed_limits", []) or [])
-        delays = list(doc.scenarios.get("delays", []) or [])
-        disturbances = [
-            {"type": "delay"}
-            for _item in delays
-        ] + [
-            {"type": "interruption" if float(item.get("limit_speed", 0) or 0) <= 20 else "speed_limit"}
-            for item in speed_limits
-            if isinstance(item, Mapping)
-        ]
+    doc = load_scenario_document(case.scenario_yml, require_yaml())
+    disturbances = scenario_document_disturbances(doc, context)
     counts = disturbance_counts(disturbances)
     return {
         "scenario_id": scenario_id,
@@ -183,6 +196,56 @@ def scenario_case_visualization_item(layout: ProjectLayout, scenario_set_id: str
         "counts": counts,
         "category": scenario_category(disturbances),
     }
+
+
+def scenario_document_disturbances(
+    doc: ScenarioDocument,
+    context: Any | None = None,
+) -> List[Dict[str, object]]:
+    event_anchors = getattr(context, "event_anchors", {}) if context is not None else {}
+    section_anchors = getattr(context, "section_anchors", {}) if context is not None else {}
+    disturbances: List[Dict[str, object]] = []
+
+    for index, item in enumerate(list_payload(doc.scenarios.get("delays")), start=1):
+        anchor_id = str(item.get("event_anchor_id", "") or "")
+        anchor = event_anchors.get(anchor_id)
+        disturbances.append(
+            {
+                "id": f"delay_{index}",
+                "type": "delay",
+                "event_anchor_id": anchor_id,
+                "train_id": str(getattr(anchor, "train_id", "") or ""),
+                "station": str(getattr(anchor, "station", "") or ""),
+                "event_type": str(getattr(anchor, "event_type", "") or ""),
+                "seconds": int(float(item.get("seconds", 0) or 0)),
+                "start_time": getattr(anchor, "planned_time", None) or 0,
+                "station_order": getattr(anchor, "station_order", None),
+            }
+        )
+
+    for index, item in enumerate(list_payload(doc.scenarios.get("speed_limits")), start=1):
+        anchor_id = str(item.get("section_anchor_id", "") or "")
+        anchor = section_anchors.get(anchor_id)
+        start_time = parse_seconds_of_day(item.get("start_time", 0))
+        duration = int(float(item.get("duration", 0) or 0))
+        limit_speed = float(item.get("limit_speed", 0) or 0)
+        disturbances.append(
+            {
+                "id": f"speed_{index}",
+                "type": "interruption" if limit_speed <= 20 else "speed_limit",
+                "section_anchor_id": anchor_id,
+                "start_station": str(getattr(anchor, "start_station", "") or ""),
+                "end_station": str(getattr(anchor, "end_station", "") or ""),
+                "start_time": start_time,
+                "end_time": start_time + duration,
+                "duration": duration,
+                "limit_speed": limit_speed,
+                "section_order": getattr(anchor, "section_order", None),
+                "mileage": getattr(anchor, "mileage", None),
+            }
+        )
+
+    return disturbances
 
 
 def scenario_case_summary(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
@@ -222,6 +285,27 @@ def list_scenario_cases(layout: ProjectLayout, scenario_set_id: str) -> List[Dic
         scenario_case_summary(layout, scenario_set_id, path.parent.name)
         for path in scenario_files(layout.scenario_set(scenario_set_id).root)
     ]
+
+
+def list_scenario_case_options(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    *,
+    query: str = "",
+    limit: int = 50,
+) -> List[Dict[str, object]]:
+    query_text = query.strip().lower()
+    result: List[Dict[str, object]] = []
+    for path in scenario_files(layout.scenario_set(scenario_set_id).root):
+        scenario_id = sanitize_id(path.parent.name)
+        if query_text and query_text not in scenario_id.lower():
+            continue
+        case = layout.scenario_set(scenario_set_id).scenario(scenario_id)
+        suffix = "已激活" if case.context_json.is_file() else "未激活"
+        result.append({"label": f"{scenario_id} ({suffix})", "value": scenario_id})
+        if len(result) >= max(1, limit):
+            break
+    return result
 
 
 def delete_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> None:

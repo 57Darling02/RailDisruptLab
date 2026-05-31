@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from backend.analysis.disturbances import read_scenario_disturbances
 from core.base_context import load_base_context
-from core.postprocess import adjusted_timetable_rows
-from core.project_layout import DatasetLayout, ProjectLayout, require_id, sanitize_id
-from core.solver import load_solution_values
+from core.project_layout import DatasetLayout, ProjectLayout, REPO_ROOT, require_id, sanitize_id, to_posix
 
 
 def export_dataset_timetables(
@@ -35,22 +36,31 @@ def export_case_timetable(case_dir: Path, index: int) -> Dict[str, object]:
     started = datetime.now()
     case_id = sanitize_id(case_dir.name)
     sol_path = case_dir / f"{case_id}.sol"
+    output_path = case_dir / "adjusted_timetable.json"
+    summary_path = case_dir / "core_timetable_summary.json"
     record = base_record(index, case_id)
     try:
         if not sol_path.is_file():
             raise FileNotFoundError(f"Solution not found: {sol_path}")
-        context = load_base_context(case_dir / "context.json")
-        values = load_solution_values(sol_path)
-        rows = adjusted_timetable_rows(context.translated, values)
-        write_json(
-            case_dir / "adjusted_timetable.json",
-            {
-                "case_id": case_id,
-                "station_order": list(context.station_order),
-                "rows": rows,
-            },
+        run(
+            [
+                sys.executable,
+                "core_cli.py",
+                "export-timetable-case",
+                "--context",
+                to_posix(case_dir / "context.json"),
+                "--solution",
+                to_posix(sol_path),
+                "--output",
+                to_posix(output_path),
+                "--summary-output",
+                to_posix(summary_path),
+            ]
         )
-        record.update({"status": "ok", "row_count": len(rows)})
+        summary = read_json(summary_path)
+        if not isinstance(summary, dict):
+            raise ValueError(f"Timetable summary must be an object: {summary_path}")
+        record.update(summary)
     except Exception as exc:
         record.update({"status": "failed", "error": str(exc)})
     record["duration_sec"] = elapsed_seconds(started)
@@ -141,7 +151,13 @@ def base_record(index: int, case_id: str) -> Dict[str, object]:
 def fail_if_records_failed(records: Iterable[Dict[str, object]], stage: str) -> None:
     failed = [record for record in records if record.get("status") == "failed"]
     if failed:
-        raise RuntimeError(f"{stage} failed for {len(failed)} case(s).")
+        raise RuntimeError(f"{stage} failed for {len(failed)} case(s). First failure: {record_error(failed[0])}")
+
+
+def record_error(record: Dict[str, object]) -> str:
+    case_id = str(record.get("case_id") or "unknown")
+    error = str(record.get("error") or "").strip()
+    return f"{case_id}: {error}" if error else case_id
 
 
 def elapsed_seconds(started: datetime) -> float:
@@ -160,3 +176,11 @@ def read_json(path: Path) -> Dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON must contain an object: {path}")
     return payload
+
+
+def run(cmd: List[str]) -> None:
+    if cmd and Path(cmd[0]).name.startswith("python") and "-u" not in cmd[1:2]:
+        cmd = [cmd[0], "-u", *cmd[1:]]
+    print(" ".join(cmd))
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True, env=env)

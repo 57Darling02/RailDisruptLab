@@ -39,9 +39,9 @@ NEAR_SPACE_UNITS = 1.0
 
 
 def read_scenario_set_visualization(layout: ProjectLayout, scenario_set_id: str) -> Dict[str, object]:
-    from backend.scenario_cases import read_scenario_set_detail
+    from backend.scenario_cases import read_scenario_set_analysis
 
-    detail = read_scenario_set_detail(layout, scenario_set_id)
+    detail = read_scenario_set_analysis(layout, scenario_set_id)
     detail.setdefault("mileage_by_station", {})
     detail.setdefault("train_routes", {})
     detail.setdefault("plan", {"rows": []})

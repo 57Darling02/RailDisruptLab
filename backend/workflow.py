@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 import os
 import shutil
@@ -12,6 +11,7 @@ from typing import Any, Dict, Iterable, List
 
 from core.base_context import build_base_context, load_base_context, write_base_context
 from core.disturbance_graph import disturbance_graph_to_scenario
+from core.file_ops import copy_or_link_file
 from core.loader import load_mileage_table, load_timetable
 from core.project_layout import ProjectLayout, REPO_ROOT, reset_dir, sanitize_id, to_posix
 from core.scenario_config import (
@@ -22,7 +22,6 @@ from core.scenario_config import (
     scenario_file_by_id,
     scenario_files,
 )
-from core.solver import GurobiSolveError, solve_lp
 from core.types import BaseContext, ScenarioConfig
 from core.vae_learning_graph import (
     DEFAULT_EVENT_TIME_WINDOW,
@@ -117,7 +116,7 @@ def build_dataset(
             write_yaml(case_dir / "scenario.yml", scenario_document_to_yaml(case_id, doc))
             if doc.path is None:
                 raise ValueError(f"Scenario document path is required: {doc.name}")
-            shutil.copy2(doc.path.parent / "context.json", case_dir / "context.json")
+            copy_or_link_file(doc.path.parent / "context.json", case_dir / "context.json")
             run(
                 [
                     sys.executable,
@@ -227,6 +226,7 @@ def solve_case(
     case_id = sanitize_id(case_dir.name)
     lp_path = case_dir / f"{case_id}.lp"
     sol_path = case_dir / f"{case_id}.sol"
+    summary_path = case_dir / "core_solve_summary.json"
     record = base_record(index, case_id)
     solver_config = {
         "time_limit": max(0.0, float(time_limit or 0.0)),
@@ -240,31 +240,29 @@ def solve_case(
         if skip_solved and sol_path.is_file() and sol_path.with_suffix(".sol.csv").is_file():
             record.update({"status": "skipped", "reason": "solution_exists"})
         else:
-            result = solve_lp(
-                lp_path,
-                sol_path,
-                quiet=True,
-                threads=int(solver_config["threads"]),
-                time_limit=float(solver_config["time_limit"]),
-                mip_gap=float(solver_config["mip_gap"]),
+            run(
+                [
+                    sys.executable,
+                    "core_cli.py",
+                    "solve-milp-case",
+                    "--lp",
+                    to_posix(lp_path),
+                    "--solution",
+                    to_posix(sol_path),
+                    "--summary-output",
+                    to_posix(summary_path),
+                    "--time-limit",
+                    str(float(solver_config["time_limit"])),
+                    "--mip-gap",
+                    str(float(solver_config["mip_gap"])),
+                    "--threads",
+                    str(int(solver_config["threads"])),
+                ]
             )
-            write_solution_csv(sol_path.with_suffix(".sol.csv"), result.values)
-            record.update(
-                {
-                    "status": "timeout" if result.timed_out else "ok",
-                    "objective": round(result.objective, 4),
-                    "mip_gap": round(result.mip_gap, 6),
-                    "num_nodes": int(round(result.node_count)),
-                }
-            )
-    except GurobiSolveError as exc:
-        record.update(
-            {
-                "status": "timeout" if exc.timed_out else "failed",
-                "error": str(exc),
-                "num_nodes": int(round(exc.node_count)) if exc.node_count is not None else None,
-            }
-        )
+            summary = read_json(summary_path)
+            if not isinstance(summary, dict):
+                raise ValueError(f"Solve summary must be an object: {summary_path}")
+            record.update(summary)
     except Exception as exc:
         record.update({"status": "failed", "error": str(exc)})
     record["duration_sec"] = elapsed_seconds(started)
@@ -278,6 +276,7 @@ def solve_case(
                 "lp": to_posix(lp_path),
                 "solution": to_posix(sol_path),
                 "solution_csv": to_posix(sol_path.with_suffix(".sol.csv")),
+                "summary": to_posix(summary_path),
             },
         },
     )
@@ -458,7 +457,7 @@ def generate_scenarios(
                 reset_dir(target.root)
             target.root.mkdir(parents=True, exist_ok=False)
             write_yaml(target.scenario_yml, scenario_config_to_yaml(scenario_id, scenarios))
-            shutil.copy2(Path(base_context_path), target.context_json)
+            copy_or_link_file(Path(base_context_path), target.context_json)
             copy_generation_source_files(Path(base_context_path), target.source_dir)
         print(f"Generated and decoded {len(graph_paths)} scenarios: {output_root}")
     finally:
@@ -892,7 +891,13 @@ def read_case_stage_records(cases_dir: Path, filename: str) -> List[Dict[str, ob
 def fail_if_records_failed(records: Iterable[Dict[str, object]], stage: str) -> None:
     failed = [record for record in records if record.get("status") == "failed"]
     if failed:
-        raise RuntimeError(f"{stage} failed for {len(failed)} case(s).")
+        raise RuntimeError(f"{stage} failed for {len(failed)} case(s). First failure: {record_error(failed[0])}")
+
+
+def record_error(record: Dict[str, object]) -> str:
+    case_id = str(record.get("case_id") or "unknown")
+    error = str(record.get("error") or "").strip()
+    return f"{case_id}: {error}" if error else case_id
 
 
 def write_yaml(path: Path, payload: Dict[str, object]) -> None:
@@ -915,13 +920,13 @@ def read_json_if_exists(path: Path) -> Dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def write_solution_csv(path: Path, values: Dict[str, float]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["variable", "value"])
-        writer.writeheader()
-        for name in sorted(values):
-            writer.writerow({"variable": name, "value": values[name]})
+def read_json(path: Path) -> Dict[str, object]:
+    if not path.is_file():
+        raise FileNotFoundError(f"JSON not found: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON must contain an object: {path}")
+    return payload
 
 
 def run(cmd: List[str]) -> None:

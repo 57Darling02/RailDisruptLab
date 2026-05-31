@@ -22,11 +22,13 @@ import type { TaskTagType } from '@/task-status'
 const props = defineProps<{
   selectedProjectId: string
   selectedModelId: string
+  loadedModelId: string
   pendingModelId: string
-  selectedModel: ModelSummary | null
+  loadedModel: ModelSummary | null
   models: ModelSummary[]
   modelOptions: ResourceOption[]
   resourceLoading: boolean
+  detailLoading?: boolean
   tasks: Task[]
   busy?: boolean
 }>()
@@ -35,11 +37,13 @@ const emit = defineEmits<{
   'update:selectedModelId': [value: string]
   reloadModels: [visible: boolean]
   searchModels: [query: string]
+  loadModel: []
   train: []
   retrain: [detail: ModelDetail | null]
   deleteModel: [modelId: string]
   openTaskLog: [task: Task]
   generate: [checkpoint: ModelCheckpoint]
+  loadingChange: [loading: boolean]
 }>()
 
 const TRAINING_CONFIG_LABELS: Record<string, string> = {
@@ -105,8 +109,11 @@ const epochLossPoints = computed(() => epochLossSeries(lossPoints.value))
 const lossChartOption = computed(() => buildLossChartOption(epochLossPoints.value))
 const latestLoss = computed(() => lossPoints.value.at(-1))
 const latestEpochLoss = computed(() => epochLossPoints.value.at(-1))
-const selectedTrainTask = computed(() => findModelTrainTask(props.tasks, props.selectedModelId))
-const selectedModelRunning = computed(() => Boolean(selectedTrainTask.value && !isTaskTerminal(selectedTrainTask.value)))
+const loadedTrainTask = computed(() => findModelTrainTask(props.tasks, props.loadedModelId))
+const loadedModelRunning = computed(() => Boolean(loadedTrainTask.value && !isTaskTerminal(loadedTrainTask.value)))
+const reloadingSelection = computed(
+  () => Boolean(props.selectedModelId) && props.selectedModelId === props.loadedModelId && Boolean(props.detailLoading),
+)
 const trainProgress = computed(() => modelTrainingProgress())
 const graphProgress = computed(() => modelDetail.value?.graph_progress ?? {})
 const graphSampleProgress = computed(() => graphProgress.value.sample_graphs ?? {})
@@ -116,11 +123,11 @@ const graphSamplePercent = computed(() => {
   if (!total) return graphSampleProgress.value.status === 'done' ? 100 : 0
   return Math.min(100, Math.max(0, Math.round((completed / total) * 100)))
 })
-const selectedTrainTaskFailed = computed(
-  () => Boolean(selectedTrainTask.value) && taskOutcome(selectedTrainTask.value as Task) === 'failed',
+const loadedTrainTaskFailed = computed(
+  () => Boolean(loadedTrainTask.value) && taskOutcome(loadedTrainTask.value as Task) === 'failed',
 )
 const trainingStepActive = computed(() => {
-  if (props.selectedModel?.is_ready) return 3
+  if (props.loadedModel?.is_ready) return 3
   if (lossPoints.value.length > 0) return 2
   if (graphProgress.value.sample_graphs?.status === 'done') return 2
   if (graphProgress.value.sample_graphs?.status === 'running') return 1
@@ -128,17 +135,17 @@ const trainingStepActive = computed(() => {
   return 0
 })
 const trainingStepProcessStatus = computed(() =>
-  selectedTrainTaskFailed.value ? 'error' : 'process',
+  loadedTrainTaskFailed.value ? 'error' : 'process',
 )
 const stageProgress = computed(() => {
-  if (selectedTrainTaskFailed.value) {
+  if (loadedTrainTaskFailed.value) {
     return {
       percentage: Math.max(graphSamplePercent.value, trainProgress.value),
       label: '任务异常',
       detail: '查看任务日志',
     }
   }
-  if (props.selectedModel?.is_ready) {
+  if (props.loadedModel?.is_ready) {
     return { percentage: 100, label: '训练完成', detail: 'checkpoint 已生成' }
   }
   if (trainingStepActive.value === 2) {
@@ -154,8 +161,8 @@ const stageProgress = computed(() => {
   return { percentage: 0, label: '全局图建模', detail: '准备图结构' }
 })
 const trainProgressStatus = computed(() => {
-  if (selectedTrainTaskFailed.value) return 'exception'
-  if (trainProgress.value >= 100 && props.selectedModel?.is_ready) return 'success'
+  if (loadedTrainTaskFailed.value) return 'exception'
+  if (trainProgress.value >= 100 && props.loadedModel?.is_ready) return 'success'
   return undefined
 })
 const bestLoss = computed(() =>
@@ -168,11 +175,11 @@ const bestLoss = computed(() =>
 watch(
   () => [
     props.selectedProjectId,
-    props.selectedModelId,
-    props.selectedModel?.sample_count ?? 0,
-    props.selectedModel?.is_ready ?? false,
+    props.loadedModelId,
+    props.loadedModel?.sample_count ?? 0,
+    props.loadedModel?.is_ready ?? false,
     props.pendingModelId,
-    selectedTrainTask.value?.status ?? '',
+    loadedTrainTask.value?.status ?? '',
   ] as const,
   () => {
     void loadModelDetails()
@@ -180,12 +187,16 @@ watch(
   { immediate: true },
 )
 
-watch(selectedModelRunning, (isRunning) => {
+watch(loadedModelRunning, (isRunning) => {
   if (isRunning) {
     startModelDetailPolling()
   } else {
     stopModelDetailPolling()
   }
+}, { immediate: true })
+
+watch(modelDetailLoading, (value) => {
+  emit('loadingChange', value)
 }, { immediate: true })
 
 onUnmounted(() => {
@@ -198,7 +209,7 @@ async function refreshModelDetails() {
 
 async function loadModelDetails(options: { showLoading?: boolean } = {}) {
   const projectId = props.selectedProjectId
-  const modelId = props.selectedModelId
+  const modelId = props.loadedModelId
   modelDetailRequestSeq += 1
   const requestSeq = modelDetailRequestSeq
   modelDetailError.value = ''
@@ -213,11 +224,11 @@ async function loadModelDetails(options: { showLoading?: boolean } = {}) {
   if (showLoading) modelDetailLoading.value = true
   try {
     const detail = await api.readModelDetail(projectId, modelId)
-    if (requestSeq === modelDetailRequestSeq && projectId === props.selectedProjectId && modelId === props.selectedModelId) {
+    if (requestSeq === modelDetailRequestSeq && projectId === props.selectedProjectId && modelId === props.loadedModelId) {
       modelDetail.value = detail
     }
   } catch (error) {
-    if (requestSeq === modelDetailRequestSeq && projectId === props.selectedProjectId && modelId === props.selectedModelId) {
+    if (requestSeq === modelDetailRequestSeq && projectId === props.selectedProjectId && modelId === props.loadedModelId) {
       modelDetail.value = null
       modelDetailError.value = formatError(error)
     }
@@ -226,7 +237,7 @@ async function loadModelDetails(options: { showLoading?: boolean } = {}) {
       showLoading &&
       requestSeq === modelDetailRequestSeq &&
       projectId === props.selectedProjectId &&
-      modelId === props.selectedModelId
+      modelId === props.loadedModelId
     ) {
       modelDetailLoading.value = false
     }
@@ -385,7 +396,7 @@ function formatError(error: unknown) {
 }
 
 function modelTrainingProgress() {
-  if (props.selectedModel?.is_ready) return 100
+  if (props.loadedModel?.is_ready) return 100
   const latest = latestLoss.value
   const epochs = numberFromConfig(modelDetail.value?.config?.epochs)
   if (!latest || !epochs || !latest.total_steps) return 0
@@ -500,7 +511,18 @@ function escapeRegExp(value: string) {
         @search="$emit('searchModels', $event)"
         @add="$emit('train')"
         @delete="$emit('deleteModel', $event)"
-      />
+      >
+        <template #actions>
+          <el-button
+            type="primary"
+            :disabled="busy || !selectedModelId"
+            :loading="reloadingSelection"
+            @click="$emit('loadModel')"
+          >
+            重新加载
+          </el-button>
+        </template>
+      </EntityToolbar>
       <div v-if="!models.length && !pendingModelId" class="primary-empty-panel">
         <el-empty :image-size="120">
           <template #description>
@@ -522,21 +544,21 @@ function escapeRegExp(value: string) {
 
       <el-card
         v-if="models.length || pendingModelId"
-        v-loading="modelDetailLoading"
+        v-loading="modelDetailLoading && !modelDetail"
         element-loading-text="正在加载模型数据..."
         shadow="never"
       >
         <template #header>
           <div class="card-header">
             <el-space>
-              <span>{{ selectedModelId ? `模型ID: ${selectedModelId}` : '模型ID' }}</span>
-              <el-button :disabled="!selectedModelId || busy" type="warning" plain @click="handleRetrain">
+              <span>{{ loadedModelId ? `模型ID: ${loadedModelId}` : '模型ID' }}</span>
+              <el-button :disabled="!loadedModelId || busy" type="warning" plain @click="handleRetrain">
                 重新训练
               </el-button>
             </el-space>
             <el-button
               :icon="Refresh"
-              :disabled="busy || !selectedModelId"
+              :disabled="busy || !loadedModelId"
               :loading="modelDetailLoading"
               @click="refreshModelDetails"
             >
@@ -545,7 +567,16 @@ function escapeRegExp(value: string) {
           </div>
         </template>
 
-        <el-empty v-if="!selectedModelId" description="请选择或训练模型" />
+        <el-empty v-if="!loadedModelId" description="请选择模型训练资源">
+          <el-button
+            type="primary"
+            :disabled="busy || !selectedModelId"
+            :loading="reloadingSelection"
+            @click="$emit('loadModel')"
+          >
+            重新加载
+          </el-button>
+        </el-empty>
         <el-result v-else-if="modelDetailError" icon="error" title="模型数据加载失败" :sub-title="modelDetailError">
           <template #extra>
             <el-button
@@ -564,16 +595,16 @@ function escapeRegExp(value: string) {
             <div class="model-overview-main">
               <el-descriptions class="model-metadata" :column="1" border size="small">
                 <el-descriptions-item label="训练样本数">
-                  {{ selectedModel?.sample_count ?? 0 }}
+                  {{ loadedModel?.sample_count ?? 0 }}
                 </el-descriptions-item>
                 <el-descriptions-item label="日志">
                   <el-button
-                    v-if="selectedTrainTask"
+                    v-if="loadedTrainTask"
                     link
                     type="primary"
-                    @click="$emit('openTaskLog', selectedTrainTask)"
+                    @click="$emit('openTaskLog', loadedTrainTask)"
                   >
-                    查看任务 #{{ selectedTrainTask.id }}
+                    查看任务 #{{ loadedTrainTask.id }}
                   </el-button>
                   <span v-else>暂无任务日志</span>
                 </el-descriptions-item>
