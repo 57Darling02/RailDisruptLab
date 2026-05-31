@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { Refresh } from '@element-plus/icons-vue'
 
 import { api, ApiError } from '@/api/client'
 import ChartPanel from '@/components/ChartPanel.vue'
 import EntityToolbar from '@/components/EntityToolbar.vue'
+import { Refresh } from '@/icons'
 import { formatBytes } from '@/views/types'
 import type { MetadataEntry, SchemaEdgeRow, SchemaPoolRow, SchemaTaskRow } from '@/views/types'
 import type {

@@ -7,7 +7,7 @@ export interface EntityOption {
 </script>
 
 <script setup lang="ts">
-import { Close, Plus } from '@element-plus/icons-vue'
+import { Close, Plus } from '@/icons'
 
 const props = withDefaults(
   defineProps<{

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Refresh } from '@element-plus/icons-vue'
 
 import { api, ApiError } from '@/api/client'
+import { Refresh } from '@/icons'
 import type { ScenarioOptions } from '@/types'
 
 type ScenarioDelayForm = { event_anchor_id: string; seconds: number }

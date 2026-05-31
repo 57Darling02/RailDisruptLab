@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from 'vue'
 import type { Column } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
 
 import { api, ApiError } from '@/api/client'
 import TimetableChart from '@/components/TimetableChart.vue'
+import { Refresh } from '@/icons'
 import type { CaseTimetableState, TimetableRowState } from '@/types'
 
 const TIMETABLE_TABLE_HEIGHT = 460

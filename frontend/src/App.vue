@@ -2,7 +2,6 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ScrollbarInstance, UploadFile, UploadUserFile } from 'element-plus'
-import { Menu, Tickets } from '@element-plus/icons-vue'
 
 import { api, ApiError } from '@/api/client'
 import AppNavigation from '@/components/AppNavigation.vue'
@@ -19,6 +18,7 @@ import DatasetsView from '@/views/DatasetsView.vue'
 import ModelsView from '@/views/ModelsView.vue'
 import ScenarioDetailView from '@/views/ScenarioDetailView.vue'
 import ScenarioSetsView from '@/views/ScenarioSetsView.vue'
+import { Menu, Tickets } from '@/icons'
 import {
   isTaskCancellable,
   isTaskFailed,
@@ -1892,7 +1892,7 @@ function notifyError(error: unknown) {
               </template>
             </el-scrollbar>
           </el-main>
-          <el-aside v-if="hasProject" width="340px" class="task-aside">
+          <el-aside v-if="hasProject" width="300px" class="task-aside">
             <TaskPanel
               :tasks="visibleTasks"
               :now="taskNow"

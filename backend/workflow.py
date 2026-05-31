@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -386,9 +388,15 @@ def generate_scenarios(
     speed_interruption_threshold: float,
     overwrite: bool,
 ) -> None:
+    num_samples = max(1, int(num_samples))
     model = layout.model(model_id)
     checkpoint_path = model_checkpoint_path(model.root, checkpoint)
     output_root = layout.scenario_set(scenario_set_id).root
+    target_cases = generation_target_cases(layout, scenario_set_id, output_prefix, num_samples)
+    existing_targets = [case.root for _scenario_id, case in target_cases if case.root.exists()]
+    if existing_targets and not overwrite:
+        raise FileExistsError(f"Generated scenario already exists: {existing_targets[0]}")
+
     source_set_id = sanitize_id(source_scenario_set_id)
     source_timetable_path = source_timetable_path.strip()
     source_mileage_path = source_mileage_path.strip()
@@ -411,13 +419,15 @@ def generate_scenarios(
                 graph_settings=graph_settings,
             )
         else:
-            export_generation_context_graphs(
+            source_records = export_generation_context_graphs(
                 layout,
                 source_set_id,
                 context_graph_root,
+                num_samples=num_samples,
+                seed=seed,
                 graph_settings=graph_settings,
             )
-        output_root.mkdir(parents=True, exist_ok=True)
+            validate_generation_targets_do_not_replace_sources(target_cases, source_records)
         run(
             [
                 sys.executable,
@@ -437,28 +447,39 @@ def generate_scenarios(
             ]
         )
         graph_paths = sorted((generation_run / "math_graphs").glob("*.json"))
-        for index, graph_path in enumerate(graph_paths, start=1):
+        if len(graph_paths) != num_samples:
+            raise RuntimeError(f"Generation produced {len(graph_paths)} graph(s), expected {num_samples}.")
+        decoded_outputs: List[Dict[str, object]] = []
+        for (scenario_id, target), graph_path in zip(target_cases, graph_paths):
             graph = json.loads(graph_path.read_text(encoding="utf-8"))
             base_context_path = str(graph.get("decode_handle", {}).get("base_context_path", ""))
             if not base_context_path:
                 raise ValueError(f"Generated graph missing decode_handle.base_context_path: {graph_path}")
-            context = load_base_context(Path(base_context_path))
+            source_context_path = Path(base_context_path)
+            require_generation_source_files(source_context_path)
+            context = load_base_context(source_context_path)
             disturbance_graph = typed_generated_graph_to_disturbance_graph(
                 graph,
                 context,
                 speed_interruption_threshold=speed_interruption_threshold,
             )
             scenarios = disturbance_graph_to_scenario(disturbance_graph, context)
-            scenario_id = sanitize_id(f"{output_prefix}_{index:04d}")
-            target = layout.scenario_set(scenario_set_id).scenario(scenario_id)
-            if target.root.exists():
-                if not overwrite:
-                    raise FileExistsError(f"Generated scenario already exists: {target.root}")
-                reset_dir(target.root)
-            target.root.mkdir(parents=True, exist_ok=False)
-            write_yaml(target.scenario_yml, scenario_config_to_yaml(scenario_id, scenarios))
-            copy_or_link_file(Path(base_context_path), target.context_json)
-            copy_generation_source_files(Path(base_context_path), target.source_dir)
+            decoded_outputs.append(
+                {
+                    "target": target,
+                    "scenario_id": scenario_id,
+                    "scenarios": scenarios,
+                    "source_context_path": source_context_path,
+                }
+            )
+        for record in decoded_outputs:
+            write_generated_scenario(
+                record["target"],
+                str(record["scenario_id"]),
+                record["scenarios"],
+                source_context_path=Path(record["source_context_path"]),
+                overwrite=overwrite,
+            )
         print(f"Generated and decoded {len(graph_paths)} scenarios: {output_root}")
     finally:
         if tmp_root.exists():
@@ -466,13 +487,82 @@ def generate_scenarios(
         cleanup_generation_uploads(source_timetable_path, source_mileage_path, project_root=layout.root)
 
 
+def generation_target_cases(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    output_prefix: str,
+    num_samples: int,
+) -> List[tuple[str, Any]]:
+    return [
+        (
+            sanitize_id(f"{output_prefix}_{index:04d}"),
+            layout.scenario_set(scenario_set_id).scenario(f"{output_prefix}_{index:04d}"),
+        )
+        for index in range(1, num_samples + 1)
+    ]
+
+
+def write_generated_scenario(
+    target: Any,
+    scenario_id: str,
+    scenarios: ScenarioConfig,
+    *,
+    source_context_path: Path,
+    overwrite: bool,
+) -> None:
+    if target.root.exists():
+        if not overwrite:
+            raise FileExistsError(f"Generated scenario already exists: {target.root}")
+        reset_dir(target.root)
+    created = False
+    try:
+        target.root.mkdir(parents=True, exist_ok=False)
+        created = True
+        copy_generation_source_files(source_context_path, target.source_dir)
+        copy_generation_context(source_context_path, target.context_json)
+        write_yaml(target.scenario_yml, scenario_config_to_yaml(scenario_id, scenarios))
+    except Exception:
+        if created and target.root.exists():
+            reset_dir(target.root)
+        raise
+
+
 def copy_generation_source_files(context_path: Path, target_source_dir: Path) -> None:
-    context = load_base_context(context_path)
+    timetable_path, mileage_path = require_generation_source_files(context_path)
     target_source_dir.mkdir(parents=True, exist_ok=True)
-    if Path(context.source_timetable_path).is_file():
-        shutil.copy2(context.source_timetable_path, target_source_dir / "timetable.xlsx")
-    if Path(context.source_mileage_path).is_file():
-        shutil.copy2(context.source_mileage_path, target_source_dir / "mileage.xlsx")
+    shutil.copy2(timetable_path, target_source_dir / "timetable.xlsx")
+    shutil.copy2(mileage_path, target_source_dir / "mileage.xlsx")
+
+
+def require_generation_source_files(context_path: Path) -> tuple[Path, Path]:
+    context = load_base_context(context_path)
+    timetable_path = Path(context.source_timetable_path)
+    mileage_path = Path(context.source_mileage_path)
+    if not timetable_path.is_file():
+        raise FileNotFoundError(f"Generation source timetable not found: {timetable_path}")
+    if not mileage_path.is_file():
+        raise FileNotFoundError(f"Generation source mileage table not found: {mileage_path}")
+    return timetable_path, mileage_path
+
+
+def copy_generation_context(source_context_path: Path, target_context_path: Path) -> None:
+    source = load_base_context(source_context_path)
+    target_context = replace(
+        source,
+        source_timetable_path=target_context_path.parent / "source" / "timetable.xlsx",
+        source_mileage_path=target_context_path.parent / "source" / "mileage.xlsx",
+    )
+    write_base_context(
+        target_context,
+        target_context_path,
+        metadata={
+            "id": sanitize_id(target_context_path.parent.name),
+            "timetable_filename": "timetable.xlsx",
+            "mileage_filename": "mileage.xlsx",
+            "timetable_sheet_name": target_context.timetable_sheet_name,
+            "mileage_sheet_name": target_context.mileage_sheet_name,
+        },
+    )
 
 
 def generation_graph_settings(model: Any) -> Dict[str, object]:
@@ -492,23 +582,65 @@ def export_generation_context_graphs(
     scenario_set_id: str,
     output_dir: Path,
     *,
+    num_samples: int,
+    seed: int,
     graph_settings: Dict[str, object],
-) -> None:
+) -> List[Dict[str, object]]:
     docs = load_scenario_set(layout, scenario_set_id)
     require_activated_scenarios(docs)
     prepare_output_dir(output_dir, overwrite=True)
-    for doc in docs:
+    contexts_dir = output_dir / "contexts"
+    contexts_dir.mkdir(parents=True, exist_ok=True)
+    selected_docs = sample_generation_source_documents(docs, num_samples=num_samples, seed=seed)
+    records: List[Dict[str, object]] = []
+    for index, doc in enumerate(selected_docs, start=1):
         if doc.path is None:
             raise ValueError(f"Scenario document path is required: {doc.name}")
         context_path = doc.path.parent / "context.json"
         write_generation_context_graph(
             load_base_context(context_path),
             context_path,
-            output_dir / f"{sanitize_id(doc.name)}.json",
+            contexts_dir / f"sample_{index:06d}.json",
             graph_settings=graph_settings,
             source_config_path=to_posix(doc.path),
         )
-    print(f"Generation context graphs exported: {output_dir}")
+        records.append(
+            {
+                "index": index,
+                "scenario_id": sanitize_id(doc.name),
+                "scenario_root": doc.path.parent.resolve(),
+                "context_path": context_path.resolve(),
+                "scenario_path": doc.path.resolve(),
+            }
+        )
+    print(f"Generation context graphs exported: {output_dir} ({len(records)} sampled context(s))")
+    return records
+
+
+def sample_generation_source_documents(
+    docs: List[ScenarioDocument],
+    *,
+    num_samples: int,
+    seed: int,
+) -> List[ScenarioDocument]:
+    if not docs:
+        raise ValueError("Generation source scenario category is empty.")
+    rng = random.Random(seed)
+    return [rng.choice(docs) for _ in range(num_samples)]
+
+
+def validate_generation_targets_do_not_replace_sources(
+    target_cases: List[tuple[str, Any]],
+    source_records: List[Dict[str, object]],
+) -> None:
+    source_roots = {
+        record["scenario_root"]
+        for record in source_records
+        if isinstance(record.get("scenario_root"), Path)
+    }
+    for _scenario_id, target in target_cases:
+        if target.root.resolve() in source_roots:
+            raise ValueError(f"Generated target would replace its source scenario: {target.root}")
 
 
 def export_uploaded_generation_context_graph(
@@ -546,10 +678,12 @@ def export_uploaded_generation_context_graph(
         },
     )
     prepare_output_dir(output_dir, overwrite=True)
+    contexts_dir = output_dir / "contexts"
+    contexts_dir.mkdir(parents=True, exist_ok=True)
     write_generation_context_graph(
         context,
         context_path,
-        output_dir / "uploaded_source.json",
+        contexts_dir / "uploaded_source.json",
         graph_settings=graph_settings,
     )
     print(f"Uploaded generation context graph exported: {output_dir}")

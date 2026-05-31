@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { Delete, Document, Refresh, VideoPause } from '@element-plus/icons-vue'
 import { computed, ref, watch } from 'vue'
 
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
+import { Delete, Document, Refresh, VideoPause } from '@/icons'
 import {
   isTaskCancellable,
   isTaskFailed,
@@ -212,6 +212,10 @@ function compareTasks(left: Task, right: Task) {
   padding: 0;
 }
 
+.task-panel :deep(.el-card__header) {
+  padding: 12px;
+}
+
 .task-panel-header,
 .task-item-main {
   display: flex;
@@ -221,7 +225,7 @@ function compareTasks(left: Task, right: Task) {
 }
 
 .task-panel-title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -234,17 +238,17 @@ function compareTasks(left: Task, right: Task) {
 .task-filters {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .task-filter {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   color: var(--el-text-color-primary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -259,12 +263,12 @@ function compareTasks(left: Task, right: Task) {
 .task-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px;
 }
 
 .task-item {
-  padding: 10px;
+  padding: 9px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   background: var(--el-bg-color);
@@ -273,7 +277,7 @@ function compareTasks(left: Task, right: Task) {
 .task-title {
   display: flex;
   min-width: 0;
-  gap: 6px;
+  gap: 5px;
   font-size: 13px;
   font-weight: 600;
 }
@@ -284,7 +288,7 @@ function compareTasks(left: Task, right: Task) {
   gap: 2px;
   margin-top: 4px;
   color: var(--el-text-color-secondary);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .task-meta-row {
@@ -295,11 +299,11 @@ function compareTasks(left: Task, right: Task) {
 
 .task-footer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 10px -10px -10px;
-  padding: 8px 10px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+  margin: 9px -9px -9px;
+  padding: 7px 9px;
   border-top: 1px solid var(--el-border-color-lighter);
   border-radius: 0 0 6px 6px;
   background: var(--el-fill-color-extra-light);
@@ -314,14 +318,15 @@ function compareTasks(left: Task, right: Task) {
 
 .task-action-buttons {
   display: flex;
+  width: 100%;
   min-width: 0;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
+  gap: 5px;
 }
 
 .task-action-buttons :deep(.el-button) {
   margin-left: 0;
+  padding: 5px 7px;
 }
 
 .task-status-failed {

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Download, FullScreen } from '@element-plus/icons-vue'
 import type { EChartsCoreOption } from 'echarts/core'
 import VChart from 'vue-echarts'
 
+import { Download, FullScreen } from '@/icons'
 const props = withDefaults(
   defineProps<{
     option: EChartsCoreOption

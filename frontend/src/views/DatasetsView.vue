@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Refresh } from '@element-plus/icons-vue'
 
 import { api, ApiError } from '@/api/client'
 import EntityToolbar from '@/components/EntityToolbar.vue'
+import { Refresh } from '@/icons'
 import { formatBytes, groupArtifactsByCase } from '@/views/types'
 import type { ArtifactSummary, DatasetDetail, DatasetSummary, ResourceOption } from '@/types'
 

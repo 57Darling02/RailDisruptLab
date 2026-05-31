@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Close, Plus } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 
+import { Close, Plus } from '@/icons'
 import type { ResourceOption } from '@/types'
 
 const props = withDefaults(
