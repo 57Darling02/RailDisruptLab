@@ -14,6 +14,9 @@ defineProps<{
 }>()
 
 defineEmits<{
+  createScenarioSet: []
+  createDataset: []
+  train: []
   refreshTasks: []
 }>()
 </script>
@@ -27,7 +30,25 @@ defineEmits<{
             <span>项目资源</span>
           </div>
         </template>
-        <el-row :gutter="16">
+        <div v-if="!scenarioSetCount && !datasets.length && !models.length" class="primary-empty-panel dashboard-empty-panel">
+          <el-empty :image-size="120">
+            <template #description>
+              <div class="primary-empty-title">暂无项目资源</div>
+            </template>
+            <div class="dashboard-empty-actions">
+              <el-button type="primary" size="large" :disabled="busy" @click="$emit('createScenarioSet')">
+                新增场景分类
+              </el-button>
+              <el-button size="large" :disabled="busy" @click="$emit('createDataset')">
+                构建 MILP 实例集
+              </el-button>
+              <el-button size="large" :disabled="busy" @click="$emit('train')">
+                训练新模型
+              </el-button>
+            </div>
+          </el-empty>
+        </div>
+        <el-row v-else :gutter="16">
           <el-col :span="8">
             <el-statistic title="扰动场景类别" :value="scenarioSetCount" />
           </el-col>
@@ -65,3 +86,16 @@ defineEmits<{
     </div>
   </section>
 </template>
+
+<style scoped>
+.dashboard-empty-panel {
+  min-height: 320px;
+}
+
+.dashboard-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
+</style>

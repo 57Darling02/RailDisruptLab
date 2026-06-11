@@ -40,6 +40,9 @@ export interface FileState {
   size_bytes: number
 }
 
+export type ScenarioActivationStatus = 'inactive' | 'active' | 'invalid'
+export type ScenarioYamlStatus = 'valid' | 'invalid'
+
 export interface ScenarioSet {
   scenario_set_id: string
   root: string
@@ -51,7 +54,9 @@ export interface ScenarioSummary {
   scenario_id: string
   name: string
   root?: string
-  activated?: boolean
+  yaml_status?: ScenarioYamlStatus
+  yaml_reason?: string
+  has_context?: boolean
   has_timetable?: boolean
   has_mileage?: boolean
   counts?: {
@@ -79,6 +84,9 @@ export interface ScenarioDetail {
   name: string
   root: string
   activated: boolean
+  activation_status: ScenarioActivationStatus
+  activation_reason: string
+  has_context: boolean
   has_timetable: boolean
   has_mileage: boolean
   counts: {
@@ -248,6 +256,8 @@ export interface ScenarioVisualizationItem {
   scenario_id: string
   name: string
   path: string
+  yaml_status: ScenarioYamlStatus
+  yaml_reason: string
   disturbances: TimetableDisturbance[]
   counts: {
     delay: number

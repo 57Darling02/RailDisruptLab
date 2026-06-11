@@ -17,11 +17,13 @@ def read_scenario_disturbances(path: Path, context: Any) -> List[Dict[str, objec
         train_id = str(item.get("train_id", "") or getattr(anchor, "train_id", ""))
         station = str(item.get("station", "") or getattr(anchor, "station", ""))
         event_type = str(item.get("event_type", "") or getattr(anchor, "event_type", ""))
+        if anchor is None and train_id and station and event_type:
+            anchor = event_anchor_by_semantic(context).get((train_id, station, event_type))
         disturbances.append(
             {
                 "id": f"delay_{index}",
                 "type": "delay",
-                "event_anchor_id": str(item.get("event_anchor_id", "")),
+                "event_anchor_id": str(getattr(anchor, "anchor_id", "") or item.get("event_anchor_id", "")),
                 "train_id": train_id,
                 "station": station,
                 "event_type": event_type,
@@ -36,6 +38,8 @@ def read_scenario_disturbances(path: Path, context: Any) -> List[Dict[str, objec
         anchor = section_anchors.get(str(item.get("section_anchor_id", "")))
         start_station = str(item.get("start_station", "") or getattr(anchor, "start_station", ""))
         end_station = str(item.get("end_station", "") or getattr(anchor, "end_station", ""))
+        if anchor is None and start_station and end_station:
+            anchor = section_anchor_by_semantic(context).get((start_station, end_station))
         start_time = parse_seconds_of_day(item.get("start_time", 0))
         duration = int(float(item.get("duration", 0) or 0))
         limit_speed = float(item.get("limit_speed", 0) or 0)
@@ -43,7 +47,7 @@ def read_scenario_disturbances(path: Path, context: Any) -> List[Dict[str, objec
             {
                 "id": f"speed_{index}",
                 "type": "interruption" if limit_speed <= 20 else "speed_limit",
-                "section_anchor_id": str(item.get("section_anchor_id", "")),
+                "section_anchor_id": str(getattr(anchor, "anchor_id", "") or item.get("section_anchor_id", "")),
                 "start_station": start_station,
                 "end_station": end_station,
                 "start_time": start_time,
@@ -56,6 +60,20 @@ def read_scenario_disturbances(path: Path, context: Any) -> List[Dict[str, objec
         )
 
     return disturbances
+
+
+def event_anchor_by_semantic(context: Any) -> Dict[tuple[str, str, str], Any]:
+    return {
+        (str(anchor.train_id), str(anchor.station), str(anchor.event_type)): anchor
+        for anchor in getattr(context, "event_anchors", {}).values()
+    }
+
+
+def section_anchor_by_semantic(context: Any) -> Dict[tuple[str, str], Any]:
+    return {
+        (str(anchor.start_station), str(anchor.end_station)): anchor
+        for anchor in getattr(context, "section_anchors", {}).values()
+    }
 
 
 def parse_seconds_of_day(value: object) -> int:

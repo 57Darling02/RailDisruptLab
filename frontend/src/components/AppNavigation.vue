@@ -29,7 +29,7 @@ const primaryItems: NavigationItem[] = [
   { index: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
   { index: 'scenarios', label: '扰动场景', icon: FolderKanban },
   { index: 'datasets', label: 'MILP 实例', icon: Database },
-  { index: 'models', label: '模型训练', icon: BrainCircuit },
+  { index: 'models', label: '模型', icon: BrainCircuit },
 ]
 
 const ablationItems: NavigationItem[] = [

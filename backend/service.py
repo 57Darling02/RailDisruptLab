@@ -12,15 +12,17 @@ from backend.scenario_cases import (
     create_scenario_case,
     list_scenario_case_options,
     read_scenario_set_analysis,
+    update_scenario_case_sources,
     update_scenario_disturbances,
 )
 from backend.analysis.timetable import read_case_timetable
 from backend.lifecycle import delete_dataset, delete_model, delete_scenario_set, ensure_no_active_reference
 from backend.pueue_client import PueueClient
 from backend.repository import ProjectRepository
-from backend.scenarios import read_scenario_options
+from backend.scenarios import create_scenario_set as create_scenario_set_dir, read_scenario_options
 from backend.task_contracts import TASK_DEFAULTS, normalize_project_id, normalize_task_params
 from backend.task_resources import ensure_no_active_conflict
+from backend.workflow import new_project
 from core.project_layout import PROJECTS_ROOT, REPO_ROOT, require_id, sanitize_id, to_posix
 
 RESOURCE_OPTION_LABELS = {
@@ -176,6 +178,24 @@ class RailGraphBackend:
             mileage_content=mileage_content,
         )
 
+    def update_scenario_case_sources(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
+        *,
+        timetable_content: bytes | None = None,
+        mileage_content: bytes | None = None,
+    ) -> Dict[str, object]:
+        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id, action="scenario_activate")
+        return update_scenario_case_sources(
+            self.repository.layout(project_id),
+            scenario_set_id,
+            scenario_id,
+            timetable_content=timetable_content,
+            mileage_content=mileage_content,
+        )
+
     def update_scenario_disturbances(
         self,
         project_id: str,
@@ -266,7 +286,9 @@ class RailGraphBackend:
         return self.tasks.remove_task(task_id)
 
     def create_project(self, project_id: str) -> Dict[str, object]:
-        return self.submit_task(project_id, "newproject", {}, label="newproject")
+        project_id = normalize_project_id(project_id)
+        new_project(self.repository.layout(project_id))
+        return self.repository.get_project_state(project_id)
 
     def delete_project(self, project_id: str) -> Dict[str, object]:
         return self.submit_task(project_id, "deleteproject", {}, label="deleteproject")
@@ -281,12 +303,13 @@ class RailGraphBackend:
         return self.repository.scenario_source_file_path(project_id, scenario_set_id, scenario_id, filename)
 
     def create_scenario_set(self, project_id: str, scenario_set_id: str, *, exist_ok: bool = False) -> Dict[str, object]:
-        return self.submit_task(
-            project_id,
-            "scenario_set_create",
-            {"scenario_set_id": scenario_set_id, "exist_ok": exist_ok},
-            label="scenario_set_create",
-        )
+        project_id = normalize_project_id(project_id)
+        scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+        create_scenario_set_dir(self.repository.layout(project_id), scenario_set_id, exist_ok=exist_ok)
+        for item in self.repository.list_scenario_sets(project_id):
+            if item["scenario_set_id"] == scenario_set_id:
+                return item
+        raise FileNotFoundError(f"Scenario set not found after create: {scenario_set_id}")
 
     def delete_scenario_set(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)

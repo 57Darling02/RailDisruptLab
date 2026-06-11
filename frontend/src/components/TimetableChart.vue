@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { graphic } from 'echarts/core'
 
 import ChartPanel from '@/components/ChartPanel.vue'
 import type { TimetableDisturbance, TimetableRowState } from '@/types'
@@ -73,7 +74,7 @@ interface BuildInput {
 
 function buildTimetableOption(input: BuildInput) {
   const sourceRows = input.compareMode ? [...input.planRows, ...input.adjustedRows] : input.adjustedRows
-  const stations = visibleStations(sourceRows, input.stationOrder)
+  const stations = visibleStations(sourceRows, input.stationOrder, input.disturbances)
   const stationIndex = new Map(stations.map((station, index) => [station, index]))
   const planRows = input.compareMode ? input.planRows : input.adjustedRows
   const affectedTrains = affectedTrainIds(
@@ -167,6 +168,7 @@ interface ChartPoint {
 
 interface CustomRenderParams {
   coordSys?: {
+    type?: string
     x: number
     y: number
     width: number
@@ -193,10 +195,23 @@ interface DisturbanceRect {
   detail: string
 }
 
-function visibleStations(rows: TimetableRowState[], stationOrder: string[]) {
-  const rowStations = new Set(rows.map((row) => row.station))
-  const ordered = stationOrder.filter((station) => rowStations.has(station))
-  return ordered.length ? ordered : [...rowStations]
+function visibleStations(
+  rows: TimetableRowState[],
+  stationOrder: string[],
+  disturbances: TimetableDisturbance[],
+) {
+  const stationSet = new Set(rows.map((row) => row.station).filter(Boolean))
+  for (const item of disturbances) {
+    if (item.type === 'delay') {
+      if (item.station) stationSet.add(item.station)
+      continue
+    }
+    if (item.start_station) stationSet.add(item.start_station)
+    if (item.end_station) stationSet.add(item.end_station)
+  }
+  const ordered = stationOrder.filter((station) => stationSet.has(station))
+  const unordered = [...stationSet].filter((station) => !stationOrder.includes(station)).sort()
+  return ordered.length || unordered.length ? [...ordered, ...unordered] : [...stationSet]
 }
 
 function affectedTrainIds(
@@ -456,6 +471,7 @@ function disturbanceSeries(
     .map((type) => ({
       name: DISTURBANCE_LABEL[type],
       type: 'custom',
+      encode: { x: [0, 1], y: 2 },
       data: byType[type],
       tooltip: { trigger: 'item' },
       renderItem: renderDisturbanceRect,
@@ -540,14 +556,24 @@ function renderDisturbanceRect(params: CustomRenderParams, api: CustomRenderApi)
   const bandHeight = Math.abs(api.size([0, Math.max(heightUnits, 0.08)])[1])
   const coordSys = params.coordSys
   if (!coordSys || !startCenter.every(Number.isFinite) || !endCenter.every(Number.isFinite)) return null
-  const x = Math.max(Math.min(startCenter[0], endCenter[0]), coordSys.x)
-  const y = Math.max(startCenter[1] - bandHeight / 2, coordSys.y)
-  const right = Math.min(Math.max(startCenter[0], endCenter[0]), coordSys.x + coordSys.width)
-  const bottom = Math.min(startCenter[1] + bandHeight / 2, coordSys.y + coordSys.height)
-  if (right <= x || bottom <= y) return null
+  const shape = graphic.clipRectByRect(
+    {
+      x: Math.min(startCenter[0], endCenter[0]),
+      y: startCenter[1] - bandHeight / 2,
+      width: Math.abs(endCenter[0] - startCenter[0]),
+      height: bandHeight,
+    },
+    {
+      x: coordSys.x,
+      y: coordSys.y,
+      width: coordSys.width,
+      height: coordSys.height,
+    },
+  )
+  if (!shape) return null
   return {
     type: 'rect',
-    shape: { x, y, width: right - x, height: bottom - y },
+    shape,
     style: api.style(),
   }
 }

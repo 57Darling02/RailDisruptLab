@@ -36,6 +36,11 @@ class ScenarioWriteRequest(BaseModel):
     overwrite: bool = False
 
 
+class ScenarioDisturbanceWriteRequest(BaseModel):
+    delays: List[Dict[str, object]] = []
+    speed_limits: List[Dict[str, object]] = []
+
+
 class NormalGenerateRequest(BaseModel):
     scenario_set_id: str
     scenario_id_prefix: str = "sim"
@@ -154,7 +159,7 @@ def list_project_options(q: str = "", limit: int = 50) -> List[Dict[str, object]
 
 @api.post("/projects")
 def create_project(request: ProjectCreateRequest) -> Dict[str, object]:
-    return _task_response(backend.create_project(request.project_id))
+    return backend.create_project(request.project_id)
 
 
 @api.delete("/projects/{project_id}")
@@ -184,9 +189,7 @@ def list_scenario_sets(project_id: str) -> List[Dict[str, object]]:
 
 @api.post("/projects/{project_id}/scenario-sets")
 def create_scenario_set(project_id: str, request: ScenarioSetCreateRequest) -> Dict[str, object]:
-    return _task_response(
-        backend.create_scenario_set(project_id, request.scenario_set_id, exist_ok=request.exist_ok)
-    )
+    return backend.create_scenario_set(project_id, request.scenario_set_id, exist_ok=request.exist_ok)
 
 
 @api.delete("/projects/{project_id}/scenario-sets/{scenario_set_id}")
@@ -267,6 +270,23 @@ def activate_scenario_case(
     )
 
 
+@api.put("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/source")
+def update_scenario_case_sources(
+    project_id: str,
+    scenario_set_id: str,
+    scenario_id: str,
+    timetable_file: Optional[UploadFile] = File(None),
+    mileage_file: Optional[UploadFile] = File(None),
+) -> Dict[str, object]:
+    return backend.update_scenario_case_sources(
+        project_id,
+        scenario_set_id,
+        scenario_id,
+        timetable_content=timetable_file.file.read() if timetable_file is not None else None,
+        mileage_content=mileage_file.file.read() if mileage_file is not None else None,
+    )
+
+
 @api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/source/{filename}")
 def download_scenario_source(project_id: str, scenario_set_id: str, scenario_id: str, filename: str) -> FileResponse:
     path = backend.scenario_source_file_path(project_id, scenario_set_id, scenario_id, filename)
@@ -276,11 +296,27 @@ def download_scenario_source(project_id: str, scenario_set_id: str, scenario_id:
 @api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios")
 def add_scenario(project_id: str, scenario_set_id: str, request: ScenarioWriteRequest) -> Dict[str, object]:
     return backend.update_scenario_disturbances(
-            project_id,
-            scenario_set_id,
-            request.scenario_id,
-            delays=request.delays,
-            speed_limits=request.speed_limits,
+        project_id,
+        scenario_set_id,
+        request.scenario_id,
+        delays=request.delays,
+        speed_limits=request.speed_limits,
+    )
+
+
+@api.put("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/disturbances")
+def update_scenario_disturbances(
+    project_id: str,
+    scenario_set_id: str,
+    scenario_id: str,
+    request: ScenarioDisturbanceWriteRequest,
+) -> Dict[str, object]:
+    return backend.update_scenario_disturbances(
+        project_id,
+        scenario_set_id,
+        scenario_id,
+        delays=request.delays,
+        speed_limits=request.speed_limits,
     )
 
 

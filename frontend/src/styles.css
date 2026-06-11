@@ -280,6 +280,10 @@ body {
   font-weight: 700;
 }
 
+.project-empty-panel {
+  min-height: calc(100vh - 120px);
+}
+
 .activation-result {
   padding: 8px 0;
 }

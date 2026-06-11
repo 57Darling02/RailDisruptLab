@@ -66,9 +66,16 @@ defineEmits<{
         </template>
       </EntityToolbar>
 
-      <el-empty v-if="!scenarioSets.length" description="暂无场景分类">
-        <el-button type="primary" :disabled="busy" @click="$emit('createScenarioSet')">新增场景分类</el-button>
-      </el-empty>
+      <div v-if="!scenarioSets.length" class="primary-empty-panel">
+        <el-empty :image-size="120">
+          <template #description>
+            <div class="primary-empty-title">暂无场景分类资源</div>
+          </template>
+          <el-button type="primary" size="large" :disabled="busy" @click="$emit('createScenarioSet')">
+            新增场景分类
+          </el-button>
+        </el-empty>
+      </div>
 
       <ScenarioCategoryDetail
         v-else-if="selectedProjectId && loadedScenarioSetId"
@@ -86,7 +93,7 @@ defineEmits<{
           <el-button type="primary" :disabled="busy || !selectedScenarioSetId" @click="$emit('loadScenarioSet')">
             重新加载
           </el-button>
-          <el-button :disabled="busy" @click="$emit('createScenario')">新增场景</el-button>
+          <el-button :disabled="busy || !selectedScenarioSetId" @click="$emit('createScenario')">新增场景</el-button>
         </el-space>
       </el-empty>
     </div>

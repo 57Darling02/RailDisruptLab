@@ -72,7 +72,7 @@ export const api = {
     return request<ResourceOption[]>(`/project-options?${params}`)
   },
   createProject: (projectId: string) =>
-    request<TaskResponse>('/projects', {
+    request<ProjectState>('/projects', {
       method: 'POST',
       ...jsonBody({ project_id: projectId }),
     }),
@@ -92,7 +92,7 @@ export const api = {
   listScenarioSets: (projectId: string) =>
     request<ScenarioSet[]>(`/projects/${projectId}/scenario-sets`),
   createScenarioSet: (projectId: string, scenarioSetId: string, existOk = false) =>
-    request<TaskResponse>(`/projects/${projectId}/scenario-sets`, {
+    request<ScenarioSet>(`/projects/${projectId}/scenario-sets`, {
       method: 'POST',
       ...jsonBody({ scenario_set_id: scenarioSetId, exist_ok: existOk }),
     }),
@@ -155,6 +155,21 @@ export const api = {
       { method: 'POST', body: data },
     )
   },
+  updateScenarioCaseSources: (
+    projectId: string,
+    scenarioSetId: string,
+    scenarioId: string,
+    timetableFile?: File | null,
+    mileageFile?: File | null,
+  ) => {
+    const data = new FormData()
+    if (timetableFile) data.append('timetable_file', timetableFile)
+    if (mileageFile) data.append('mileage_file', mileageFile)
+    return request<ScenarioDetail>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}/source`,
+      { method: 'PUT', body: data },
+    )
+  },
   addScenario: (
     projectId: string,
     scenarioSetId: string,
@@ -166,6 +181,19 @@ export const api = {
       method: 'POST',
       ...jsonBody({ scenario_id: scenarioId, ...payload, overwrite }),
     }),
+  updateScenarioDisturbances: (
+    projectId: string,
+    scenarioSetId: string,
+    scenarioId: string,
+    payload: { delays: object[]; speed_limits: object[] },
+  ) =>
+    request<ScenarioDetail>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}/disturbances`,
+      {
+        method: 'PUT',
+        ...jsonBody(payload),
+      },
+    ),
   deleteScenario: (projectId: string, scenarioSetId: string, scenarioId: string) =>
     request<TaskResponse>(
       `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}`,

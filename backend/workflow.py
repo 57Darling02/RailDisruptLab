@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List
 from core.base_context import build_base_context, load_base_context, write_base_context
 from core.disturbance_graph import disturbance_graph_to_scenario
 from core.file_ops import copy_or_link_file
-from core.loader import load_mileage_table, load_timetable
+from core.loader import load_mileage_table, load_timetable, parse_scenario_config
 from core.project_layout import ProjectLayout, REPO_ROOT, reset_dir, sanitize_id, to_posix
 from core.scenario_config import (
     ScenarioDocument,
@@ -944,15 +944,32 @@ def load_scenario_documents(
 
 def require_activated_scenarios(docs: List[ScenarioDocument]) -> None:
     missing = []
+    failed = []
     for doc in docs:
         if doc.path is None:
             missing.append(doc.name)
             continue
-        if not (doc.path.parent / "context.json").is_file():
+        context_path = doc.path.parent / "context.json"
+        if not context_path.is_file():
             missing.append(doc.name)
+            continue
+        try:
+            context = load_base_context(context_path)
+            parse_scenario_config(
+                {
+                    "delays": doc.scenarios.get("delays", []) or [],
+                    "speed_limits": doc.scenarios.get("speed_limits", []) or [],
+                },
+                context,
+            )
+        except Exception as exc:
+            failed.append(f"{doc.name}: {exc}")
     if missing:
         names = ", ".join(sanitize_id(name) for name in missing[:10])
         raise FileNotFoundError(f"Scenario context is required before batch execution: {names}")
+    if failed:
+        names = "; ".join(failed[:5])
+        raise ValueError(f"Scenario activation check failed before batch execution: {names}")
 
 
 def default_build_config() -> Dict[str, object]:

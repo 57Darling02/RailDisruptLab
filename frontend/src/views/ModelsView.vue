@@ -112,7 +112,11 @@ const latestEpochLoss = computed(() => epochLossPoints.value.at(-1))
 const loadedTrainTask = computed(() => findModelTrainTask(props.tasks, props.loadedModelId))
 const loadedModelRunning = computed(() => Boolean(loadedTrainTask.value && !isTaskTerminal(loadedTrainTask.value)))
 const reloadingSelection = computed(
-  () => Boolean(props.selectedModelId) && props.selectedModelId === props.loadedModelId && Boolean(props.detailLoading),
+  () =>
+    Boolean(props.selectedModelId) &&
+    props.selectedModelId === props.loadedModelId &&
+    loadedModelRunning.value &&
+    Boolean(props.detailLoading),
 )
 const trainProgress = computed(() => modelTrainingProgress())
 const graphProgress = computed(() => modelDetail.value?.graph_progress ?? {})
@@ -154,11 +158,11 @@ const stageProgress = computed(() => {
   if (trainingStepActive.value === 1) {
     return {
       percentage: graphSamplePercent.value,
-      label: '生成扰动图 / 辅助图',
+      label: '构造扰动图G_D / 辅助图R',
       detail: `${graphSampleProgress.value.completed ?? 0}/${graphSampleProgress.value.total ?? 0}`,
     }
   }
-  return { percentage: 0, label: '全局图建模', detail: '准备图结构' }
+  return { percentage: 0, label: '构建全局图C', detail: '准备图结构' }
 })
 const trainProgressStatus = computed(() => {
   if (loadedTrainTaskFailed.value) return 'exception'
@@ -181,8 +185,9 @@ watch(
     props.pendingModelId,
     loadedTrainTask.value?.status ?? '',
   ] as const,
-  () => {
-    void loadModelDetails()
+  (current, previous) => {
+    const modelChanged = current[0] !== previous?.[0] || current[1] !== previous?.[1]
+    void loadModelDetails({ showLoading: modelChanged || !modelDetail.value })
   },
   { immediate: true },
 )
@@ -499,12 +504,13 @@ function escapeRegExp(value: string) {
   <section class="page-layout">
     <div class="page-stack">
       <EntityToolbar
-        label="模型训练"
+        label="选择模型"
         :model-value="selectedModelId"
         :options="modelOptions"
         :loading="resourceLoading"
-        placeholder="选择模型训练"
-        delete-label="删除模型训练"
+        add-label="训练新模型"
+        placeholder="选择模型"
+        delete-label="删除模型"
         :busy="busy"
         @update:model-value="$emit('update:selectedModelId', $event)"
         @visible-change="$emit('reloadModels', $event)"
@@ -526,17 +532,17 @@ function escapeRegExp(value: string) {
       <div v-if="!models.length && !pendingModelId" class="primary-empty-panel">
         <el-empty :image-size="120">
           <template #description>
-            <div class="primary-empty-title">暂无模型训练资源</div>
+            <div class="primary-empty-title">暂无模型资源</div>
           </template>
           <el-button type="primary" size="large" :disabled="busy" @click="$emit('train')">
-            训练模型
+            训练新模型
           </el-button>
         </el-empty>
       </div>
       <el-alert
         v-if="pendingModelId"
         class="dialog-section"
-        :title="`模型训练 ${pendingModelId} 正在训练，产物状态会随任务更新。`"
+        :title="`模型 ${pendingModelId} 正在训练，产物状态会随任务更新。`"
         type="info"
         show-icon
         :closable="false"
@@ -567,7 +573,7 @@ function escapeRegExp(value: string) {
           </div>
         </template>
 
-        <el-empty v-if="!loadedModelId" description="请选择模型训练资源">
+        <el-empty v-if="!loadedModelId" description="请选择模型">
           <el-button
             type="primary"
             :disabled="busy || !selectedModelId"
@@ -615,8 +621,8 @@ function escapeRegExp(value: string) {
                 finish-status="success"
                 :process-status="trainingStepProcessStatus"
               >
-                <el-step title="全局图建模" />
-                <el-step title="生成扰动图 / 辅助图" />
+                <el-step title="构建全局图C" />
+                <el-step title="构造扰动图G_D / 辅助图R" />
                 <el-step title="GNN + 训练 VAE" />
               </el-steps>
               <el-scrollbar class="checkpoint-scroll" max-height="190px">

@@ -111,14 +111,17 @@ def scenario_config_to_yaml(name: str, scenarios: ScenarioConfig) -> Dict[str, o
         "name": sanitize_id(name),
         "delays": [
             {
-                "event_anchor_id": item.event_anchor_id,
+                "train_id": item.train_id,
+                "station": item.station,
+                "event_type": item.event_type,
                 "seconds": int(item.seconds),
             }
             for item in scenarios.delays
         ],
         "speed_limits": [
             {
-                "section_anchor_id": item.section_anchor_id,
+                "start_station": item.start_station,
+                "end_station": item.end_station,
                 "start_time": seconds_to_hms(item.start_time),
                 "duration": int(item.duration),
                 "limit_speed": clean_number(item.limit_speed),

@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 
 import { api, ApiError } from '@/api/client'
 import { Refresh } from '@/icons'
-import type { ScenarioOptions } from '@/types'
+import type { JsonObject, ScenarioOptions } from '@/types'
 
 type ScenarioDelayForm = { event_anchor_id: string; seconds: number }
 type ScenarioSpeedLimitForm = {
@@ -13,9 +13,10 @@ type ScenarioSpeedLimitForm = {
   limit_speed: number
 }
 export type ScenarioPayload = {
-  delays: Array<{ event_anchor_id: string; seconds: number }>
+  delays: Array<{ train_id: string; station: string; event_type: string; seconds: number }>
   speed_limits: Array<{
-    section_anchor_id: string
+    start_station: string
+    end_station: string
     start_time: string
     duration: number
     limit_speed: number
@@ -31,22 +32,25 @@ const props = withDefaults(
     submitting?: boolean
     initialScenarioId?: string
     optionsScenarioId?: string
+    existingScenario?: JsonObject | null
+    title?: string
   }>(),
   {
     busy: false,
     submitting: false,
     initialScenarioId: '',
     optionsScenarioId: '',
+    existingScenario: null,
+    title: '编辑扰动事件',
   },
 )
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  submit: [payload: { scenarioId: string; overwrite: boolean; data: ScenarioPayload }]
+  submit: [payload: { scenarioId: string; data: ScenarioPayload }]
 }>()
 
 const scenarioId = ref('')
-const overwrite = ref(false)
 const options = ref<ScenarioOptions | null>(null)
 const delays = ref<ScenarioDelayForm[]>([])
 const speedLimits = ref<ScenarioSpeedLimitForm[]>([])
@@ -56,6 +60,20 @@ let requestSeq = 0
 
 const eventOptions = computed(() => options.value?.event_anchors ?? [])
 const sectionOptions = computed(() => options.value?.section_anchors ?? [])
+const eventSelectOptions = computed(() =>
+  eventOptions.value.map((item) => ({
+    value: item.anchor_id,
+    label: `${item.train_id} · ${item.station} · ${item.event_type} · ${item.planned_time_text}`,
+  })),
+)
+const sectionSelectOptions = computed(() =>
+  sectionOptions.value.map((item) => ({
+    value: item.anchor_id,
+    label: `${item.start_station} -> ${item.end_station}`,
+  })),
+)
+const eventOptionById = computed(() => new Map(eventOptions.value.map((item) => [item.anchor_id, item])))
+const sectionOptionById = computed(() => new Map(sectionOptions.value.map((item) => [item.anchor_id, item])))
 
 watch(
   () => [props.modelValue, props.projectId, props.scenarioSetId, props.optionsScenarioId, props.initialScenarioId] as const,
@@ -89,6 +107,7 @@ async function loadOptions() {
     const result = await api.readScenarioOptions(projectId, props.scenarioSetId, scenarioIdForOptions)
     if (seq !== requestSeq || projectId !== props.projectId) return
     options.value = result
+    resetForm()
   } catch (error) {
     if (seq !== requestSeq || projectId !== props.projectId) return
     options.value = null
@@ -102,9 +121,16 @@ async function loadOptions() {
 
 function resetForm() {
   scenarioId.value = props.initialScenarioId
-  overwrite.value = false
-  delays.value = []
-  speedLimits.value = []
+  delays.value = scenarioList(props.existingScenario?.delays).map((item) => ({
+    event_anchor_id: eventAnchorIdForScenario(item),
+    seconds: Math.floor(positiveNumber(numberValue(item.seconds), 600)),
+  }))
+  speedLimits.value = scenarioList(props.existingScenario?.speed_limits).map((item) => ({
+    section_anchor_id: sectionAnchorIdForScenario(item),
+    start_time: formatStartTime(item.start_time),
+    duration: Math.floor(positiveNumber(numberValue(item.duration), 1800)),
+    limit_speed: Math.max(0, numberValue(item.limit_speed) ?? 160),
+  }))
   errorMessage.value = ''
 }
 
@@ -135,28 +161,87 @@ function removeSpeedLimitRow(index: number) {
 function submitScenario() {
   emit('submit', {
     scenarioId: scenarioId.value.trim(),
-    overwrite: overwrite.value,
     data: {
       delays: delays.value
         .filter((item) => item.event_anchor_id)
-        .map((item) => ({
-          event_anchor_id: item.event_anchor_id,
-          seconds: Math.floor(positiveNumber(item.seconds, 600)),
-        })),
+        .map((item) => {
+          const anchor = eventOptionById.value.get(item.event_anchor_id)
+          return {
+            train_id: anchor?.train_id ?? '',
+            station: anchor?.station ?? '',
+            event_type: anchor?.event_type ?? '',
+            seconds: Math.floor(positiveNumber(item.seconds, 600)),
+          }
+        })
+        .filter((item) => item.train_id && item.station && item.event_type),
       speed_limits: speedLimits.value
         .filter((item) => item.section_anchor_id)
-        .map((item) => ({
-          section_anchor_id: item.section_anchor_id,
-          start_time: item.start_time || '08:00:00',
-          duration: Math.floor(positiveNumber(item.duration, 1800)),
-          limit_speed: Math.max(0, Number.isFinite(item.limit_speed) ? item.limit_speed : 160),
-        })),
+        .map((item) => {
+          const anchor = sectionOptionById.value.get(item.section_anchor_id)
+          return {
+            start_station: anchor?.start_station ?? '',
+            end_station: anchor?.end_station ?? '',
+            start_time: item.start_time || '08:00:00',
+            duration: Math.floor(positiveNumber(item.duration, 1800)),
+            limit_speed: Math.max(0, Number.isFinite(item.limit_speed) ? item.limit_speed : 160),
+          }
+        })
+        .filter((item) => item.start_station && item.end_station),
     },
   })
 }
 
+function eventAnchorIdForScenario(item: JsonObject) {
+  const anchorId = stringValue(item.event_anchor_id)
+  if (anchorId) return anchorId
+  const trainId = stringValue(item.train_id)
+  const station = stringValue(item.station)
+  const eventType = stringValue(item.event_type)
+  return eventOptions.value.find(
+    (option) => option.train_id === trainId && option.station === station && option.event_type === eventType,
+  )?.anchor_id ?? ''
+}
+
+function sectionAnchorIdForScenario(item: JsonObject) {
+  const anchorId = stringValue(item.section_anchor_id)
+  if (anchorId) return anchorId
+  const startStation = stringValue(item.start_station)
+  const endStation = stringValue(item.end_station)
+  return sectionOptions.value.find(
+    (option) => option.start_station === startStation && option.end_station === endStation,
+  )?.anchor_id ?? ''
+}
+
+function scenarioList(value: unknown): JsonObject[] {
+  return Array.isArray(value) ? value.filter(isRecord) : []
+}
+
+function isRecord(value: unknown): value is JsonObject {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value : String(value ?? '')
+}
+
+function numberValue(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
 function positiveNumber(value: number | null | undefined, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function formatStartTime(value: unknown) {
+  if (typeof value === 'string') return value
+  const number = numberValue(value)
+  if (number == null) return '08:00:00'
+  const total = Math.max(0, Math.floor(number))
+  const hour = Math.floor(total / 3600)
+  const minute = Math.floor((total % 3600) / 60)
+  const second = total % 60
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`
 }
 
 function formatError(error: unknown) {
@@ -169,7 +254,7 @@ function formatError(error: unknown) {
 <template>
   <el-dialog
     :model-value="modelValue"
-    title="新增场景"
+    :title="title"
     width="920px"
     @update:model-value="emit('update:modelValue', $event)"
   >
@@ -186,10 +271,7 @@ function formatError(error: unknown) {
           <el-input :model-value="scenarioSetId" disabled />
         </el-form-item>
         <el-form-item label="场景 ID">
-          <el-input v-model="scenarioId" :disabled="busy" />
-        </el-form-item>
-        <el-form-item label="覆盖">
-          <el-switch v-model="overwrite" :disabled="busy" />
+          <el-input v-model="scenarioId" disabled />
         </el-form-item>
         <el-alert
           title="中断按 limit_speed = 0 记录，与 core 的场景格式保持一致。"
@@ -201,14 +283,13 @@ function formatError(error: unknown) {
         <el-table :data="delays" empty-text="暂无晚点扰动">
           <el-table-column label="计划事件" min-width="280">
             <template #default="{ row }">
-              <el-select v-model="row.event_anchor_id" filterable class="full-width" :disabled="busy">
-                <el-option
-                  v-for="item in eventOptions"
-                  :key="item.anchor_id"
-                  :label="`${item.train_id} · ${item.station} · ${item.event_type} · ${item.planned_time_text}`"
-                  :value="item.anchor_id"
-                />
-              </el-select>
+              <el-select-v2
+                v-model="row.event_anchor_id"
+                filterable
+                class="full-width"
+                :disabled="busy"
+                :options="eventSelectOptions"
+              />
             </template>
           </el-table-column>
           <el-table-column label="晚点秒数" width="180">
@@ -232,14 +313,13 @@ function formatError(error: unknown) {
         <el-table :data="speedLimits" empty-text="暂无限速或中断扰动">
           <el-table-column label="区间" min-width="240">
             <template #default="{ row }">
-              <el-select v-model="row.section_anchor_id" filterable class="full-width" :disabled="busy">
-                <el-option
-                  v-for="item in sectionOptions"
-                  :key="item.anchor_id"
-                  :label="`${item.start_station} -> ${item.end_station}`"
-                  :value="item.anchor_id"
-                />
-              </el-select>
+              <el-select-v2
+                v-model="row.section_anchor_id"
+                filterable
+                class="full-width"
+                :disabled="busy"
+                :options="sectionSelectOptions"
+              />
             </template>
           </el-table-column>
           <el-table-column label="开始时间" width="150">
@@ -289,5 +369,9 @@ function formatError(error: unknown) {
 <style scoped>
 .scenario-dialog-body {
   min-height: 420px;
+}
+
+.full-width {
+  width: 100%;
 }
 </style>

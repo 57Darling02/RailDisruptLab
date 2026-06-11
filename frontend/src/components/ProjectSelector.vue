@@ -21,21 +21,9 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   visibleChange: [visible: boolean]
   search: [query: string]
-  create: [projectId: string]
+  create: []
   delete: [projectId: string]
 }>()
-
-function handleCreate() {
-  void ElMessageBox.prompt('项目 ID', '新建项目', {
-    confirmButtonText: '创建',
-    cancelButtonText: '取消',
-    inputPattern: /\S+/,
-    inputErrorMessage: '请输入项目 ID',
-  }).then(({ value }) => {
-    const projectId = String(value || '').trim()
-    if (projectId) emit('create', projectId)
-  })
-}
 
 function handleDelete(projectId: string) {
   if (!projectId) return
@@ -95,7 +83,7 @@ function handleDelete(projectId: string) {
           plain
           :icon="Plus"
           :disabled="busy"
-          @click.stop="handleCreate"
+          @click.stop="emit('create')"
         >
           新建项目
         </el-button>
@@ -131,4 +119,5 @@ function handleDelete(projectId: string) {
 .project-create-button {
   width: 100%;
 }
+
 </style>

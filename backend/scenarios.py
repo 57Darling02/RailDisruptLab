@@ -226,8 +226,15 @@ def generate_simulated_payload(
     delays: List[Dict[str, object]] = []
     speed_limits: List[Dict[str, object]] = []
     for _level, low, high in weighted_level_sequence(rng, DELAY_LEVELS, delay_count):
-        _train_id, _station, _event_type, _event_time, event_anchor_id = rng.choice(base.event_candidates)
-        delays.append({"event_anchor_id": event_anchor_id, "seconds": rng.randint(low, high)})
+        train_id, station, event_type, _event_time, _event_anchor_id = rng.choice(base.event_candidates)
+        delays.append(
+            {
+                "train_id": train_id,
+                "station": station,
+                "event_type": event_type,
+                "seconds": rng.randint(low, high),
+            }
+        )
     for _level, low, high in weighted_level_sequence(rng, SPEED_LEVELS, speed_count):
         section = rng.choice(base.section_candidates)
         speed_limits.append(speed_payload(base, section, random_window(rng), rng.randint(low, high)))
@@ -298,7 +305,7 @@ def combo_case_payload(
         section = rng.choice(base.section_candidates)
         delay_event = pick_delay_event_by_relation(rng, base, section, relation=space_relation)
         speed_window = window_covering_point(rng, delay_event[3]) if time_relation == "overlap" else window_excluding_point(rng, delay_event[3])
-        delays.append({"event_anchor_id": delay_event[4], "seconds": rng.randint(120, 3600)})
+        delays.append(delay_payload(delay_event, rng.randint(120, 3600)))
         speed_limits.append(speed_payload(base, section, speed_window, rng.choice([40, 80, 160, 200, 250])))
     elif combo_type == "speedlimit_interruption":
         speed_section = rng.choice(base.section_candidates)
@@ -311,7 +318,7 @@ def combo_case_payload(
         interruption_section = rng.choice(base.section_candidates)
         delay_event = pick_delay_event_by_relation(rng, base, interruption_section, relation=space_relation)
         interruption_window = window_covering_point(rng, delay_event[3]) if time_relation == "overlap" else window_excluding_point(rng, delay_event[3])
-        delays.append({"event_anchor_id": delay_event[4], "seconds": rng.randint(120, 3600)})
+        delays.append(delay_payload(delay_event, rng.randint(120, 3600)))
         speed_limits.append(speed_payload(base, interruption_section, interruption_window, 0))
     elif combo_type == "delay_speedlimit_interruption":
         speed_section = rng.choice(base.section_candidates)
@@ -319,7 +326,7 @@ def combo_case_payload(
         delay_event = pick_delay_event_by_relation(rng, base, speed_section, relation=space_relation)
         speed_window = window_covering_point(rng, delay_event[3])
         interruption_window = window_related_to_window(rng, speed_window, overlap=(time_relation == "overlap"))
-        delays.append({"event_anchor_id": delay_event[4], "seconds": rng.randint(120, 3600)})
+        delays.append(delay_payload(delay_event, rng.randint(120, 3600)))
         speed_limits.append(speed_payload(base, speed_section, speed_window, rng.choice([40, 80, 160, 200, 250])))
         speed_limits.append(speed_payload(base, interruption_section, interruption_window, 0))
     else:
@@ -335,10 +342,21 @@ def speed_payload(
     limit_speed: float,
 ) -> Dict[str, object]:
     return {
-        "section_anchor_id": base.section_anchor_by_key[section].anchor_id,
+        "start_station": section[0],
+        "end_station": section[1],
         "start_time": seconds_to_hms(window[0]),
         "duration": window[1] - window[0],
         "limit_speed": limit_speed,
+    }
+
+
+def delay_payload(event: Tuple[str, str, str, int, str], seconds: int) -> Dict[str, object]:
+    train_id, station, event_type, _event_time, _event_anchor_id = event
+    return {
+        "train_id": train_id,
+        "station": station,
+        "event_type": event_type,
+        "seconds": seconds,
     }
 
 

@@ -37,6 +37,7 @@ import type {
   ProjectState,
   ProjectSummary,
   ResourceOption,
+  ScenarioSet,
   ScenarioSummary,
   Task,
 } from '@/types'
@@ -153,7 +154,7 @@ const scenarioSetDialogVisible = ref(false)
 const newScenarioSetId = ref('')
 const scenarioDialogVisible = ref(false)
 const scenarioCreateScenarioSetId = ref('')
-const scenarioDialogInitialId = ref('')
+const scenarioCreateScenarioId = ref('')
 const scenarioCreateFiles = ref({
   timetable_file: null as File | null,
   mileage_file: null as File | null,
@@ -204,7 +205,6 @@ const datasetRunForm = ref<DatasetRunForm>({ ...DEFAULT_DATASET_RUN_FORM })
 
 const selectedModelId = ref('')
 const loadedModelId = ref('')
-const modelDetailRefreshKey = ref(0)
 const modelDetailLoading = ref(false)
 const modelOptions = ref<ResourceOption[]>([])
 const modelOptionsLoading = ref(false)
@@ -287,10 +287,6 @@ const scenarioSetSelectOptions = computed(() =>
     {
       value: loadedScenarioSetId.value,
       label: resourceLabel(scenarioSets.value, 'scenario_set_id', loadedScenarioSetId.value, 'case_count'),
-    },
-    {
-      value: scenarioCreateScenarioSetId.value,
-      label: resourceLabel(scenarioSets.value, 'scenario_set_id', scenarioCreateScenarioSetId.value, 'case_count'),
     },
     {
       value: datasetCreateScenarioSetId.value,
@@ -400,7 +396,6 @@ watch(selectedScenarioSetId, (scenarioSetId) => {
 watch(selectedModelId, (modelId) => {
   loadedModelId.value = modelId
   retrainModelDetail.value = null
-  if (modelId) modelDetailRefreshKey.value += 1
 })
 
 watch(datasetCreateMode, (mode) => {
@@ -552,7 +547,6 @@ function selectFirstOptions() {
   if (readyPendingModel) {
     selectedModelId.value = readyPendingModel.model_id
     loadedModelId.value = readyPendingModel.model_id
-    modelDetailRefreshKey.value += 1
     clearPendingModel()
   } else if (
     !selectedModelId.value ||
@@ -621,6 +615,19 @@ function mergeSelectedResourceOptions(
     result = mergeSelectedResourceOption(result, item.value, item.label)
   }
   return result
+}
+
+function mergeScenarioSet(item: ScenarioSet) {
+  if (!project.value) return
+  project.value = {
+    ...project.value,
+    scenario_sets: [
+      ...project.value.scenario_sets.filter(
+        (scenarioSet) => scenarioSet.scenario_set_id !== item.scenario_set_id,
+      ),
+      item,
+    ],
+  }
 }
 
 function resourceLabel<T extends Record<string, unknown>>(
@@ -713,6 +720,7 @@ function refreshLoadedResourceForTask(task: Task) {
     ['normal_generate', 'scenario_delete', 'generation'].includes(label) &&
     params.scenario_set_id === loadedScenarioSetId.value
   ) {
+    scenarioCategoryDetailLoading.value = false
     scenarioCategoryRefreshKey.value += 1
   }
   if (
@@ -721,9 +729,6 @@ function refreshLoadedResourceForTask(task: Task) {
     params.dataset_id === loadedDatasetId.value
   ) {
     datasetDetailRefreshKey.value += 1
-  }
-  if (loadedModelId.value && label === 'train' && params.model_id === loadedModelId.value) {
-    modelDetailRefreshKey.value += 1
   }
 }
 
@@ -743,13 +748,28 @@ function stopDurationTick() {
 async function createProject(projectId: string) {
   projectId = projectId.trim()
   if (!projectId) return
-  await submitTask('创建项目', async () => {
-    const response = await api.createProject(projectId)
-    trackTask(response.task)
-    selectedProjectId.value = projectId
-    projectOptions.value = [{ label: projectId, value: projectId }]
-    await refreshTasks(false)
-    return response.task
+  await runAction('创建项目', async () => {
+    const createdProject = await api.createProject(projectId)
+    project.value = createdProject
+    selectedProjectId.value = createdProject.project_id
+    projects.value = [
+      ...projects.value.filter((item) => item.project_id !== createdProject.project_id),
+      { project_id: createdProject.project_id, root: createdProject.root },
+    ]
+    projectOptions.value = [{ label: createdProject.project_id, value: createdProject.project_id }]
+    await refreshProjects()
+    return `项目 ${createdProject.project_id} 已创建`
+  })
+}
+
+function openProjectCreatePrompt() {
+  void ElMessageBox.prompt('项目 ID', '新建项目', {
+    confirmButtonText: '创建',
+    cancelButtonText: '取消',
+    inputPattern: /\S+/,
+    inputErrorMessage: '请输入项目 ID',
+  }).then(({ value }) => {
+    void createProject(String(value || ''))
   })
 }
 
@@ -772,15 +792,21 @@ async function removeProject(projectId: string) {
 async function createScenarioSet() {
   const scenarioSetId = newScenarioSetId.value.trim()
   if (!scenarioSetId) return
-  await submitTask('创建场景分类', async () => {
-    const response = await api.createScenarioSet(selectedProjectId.value, scenarioSetId)
-    trackTask(response.task)
-    selectedScenarioSetId.value = scenarioSetId
-    scenarioSetOptions.value = [{ label: scenarioSetId, value: scenarioSetId }]
+  await runAction('创建场景分类', async () => {
+    const createdScenarioSet = await api.createScenarioSet(selectedProjectId.value, scenarioSetId)
+    mergeScenarioSet(createdScenarioSet)
+    selectedScenarioSetId.value = createdScenarioSet.scenario_set_id
+    loadedScenarioSetId.value = createdScenarioSet.scenario_set_id
+    scenarioSetOptions.value = [
+      {
+        label: resourceOptionLabel(createdScenarioSet.scenario_set_id, createdScenarioSet.case_count),
+        value: createdScenarioSet.scenario_set_id,
+      },
+    ]
     newScenarioSetId.value = ''
     scenarioSetDialogVisible.value = false
-    await refreshTasks(false)
-    return response.task
+    await loadSelectedProject(false)
+    return `场景分类 ${createdScenarioSet.scenario_set_id} 已创建`
   })
 }
 
@@ -819,6 +845,7 @@ function reloadSelectedScenarioSetDetail() {
     ElMessage.warning('请先选择场景分类。')
     return
   }
+  scenarioCategoryDetailLoading.value = false
   loadedScenarioSetId.value = selectedScenarioSetId.value
   scenarioCategoryRefreshKey.value += 1
 }
@@ -834,12 +861,11 @@ function reloadSelectedDatasetDetail() {
 
 function reloadSelectedModelDetail() {
   if (!selectedModelId.value) {
-    ElMessage.warning('请先选择模型训练资源。')
+    ElMessage.warning('请先选择模型。')
     return
   }
   loadedModelId.value = selectedModelId.value
   retrainModelDetail.value = null
-  modelDetailRefreshKey.value += 1
 }
 
 async function loadScenarios(
@@ -919,8 +945,12 @@ function reloadScenarioOptionsOnOpen(visible: boolean) {
 
 function openScenarioDialog() {
   if (operationPending.value) return
-  scenarioCreateScenarioSetId.value = selectedScenarioSetId.value
-  scenarioDialogInitialId.value = ''
+  scenarioCreateScenarioSetId.value = loadedScenarioSetId.value || selectedScenarioSetId.value
+  if (!scenarioCreateScenarioSetId.value) {
+    ElMessage.warning('请先选择场景分类。')
+    return
+  }
+  scenarioCreateScenarioId.value = ''
   scenarioCreateFiles.value = { timetable_file: null, mileage_file: null }
   scenarioCreateTimetableFiles.value = []
   scenarioCreateMileageFiles.value = []
@@ -936,9 +966,9 @@ function setScenarioCreateMileageFile(file: UploadFile) {
 }
 
 async function createScenarioCase() {
-  const scenarioId = scenarioDialogInitialId.value.trim()
   const scenarioSetId = scenarioCreateScenarioSetId.value.trim()
-  if (!scenarioId || !scenarioSetId) {
+  const scenarioId = scenarioCreateScenarioId.value.trim()
+  if (!scenarioSetId || !scenarioId) {
     ElMessage.warning('请填写场景 ID 并选择场景分类。')
     return
   }
@@ -957,10 +987,11 @@ async function createScenarioCase() {
     selectedScenarioSetId.value = scenarioSetId
     loadedScenarioSetId.value = scenarioSetId
     selectedScenarioId.value = scenarioId
+    activePage.value = 'scenario-detail'
     scenarioCategoryRefreshKey.value += 1
     scenarioDialogVisible.value = false
     await loadSelectedProject(false)
-    return `场景 ${scenarioId} 已创建`
+    return `场景 ${scenarioId} 已创建，尚未激活。`
   })
 }
 
@@ -1041,6 +1072,8 @@ async function submitNormalGenerate() {
     trackTask(response.task)
     selectedScenarioSetId.value = scenarioSetId
     loadedScenarioSetId.value = scenarioSetId
+    scenarioCategoryDetailLoading.value = false
+    scenarioCategoryRefreshKey.value += 1
     normalGenerateDialogVisible.value = false
     return response.task
   })
@@ -1446,8 +1479,8 @@ async function submitTrain() {
   if (existingModel && trainDialogMode.value !== 'retrain') {
     try {
       await ElMessageBox.confirm(
-        `模型训练 ${existingModel.model_id} 已存在。重新训练会先删除旧模型产物，再开始训练。`,
-        '覆盖训练模型',
+        `模型 ${existingModel.model_id} 已存在。重新训练会先删除旧模型产物，再开始训练。`,
+        '覆盖模型',
         { type: 'warning', confirmButtonText: '覆盖并训练', cancelButtonText: '取消' },
       )
     } catch {
@@ -1462,7 +1495,6 @@ async function submitTrain() {
     pendingModelTaskId.value = response.task.id
     selectedModelId.value = modelId
     loadedModelId.value = modelId
-    modelDetailRefreshKey.value += 1
     retrainModelDetail.value = null
     trainDialogVisible.value = false
     return response.task
@@ -1472,7 +1504,7 @@ async function submitTrain() {
 function openGenerationDialog(file: ModelCheckpoint) {
   if (operationPending.value) return
   if (!loadedModelId.value) {
-    ElMessage.warning('请先载入模型训练资源。')
+    ElMessage.warning('请先载入模型。')
     return
   }
   generationForm.value.checkpoint = file.relative_path
@@ -1562,8 +1594,8 @@ async function deleteModelById(modelId: string) {
   if (!selectedProjectId.value || !modelId) return
   try {
     await ElMessageBox.confirm(
-      `确认删除模型训练 ${modelId}？该操作会删除模型产物目录。`,
-      '删除模型训练',
+      `确认删除模型 ${modelId}？该操作会删除模型产物目录。`,
+      '删除模型',
       {
         type: 'warning',
         confirmButtonText: '删除',
@@ -1573,7 +1605,7 @@ async function deleteModelById(modelId: string) {
   } catch {
     return
   }
-  await runAction('删除模型训练', async () => {
+  await runAction('删除模型', async () => {
     await api.deleteModel(selectedProjectId.value, modelId)
     if (selectedModelId.value === modelId) {
       selectedModelId.value = ''
@@ -1587,7 +1619,7 @@ async function deleteModelById(modelId: string) {
     }
     modelOptions.value = modelOptions.value.filter((item) => item.value !== modelId)
     await loadSelectedProject(false)
-    return `模型训练 ${modelId} 已删除`
+    return `模型 ${modelId} 已删除`
   })
 }
 
@@ -1750,7 +1782,7 @@ function notifyError(error: unknown) {
               :busy="operationPending"
               @visible-change="reloadProjectOptionsOnOpen"
               @search="loadProjectOptions"
-              @create="createProject"
+              @create="openProjectCreatePrompt"
               @delete="removeProject"
             />
             <el-badge
@@ -1778,9 +1810,21 @@ function notifyError(error: unknown) {
             class="app-main"
           >
             <el-scrollbar ref="mainScrollbar" class="main-scroll">
-              <el-empty v-if="!hasProject" description="还没有可用项目">
-                <el-text type="info">请在顶部项目下拉框中新建项目</el-text>
-              </el-empty>
+              <div v-if="!hasProject" class="primary-empty-panel project-empty-panel">
+                <el-empty :image-size="120">
+                  <template #description>
+                    <div class="primary-empty-title">还没有可用项目</div>
+                  </template>
+                  <el-button
+                    type="primary"
+                    size="large"
+                    :disabled="operationPending"
+                    @click="openProjectCreatePrompt"
+                  >
+                    新建项目
+                  </el-button>
+                </el-empty>
+              </div>
 
               <template v-else>
                 <DashboardView
@@ -1794,6 +1838,9 @@ function notifyError(error: unknown) {
                   :done-task-count="doneTaskCount"
                   :failed-task-count="failedTaskCount"
                   :busy="operationPending"
+                  @create-scenario-set="scenarioSetDialogVisible = true"
+                  @create-dataset="openDatasetCreateDialog"
+                  @train="() => openTrainDialog('create')"
                   @refresh-tasks="refreshTasks"
                 />
 
@@ -1813,8 +1860,8 @@ function notifyError(error: unknown) {
                   @create-scenario-set="scenarioSetDialogVisible = true"
                   @load-scenario-set="reloadSelectedScenarioSetDetail"
                   @delete-scenario-set="deleteScenarioSetById"
-                  @simulate-scenario="openNormalGenerateDialog"
                   @create-scenario="openScenarioDialog"
+                  @simulate-scenario="openNormalGenerateDialog"
                   @delete-scenario="deleteScenario"
                   @view-scenario="viewScenario"
                   @detail-loading-change="scenarioCategoryDetailLoading = $event"
@@ -1858,7 +1905,6 @@ function notifyError(error: unknown) {
 
                 <ModelsView
                   v-else-if="activePage === 'models'"
-                  :key="modelDetailRefreshKey"
                   v-model:selected-model-id="selectedModelId"
                   :selected-project-id="selectedProjectId"
                   :loaded-model-id="loadedModelId"
@@ -1960,6 +2006,12 @@ function notifyError(error: unknown) {
 
     <el-dialog v-model="scenarioDialogVisible" title="新增场景" width="620px">
       <el-form label-width="120px">
+        <el-form-item label="场景分类">
+          <el-input :model-value="scenarioCreateScenarioSetId" disabled />
+        </el-form-item>
+        <el-form-item label="场景 ID">
+          <el-input v-model="scenarioCreateScenarioId" :disabled="operationPending" />
+        </el-form-item>
         <el-form-item label="时刻表">
           <el-upload
             v-model:file-list="scenarioCreateTimetableFiles"
@@ -1983,23 +2035,6 @@ function notifyError(error: unknown) {
           >
             <el-button :disabled="operationPending">上传里程表</el-button>
           </el-upload>
-        </el-form-item>
-        <el-form-item label="场景 ID">
-          <el-input v-model="scenarioDialogInitialId" :disabled="operationPending" />
-        </el-form-item>
-        <el-form-item label="场景分类">
-          <div class="inline-control-row">
-            <RemoteResourceSelect
-              v-model="scenarioCreateScenarioSetId"
-              :options="scenarioSetSelectOptions"
-              placeholder="选择场景分类"
-              :disabled="operationPending"
-              :loading="scenarioSetOptionsLoading"
-              @search="searchScenarioSetOptions"
-              @visible-change="reloadScenarioSetsOnOpen"
-            />
-            <el-button :disabled="operationPending" @click="scenarioSetDialogVisible = true">新增</el-button>
-          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2353,7 +2388,7 @@ function notifyError(error: unknown) {
 
     <el-dialog v-model="generationDialogVisible" title="使用模型生成数据" width="560px">
       <el-form label-width="150px">
-        <el-form-item label="模型训练">
+        <el-form-item label="模型">
           <el-input :model-value="selectedModelId" disabled />
         </el-form-item>
         <el-form-item label="Checkpoint">

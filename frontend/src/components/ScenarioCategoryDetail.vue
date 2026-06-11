@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { api } from '@/api/client'
@@ -33,6 +33,10 @@ let requestSeq = 0
 watch(loading, (value) => {
   emit('loadingChange', value)
 }, { immediate: true })
+
+onBeforeUnmount(() => {
+  emit('loadingChange', false)
+})
 
 const timeOption = computed(() => ({
   tooltip: { trigger: 'axis' },
@@ -119,6 +123,7 @@ watch(
 async function loadDetail() {
   if (!props.projectId || !props.scenarioSetId) {
     analysis.value = null
+    loading.value = false
     return
   }
   const seq = requestSeq + 1
@@ -146,6 +151,7 @@ function scenarioTagType(category: string) {
 }
 
 function scenarioTypeLabel(item: ScenarioVisualizationItem) {
+  if (item.yaml_status === 'invalid') return '文件错误'
   const labels: Record<string, string> = {
     empty: '空场景',
     delay: '纯晚点',
@@ -154,6 +160,18 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
     mixed: '混合',
   }
   return labels[item.category] ?? item.category
+}
+
+function yamlTagType(status: string) {
+  return status === 'invalid' ? 'danger' : 'success'
+}
+
+function yamlLabel(status: string) {
+  const labels: Record<string, string> = {
+    valid: '可解析',
+    invalid: '文件错误',
+  }
+  return labels[status] ?? status
 }
 
 function formatCoverageTooltip(params: unknown, rows: ScenarioCoverageRow[]) {
@@ -217,17 +235,17 @@ defineExpose({ reload: loadDetail })
           <div class="card-header">
             <span>场景资源</span>
             <el-space>
-              <el-button type="primary" :disabled="busy" @click="emit('simulateScenario')">模拟场景</el-button>
               <el-button type="primary" :disabled="busy" @click="emit('createScenario')">新增场景</el-button>
+              <el-button type="primary" :disabled="busy" @click="emit('simulateScenario')">模拟场景</el-button>
             </el-space>
           </div>
         </template>
         <el-table :data="analysis.scenarios" empty-text="暂无场景">
           <el-table-column prop="scenario_id" label="场景 ID" min-width="180" show-overflow-tooltip />
-          <el-table-column label="激活" width="90">
+          <el-table-column label="场景文件" width="110">
             <template #default="{ row }">
-              <el-tag :type="row.activated ? 'success' : 'info'" size="small">
-                {{ row.activated ? '已激活' : '未激活' }}
+              <el-tag :type="yamlTagType(row.yaml_status)" size="small">
+                {{ yamlLabel(row.yaml_status) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -244,6 +262,9 @@ defineExpose({ reload: loadDetail })
           </el-table-column>
           <el-table-column label="中断" width="90">
             <template #default="{ row }">{{ row.counts.interruption }}</template>
+          </el-table-column>
+          <el-table-column label="原因" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.yaml_reason || '-' }}</template>
           </el-table-column>
           <el-table-column label="操作" width="150">
             <template #default="{ row }">
