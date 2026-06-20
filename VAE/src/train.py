@@ -7,7 +7,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 DEFAULT_OUTPUT_DIR = Path("projects/demo/model/default")
 
@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--latent-dim", type=int, default=16)
     parser.add_argument("--message-passing-steps", type=int, default=2)
     parser.add_argument("--epochs", type=int, default=800)
+    parser.add_argument("--checkpoint-every", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=0.0003)
     parser.add_argument("--seed", type=int, default=1)
@@ -30,6 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--anchor-weight", type=float, default=1.0)
     parser.add_argument("--param-weight", type=float, default=2.0)
     parser.add_argument("--kl-weight", type=float, default=0.0015)
+    parser.add_argument("--use-relation-graph", dest="use_relation_graph", action="store_true", default=True)
+    parser.add_argument("--no-relation-graph", dest="use_relation_graph", action="store_false")
     parser.add_argument("--relation-weight", type=float, default=0.5)
     return parser.parse_args()
 
@@ -47,6 +50,9 @@ def main() -> None:
     device = _device(args.device, torch)
     dataset = RailDisturbanceDataset(args.graphs_root, num_instances=args.limit or None)
     first_sample = dataset[0]
+    if args.use_relation_graph != (first_sample.target_relation_x.shape[1] > 0):
+        expected = "enabled" if args.use_relation_graph else "disabled"
+        raise ValueError(f"Training graph relation schema does not match use_relation_graph={expected}.")
     model = RailDisturbanceVAE.from_sample(
         first_sample,
         hidden_dim=args.hidden_dim,
@@ -82,11 +88,13 @@ def main() -> None:
     logger.log(f"schema_summary={output_dir / 'schema_summary.json'}")
     logger.log(f"history={output_dir / 'history.json'}")
     logger.log(f"loss_history={output_dir / 'loss_history.jsonl'}")
-    logger.log(f"best_checkpoint={output_dir / 'best_model.pt'}")
-    logger.log(f"last_checkpoint={output_dir / 'last_model.pt'}")
+    checkpoints_dir = output_dir / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    logger.log(f"checkpoints={checkpoints_dir}")
 
     history: List[Dict[str, float]] = []
     best_metrics: Dict[str, float] | None = None
+    best_path: Path | None = None
     global_step = 0
     try:
         for epoch in range(1, args.epochs + 1):
@@ -148,31 +156,41 @@ def main() -> None:
             averaged["epoch"] = float(epoch)
             history.append(averaged)
             (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
-            if best_metrics is None or averaged["loss"] < best_metrics["loss"]:
+            should_check_checkpoint = epoch % max(1, args.checkpoint_every) == 0 or epoch == args.epochs
+            if should_check_checkpoint and (best_metrics is None or averaged["loss"] < best_metrics["loss"]):
+                previous_best_path = best_path
                 best_metrics = dict(averaged)
-                _save_checkpoint(model, output_dir / "best_model.pt", best_metrics)
-                logger.log(f"Best checkpoint updated: {output_dir / 'best_model.pt'}")
+                best_path = _checkpoint_path(checkpoints_dir, epoch)
+                _save_checkpoint(model, best_path, best_metrics)
+                _delete_unreferenced(previous_best_path, keep={best_path})
+                logger.log(f"Best checkpoint updated: {best_path}")
             logger.epoch_end(epoch, args.epochs, averaged, time.perf_counter() - epoch_start)
 
         last_metrics = dict(history[-1]) if history else {}
-        _save_checkpoint(model, output_dir / "last_model.pt", last_metrics)
+        last_epoch = int(last_metrics.get("epoch", 0))
+        best_epoch = int(best_metrics.get("epoch", 0)) if best_metrics else 0
+        last_path = _checkpoint_path(checkpoints_dir, last_epoch) if last_epoch else None
+        if last_path and last_path != best_path:
+            _save_checkpoint(model, last_path, last_metrics)
+        keep_paths = {path for path in (best_path, last_path) if path is not None}
+        _cleanup_checkpoints(checkpoints_dir, keep_paths)
         (output_dir / "training_summary.json").write_text(
             json.dumps(
                 {
-                    "last_epoch": int(last_metrics.get("epoch", 0)),
+                    "last_epoch": last_epoch,
                     "last_metrics": last_metrics,
-                    "best_epoch": int(best_metrics.get("epoch", 0)) if best_metrics else 0,
+                    "best_epoch": best_epoch,
                     "best_metrics": best_metrics or {},
-                    "last_model": str((output_dir / "last_model.pt").resolve()).replace("\\", "/"),
-                    "best_model": str((output_dir / "best_model.pt").resolve()).replace("\\", "/"),
+                    "last_checkpoint": _relative_checkpoint(output_dir, last_path),
+                    "best_checkpoint": _relative_checkpoint(output_dir, best_path),
                 },
                 ensure_ascii=False,
                 indent=2,
             ),
             encoding="utf-8",
         )
-        logger.log(f"Last checkpoint written: {output_dir / 'last_model.pt'}")
-        logger.log(f"Best checkpoint: {output_dir / 'best_model.pt'}")
+        logger.log(f"Last checkpoint: {last_path}")
+        logger.log(f"Best checkpoint: {best_path}")
     finally:
         logger.close()
 
@@ -186,6 +204,7 @@ def _device(value: str, torch_module) -> object:
 def _save_checkpoint(model, path: Path, metrics: Dict[str, float]) -> None:
     import torch
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
             "state_dict": model.state_dict(),
@@ -194,6 +213,38 @@ def _save_checkpoint(model, path: Path, metrics: Dict[str, float]) -> None:
         },
         path,
     )
+
+
+def _checkpoint_path(checkpoints_dir: Path, epoch: int) -> Path:
+    return checkpoints_dir / f"epoch_{max(0, int(epoch)):06d}.pt"
+
+
+def _relative_checkpoint(output_dir: Path, path: Path | None) -> str:
+    if path is None:
+        return ""
+    try:
+        return str(path.resolve().relative_to(output_dir.resolve())).replace("\\", "/")
+    except ValueError:
+        return str(path.resolve()).replace("\\", "/")
+
+
+def _delete_unreferenced(path: Path | None, *, keep: Iterable[Path]) -> None:
+    if path is None:
+        return
+    keep_paths = {item.resolve() for item in keep}
+    if path.resolve() in keep_paths:
+        return
+    if path.is_file():
+        path.unlink()
+
+
+def _cleanup_checkpoints(checkpoints_dir: Path, keep: Iterable[Path]) -> None:
+    keep_paths = {path.resolve() for path in keep}
+    if not checkpoints_dir.is_dir():
+        return
+    for path in checkpoints_dir.glob("*.pt"):
+        if path.resolve() not in keep_paths:
+            path.unlink()
 
 
 def _prepare_output_dir(path: Path, *, allowed_root: Path) -> None:
@@ -218,14 +269,20 @@ def _prepare_output_dir(path: Path, *, allowed_root: Path) -> None:
         target = path / filename
         if target.exists():
             target.unlink()
+    checkpoints_dir = path / "checkpoints"
+    if checkpoints_dir.is_dir():
+        for checkpoint in checkpoints_dir.glob("*.pt"):
+            checkpoint.unlink()
 
 
 def _schema_summary(sample, *, architecture_version: int) -> Dict[str, object]:
+    use_relation_graph = sample.target_relation_x.shape[1] > 0
     return {
         "architecture_version": architecture_version,
-        "posterior_encoder": "joint_gnn(C + G_D + R)",
+        "posterior_encoder": "joint_gnn(C + G_D + R)" if use_relation_graph else "joint_gnn(C + G_D)",
         "decoder": "z_conditioned_heads(C embeddings, z) -> task_outputs",
-        "auxiliary_loss": "target_relation_smooth_l1",
+        "use_relation_graph": use_relation_graph,
+        "auxiliary_loss": "target_relation_smooth_l1" if use_relation_graph else "none",
         "pools": {
             str(pool_id): {
                 "size": rule.size,

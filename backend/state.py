@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Dict, List
 
@@ -34,7 +35,6 @@ def get_project_state(project_id: str, projects_root: Path = PROJECTS_ROOT) -> D
         "root": to_posix(layout.root),
         "exists": layout.root.is_dir(),
         "scenario_sets": list_project_scenario_sets(layout),
-        "datasets": list_project_datasets(layout),
         "models": list_project_models(layout),
     }
 
@@ -45,25 +45,30 @@ def list_project_scenario_sets(layout: ProjectLayout) -> List[Dict[str, object]]
     result: List[Dict[str, object]] = []
     for root in sorted(path for path in layout.scenario_sets_dir.iterdir() if path.is_dir()):
         files = list(scenario_files(root))
+        plans_dir = layout.scenario_set(root.name).adjustment_plans_dir
         result.append(
             {
                 "scenario_set_id": root.name,
                 "root": to_posix(root),
                 "case_count": len(files),
+                "plan_count": _dir_count(plans_dir),
             }
         )
     return result
 
 
-def list_project_datasets(layout: ProjectLayout) -> List[Dict[str, object]]:
-    if not layout.datasets_dir.is_dir():
+def list_adjustment_plans(layout: ProjectLayout, scenario_set_id: str) -> List[Dict[str, object]]:
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+    plans_dir = layout.scenario_set(scenario_set_id).adjustment_plans_dir
+    if not plans_dir.is_dir():
         return []
     result: List[Dict[str, object]] = []
-    for root in sorted(path for path in layout.datasets_dir.iterdir() if path.is_dir()):
+    for root in sorted(path for path in plans_dir.iterdir() if path.is_dir()):
         case_stats = _case_stats(root / "cases")
         result.append(
             {
-                "dataset_id": root.name,
+                "scenario_set_id": scenario_set_id,
+                "plan_id": root.name,
                 "root": to_posix(root),
                 "case_count": case_stats["case_count"],
                 "built_count": case_stats["built_count"],
@@ -99,8 +104,8 @@ def list_project_models(layout: ProjectLayout) -> List[Dict[str, object]]:
                 "context_graph_count": len(list(context_dir.glob("*.json"))) if context_dir.is_dir() else 0,
                 "sample_count": len(list(sample_dir.glob("*.json"))) if sample_dir.is_dir() else 0,
                 "has_dataset_profile": (graph_dir / "dataset_profile.json").is_file(),
-                "has_best_model": (root / "best_model.pt").is_file(),
-                "has_last_model": (root / "last_model.pt").is_file(),
+                "has_best_model": _role_checkpoint_exists(root, "best"),
+                "has_last_model": _role_checkpoint_exists(root, "last"),
                 "has_training_summary": (root / "training_summary.json").is_file(),
             }
         )
@@ -112,8 +117,38 @@ def _is_ready_model(root: Path) -> bool:
         (root / "training_summary.json").is_file()
         and (root / "training_config.json").is_file()
         and (root / "schema_summary.json").is_file()
-        and ((root / "best_model.pt").is_file() or (root / "last_model.pt").is_file())
+        and (_role_checkpoint_exists(root, "best") or _role_checkpoint_exists(root, "last"))
     )
+
+
+def _role_checkpoint_exists(root: Path, role: str) -> bool:
+    legacy = root / f"{role}_model.pt"
+    if legacy.is_file():
+        return True
+    summary = _read_json_if_exists(root / "training_summary.json")
+    checkpoint = summary.get(f"{role}_checkpoint") or summary.get(f"{role}_model")
+    path = _checkpoint_path(root, checkpoint)
+    return bool(path and path.is_file())
+
+
+def _checkpoint_path(root: Path, value: object) -> Path | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    path = Path(text)
+    if path.is_absolute():
+        return path
+    return root / path
+
+
+def _read_json_if_exists(path: Path) -> Dict[str, object]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _case_stats(root: Path) -> Dict[str, int]:
@@ -137,3 +172,9 @@ def _case_stats(root: Path) -> Dict[str, int]:
         "solved_count": solved_count,
         "timetable_count": timetable_count,
     }
+
+
+def _dir_count(root: Path) -> int:
+    if not root.is_dir():
+        return 0
+    return sum(1 for path in root.iterdir() if path.is_dir())

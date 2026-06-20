@@ -30,13 +30,14 @@ BUILD_CONFIG_KEYS = (
 )
 
 
-def read_dataset_detail(layout: ProjectLayout, dataset_id: str) -> Dict[str, object]:
-    dataset_id = require_id(dataset_id, "dataset_id")
-    dataset = layout.dataset(dataset_id)
-    if not dataset.root.is_dir():
-        raise FileNotFoundError(f"Dataset not found: {dataset.root}")
+def read_adjustment_plan_detail(layout: ProjectLayout, scenario_set_id: str, plan_id: str) -> Dict[str, object]:
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+    plan_id = require_id(plan_id, "plan_id")
+    plan = layout.scenario_set(scenario_set_id).adjustment_plan(plan_id)
+    if not plan.root.is_dir():
+        raise FileNotFoundError(f"Adjustment plan not found: {plan.root}")
 
-    cases = [read_case_dataset_detail(path) for path in dataset_case_dirs(dataset.cases_dir)]
+    cases = [read_case_adjustment_plan_detail(path) for path in adjustment_plan_case_dirs(plan.cases_dir)]
     build_configs = [
         dict(case["build_config"])
         for case in cases
@@ -50,8 +51,9 @@ def read_dataset_detail(layout: ProjectLayout, dataset_id: str) -> Dict[str, obj
     )
 
     return {
-        "dataset_id": dataset_id,
-        "root": to_posix(dataset.root),
+        "scenario_set_id": scenario_set_id,
+        "plan_id": plan_id,
+        "root": to_posix(plan.root),
         "case_count": len(cases),
         "built_count": sum(1 for case in cases if case.get("is_built")),
         "solved_count": sum(1 for case in cases if case.get("is_solved")),
@@ -70,7 +72,7 @@ def read_dataset_detail(layout: ProjectLayout, dataset_id: str) -> Dict[str, obj
     }
 
 
-def read_case_dataset_detail(case_dir: Path) -> Dict[str, object]:
+def read_case_adjustment_plan_detail(case_dir: Path) -> Dict[str, object]:
     case_id = sanitize_id(case_dir.name)
     build = read_json_if_exists(case_dir / "build.json")
     build_config = build.get("build_config", {}) if isinstance(build.get("build_config"), dict) else {}
@@ -86,26 +88,71 @@ def read_case_dataset_detail(case_dir: Path) -> Dict[str, object]:
     }
 
 
-def read_dataset_solve_analysis(layout: ProjectLayout, dataset_ids: Iterable[str]) -> Dict[str, object]:
-    dataset_ids = [require_id(item, "dataset_id") for item in dataset_ids if str(item or "").strip()]
-    datasets = [read_dataset_solve_state(layout, dataset_id) for dataset_id in dataset_ids]
-    baseline = datasets[0] if datasets else None
+def read_adjustment_plan_solve_analysis(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    plan_ids: Iterable[str],
+) -> Dict[str, object]:
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+    plan_refs = [
+        {"scenario_set_id": scenario_set_id, "plan_id": require_id(item, "plan_id")}
+        for item in plan_ids
+        if str(item or "").strip()
+    ]
+    return build_adjustment_plan_solve_analysis(layout, plan_refs, scenario_set_id=scenario_set_id)
+
+
+def read_project_adjustment_plan_solve_analysis(
+    layout: ProjectLayout,
+    plan_refs: Iterable[Dict[str, object]],
+) -> Dict[str, object]:
+    return build_adjustment_plan_solve_analysis(layout, normalize_plan_refs(plan_refs), scenario_set_id="")
+
+
+def build_adjustment_plan_solve_analysis(
+    layout: ProjectLayout,
+    plan_refs: List[Dict[str, str]],
+    *,
+    scenario_set_id: str,
+) -> Dict[str, object]:
+    plans = [
+        read_adjustment_plan_solve_state(layout, ref["scenario_set_id"], ref["plan_id"])
+        for ref in plan_refs
+    ]
+    baseline = plans[0] if plans else None
 
     return {
         "project_id": layout.name,
-        "datasets": datasets,
+        "scenario_set_id": scenario_set_id,
+        "adjustment_plans": plans,
         "metric_labels": METRIC_LABELS,
-        "comparison": compare_to_baseline(baseline, datasets[1:] if baseline else []),
-        "warnings": solve_analysis_warnings(datasets),
+        "comparison": compare_to_baseline(baseline, plans[1:] if baseline else []),
+        "warnings": solve_analysis_warnings(plans),
     }
 
 
-def read_dataset_solve_state(layout: ProjectLayout, dataset_id: str) -> Dict[str, object]:
-    dataset = layout.dataset(dataset_id)
-    if not dataset.root.is_dir():
-        raise FileNotFoundError(f"Dataset not found: {dataset.root}")
+def normalize_plan_refs(plan_refs: Iterable[Dict[str, object]]) -> List[Dict[str, str]]:
+    result: List[Dict[str, str]] = []
+    seen = set()
+    for item in plan_refs:
+        scenario_set_id = require_id(item.get("scenario_set_id"), "scenario_set_id")
+        plan_id = require_id(item.get("plan_id"), "plan_id")
+        key = adjustment_plan_key(scenario_set_id, plan_id)
+        if key in seen:
+            continue
+        result.append({"scenario_set_id": scenario_set_id, "plan_id": plan_id})
+        seen.add(key)
+    return result
 
-    cases = [read_case_solve_state(path) for path in dataset_case_dirs(dataset.cases_dir)]
+
+def read_adjustment_plan_solve_state(layout: ProjectLayout, scenario_set_id: str, plan_id: str) -> Dict[str, object]:
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+    plan_id = require_id(plan_id, "plan_id")
+    plan = layout.scenario_set(scenario_set_id).adjustment_plan(plan_id)
+    if not plan.root.is_dir():
+        raise FileNotFoundError(f"Adjustment plan not found: {plan.root}")
+
+    cases = [read_case_solve_state(path) for path in adjustment_plan_case_dirs(plan.cases_dir)]
     config_counter = Counter(
         config_signature(case["solver_config"])
         for case in cases
@@ -114,8 +161,10 @@ def read_dataset_solve_state(layout: ProjectLayout, dataset_id: str) -> Dict[str
     status_counts = Counter(str(case.get("status", "unknown")) for case in cases)
 
     return {
-        "dataset_id": dataset_id,
-        "root": to_posix(dataset.root),
+        "scenario_set_id": scenario_set_id,
+        "plan_id": plan_id,
+        "plan_key": adjustment_plan_key(scenario_set_id, plan_id),
+        "root": to_posix(plan.root),
         "case_count": len(cases),
         "solved_count": sum(1 for case in cases if case.get("is_solved")),
         "config_known_count": sum(1 for case in cases if case.get("solver_config")),
@@ -174,29 +223,33 @@ def compare_to_baseline(
     candidates: List[Dict[str, object]],
 ) -> Dict[str, object]:
     if not baseline:
-        return {"baseline_dataset_id": "", "rows": []}
+        return {"baseline_plan_id": "", "baseline_plan_key": "", "rows": []}
     baseline_cases = {
         str(case.get("case_id", "")): case
         for case in baseline.get("cases", [])
         if isinstance(case, dict)
     }
     rows: List[Dict[str, object]] = []
-    for dataset in candidates:
-        for case in dataset.get("cases", []):
+    for plan in candidates:
+        for case in plan.get("cases", []):
             if not isinstance(case, dict):
                 continue
             baseline_case = baseline_cases.get(str(case.get("case_id", "")))
             if not baseline_case:
                 continue
-            rows.extend(compare_case_metrics(str(dataset["dataset_id"]), baseline_case, case))
+            rows.extend(compare_case_metrics(plan, baseline_case, case))
     return {
-        "baseline_dataset_id": baseline["dataset_id"],
+        "baseline_plan_id": baseline["plan_id"],
+        "baseline_plan_key": adjustment_plan_key(
+            str(baseline.get("scenario_set_id") or ""),
+            str(baseline.get("plan_id") or ""),
+        ),
         "rows": rows,
     }
 
 
 def compare_case_metrics(
-    dataset_id: str,
+    plan: Dict[str, object],
     baseline_case: Dict[str, object],
     candidate_case: Dict[str, object],
 ) -> List[Dict[str, object]]:
@@ -206,6 +259,9 @@ def compare_case_metrics(
         return []
 
     rows: List[Dict[str, object]] = []
+    scenario_set_id = str(plan.get("scenario_set_id") or "")
+    plan_id = str(plan.get("plan_id") or "")
+    plan_key = adjustment_plan_key(scenario_set_id, plan_id)
     for key, label in METRIC_LABELS.items():
         baseline_value = number_or_none(baseline_metrics.get(key))
         candidate_value = number_or_none(candidate_metrics.get(key))
@@ -214,7 +270,9 @@ def compare_case_metrics(
         delta = candidate_value - baseline_value
         rows.append(
             {
-                "dataset_id": dataset_id,
+                "scenario_set_id": scenario_set_id,
+                "plan_id": plan_id,
+                "plan_key": plan_key,
                 "case_id": candidate_case.get("case_id", ""),
                 "metric": key,
                 "metric_label": label,
@@ -228,48 +286,49 @@ def compare_case_metrics(
     return rows
 
 
-def solve_analysis_warnings(datasets: List[Dict[str, object]]) -> List[Dict[str, object]]:
+def solve_analysis_warnings(plans: List[Dict[str, object]]) -> List[Dict[str, object]]:
     warnings: List[Dict[str, object]] = []
-    for dataset in datasets:
-        dataset_id = str(dataset.get("dataset_id", ""))
-        case_count = int(dataset.get("case_count", 0) or 0)
-        solved_count = int(dataset.get("solved_count", 0) or 0)
-        config_known_count = int(dataset.get("config_known_count", 0) or 0)
+    for plan in plans:
+        plan_id = str(plan.get("plan_id", ""))
+        plan_label = adjustment_plan_label(plan)
+        case_count = int(plan.get("case_count", 0) or 0)
+        solved_count = int(plan.get("solved_count", 0) or 0)
+        config_known_count = int(plan.get("config_known_count", 0) or 0)
         if case_count and solved_count < case_count:
             warnings.append(
                 {
                     "type": "incomplete",
-                    "dataset_id": dataset_id,
-                    "message": f"{dataset_id} 求解数据不完整：{solved_count}/{case_count}。",
+                    "plan_id": plan_id,
+                    "message": f"{plan_label} 求解数据不完整：{solved_count}/{case_count}。",
                 }
             )
         if case_count and config_known_count < case_count:
             warnings.append(
                 {
                     "type": "unknown_solver_config",
-                    "dataset_id": dataset_id,
-                    "message": f"{dataset_id} 有 {case_count - config_known_count} 个实例缺少求解器配置记录。",
+                    "plan_id": plan_id,
+                    "message": f"{plan_label} 有 {case_count - config_known_count} 个实例缺少求解器配置记录。",
                 }
             )
-        if not bool(dataset.get("config_consistent", True)):
+        if not bool(plan.get("config_consistent", True)):
             warnings.append(
                 {
                     "type": "mixed_solver_config",
-                    "dataset_id": dataset_id,
-                    "message": f"{dataset_id} 内部存在多组求解器配置。",
+                    "plan_id": plan_id,
+                    "message": f"{plan_label} 内部存在多组求解器配置。",
                 }
             )
 
     known_signatures = {
-        config_signature(dataset.get("solver_config", {}))
-        for dataset in datasets
-        if dataset.get("solver_config")
+        config_signature(plan.get("solver_config", {}))
+        for plan in plans
+        if plan.get("solver_config")
     }
     if len(known_signatures) > 1:
         warnings.append(
             {
                 "type": "solver_config_mismatch",
-                "dataset_id": "",
+                "plan_id": "",
                 "message": "检测到求解器配置不一致，求解行为对比可能不准确。",
             }
         )
@@ -306,7 +365,17 @@ def metric_values(cases: List[Dict[str, object]], key: str) -> List[float]:
     return values
 
 
-def dataset_case_dirs(cases_dir: Path) -> List[Path]:
+def adjustment_plan_key(scenario_set_id: str, plan_id: str) -> str:
+    return f"{scenario_set_id}/{plan_id}"
+
+
+def adjustment_plan_label(plan: Dict[str, object]) -> str:
+    scenario_set_id = str(plan.get("scenario_set_id") or "")
+    plan_id = str(plan.get("plan_id") or "")
+    return adjustment_plan_key(scenario_set_id, plan_id) if scenario_set_id else plan_id
+
+
+def adjustment_plan_case_dirs(cases_dir: Path) -> List[Path]:
     if not cases_dir.is_dir():
         return []
     return sorted(path for path in cases_dir.iterdir() if path.is_dir())

@@ -5,7 +5,6 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
-from backend.analysis.timetable import export_dataset_timetables
 from backend.scenarios import add_scenario, create_scenario_set, delete_scenario, normal_generate
 from core.project_layout import ProjectLayout, require_id, sanitize_id
 from core.vae_learning_graph import (
@@ -14,8 +13,9 @@ from core.vae_learning_graph import (
     DEFAULT_MAX_SLOTS,
     DEFAULT_SECTION_ORDER_WINDOW,
     DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
+    DEFAULT_USE_RELATION_GRAPH,
 )
-from backend.workflow import build_dataset, create_dataset, delete_project, generate_scenarios, new_project, solve_dataset, train_model
+from backend.workflow import build_adjustment_plan, delete_project, generate_scenarios, new_project, solve_adjustment_plan, train_model
 
 
 TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
@@ -36,7 +36,6 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "combo_per_type": 10,
         "overwrite": True,
     },
-    "dataset_create": {"exist_ok": False},
     "build": {
         "scenario_id": "",
         "objective_delay_weight": 1.0,
@@ -57,10 +56,6 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "threads": 0,
         "skip_solved": False,
     },
-    "export_timetable": {
-        "case_id": "",
-        "limit": 0,
-    },
     "train": {
         "max_slots": DEFAULT_MAX_SLOTS,
         "event_time_window": DEFAULT_EVENT_TIME_WINDOW,
@@ -70,6 +65,7 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "latent_dim": 16,
         "message_passing_steps": 2,
         "epochs": 800,
+        "checkpoint_every": 5,
         "batch_size": 8,
         "lr": 0.0003,
         "seed": 1,
@@ -79,6 +75,7 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "anchor_weight": 1.0,
         "param_weight": 2.0,
         "kl_weight": 0.0015,
+        "use_relation_graph": DEFAULT_USE_RELATION_GRAPH,
         "relation_weight": 0.5,
     },
     "generation": {
@@ -101,10 +98,8 @@ TASK_REQUIRED: Dict[str, tuple[str, ...]] = {
     "scenario_add": ("scenario_set_id", "scenario_id"),
     "scenario_delete": ("scenario_set_id", "scenario_id"),
     "normal_generate": ("scenario_set_id",),
-    "dataset_create": ("dataset_id",),
-    "build": ("scenario_set_id", "dataset_id"),
-    "solve": ("dataset_id",),
-    "export_timetable": ("dataset_id",),
+    "build": ("scenario_set_id", "plan_id"),
+    "solve": ("scenario_set_id", "plan_id"),
     "train": ("model_id", "scenario_set_id"),
     "generation": ("model_id", "checkpoint", "scenario_set_id"),
 }
@@ -259,17 +254,11 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             combo_per_type=int_param(params, "combo_per_type"),
             overwrite=bool_param(params, "overwrite"),
         )
-    elif action == "dataset_create":
-        create_dataset(
-            layout,
-            text_param(params, "dataset_id"),
-            exist_ok=bool_param(params, "exist_ok"),
-        )
     elif action == "build":
-        build_dataset(
+        build_adjustment_plan(
             layout,
             text_param(params, "scenario_set_id"),
-            text_param(params, "dataset_id"),
+            text_param(params, "plan_id"),
             scenario_id=text_param(params, "scenario_id"),
             objective_delay_weight=float_param(params, "objective_delay_weight"),
             objective_mode=text_param(params, "objective_mode"),
@@ -282,22 +271,16 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             tolerance_delay_seconds=int_param(params, "tolerance_delay_seconds"),
         )
     elif action == "solve":
-        solve_dataset(
+        solve_adjustment_plan(
             layout,
-            text_param(params, "dataset_id"),
+            text_param(params, "scenario_set_id"),
+            text_param(params, "plan_id"),
             case_id=text_param(params, "case_id"),
             limit=int_param(params, "limit"),
             time_limit=float_param(params, "time_limit"),
             mip_gap=float_param(params, "mip_gap"),
             threads=int_param(params, "threads"),
             skip_solved=bool_param(params, "skip_solved"),
-        )
-    elif action == "export_timetable":
-        export_dataset_timetables(
-            layout,
-            text_param(params, "dataset_id"),
-            case_id=text_param(params, "case_id"),
-            limit=int_param(params, "limit"),
         )
     elif action == "train":
         train_model(
@@ -312,6 +295,7 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             latent_dim=int_param(params, "latent_dim"),
             message_passing_steps=int_param(params, "message_passing_steps"),
             epochs=int_param(params, "epochs"),
+            checkpoint_every=int_param(params, "checkpoint_every"),
             batch_size=int_param(params, "batch_size"),
             lr=float_param(params, "lr"),
             seed=int_param(params, "seed"),
@@ -321,6 +305,7 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             anchor_weight=float_param(params, "anchor_weight"),
             param_weight=float_param(params, "param_weight"),
             kl_weight=float_param(params, "kl_weight"),
+            use_relation_graph=bool_param(params, "use_relation_graph"),
             relation_weight=float_param(params, "relation_weight"),
         )
     elif action == "generation":

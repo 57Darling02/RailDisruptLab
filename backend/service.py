@@ -6,28 +6,32 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from backend.analysis.dataset import read_dataset_detail, read_dataset_solve_analysis
+from backend.analysis.adjustment_plan import (
+    read_adjustment_plan_detail,
+    read_adjustment_plan_solve_analysis,
+    read_project_adjustment_plan_solve_analysis,
+)
 from backend.scenario_cases import (
     activate_scenario_case,
     create_scenario_case,
     list_scenario_case_options,
     read_scenario_set_analysis,
+    read_scenario_timetable,
     update_scenario_case_sources,
     update_scenario_disturbances,
 )
 from backend.analysis.timetable import read_case_timetable
-from backend.lifecycle import delete_dataset, delete_model, delete_scenario_set, ensure_no_active_reference
+from backend.lifecycle import delete_adjustment_plan, delete_model, delete_scenario_set, ensure_no_active_reference
 from backend.pueue_client import PueueClient
 from backend.repository import ProjectRepository
 from backend.scenarios import create_scenario_set as create_scenario_set_dir, read_scenario_options
 from backend.task_contracts import TASK_DEFAULTS, normalize_project_id, normalize_task_params
-from backend.task_resources import ensure_no_active_conflict
-from backend.workflow import new_project
+from backend.task_resources import RUNNING_TASK_STATUSES, ensure_no_active_conflict
+from backend.workflow import create_adjustment_plan as create_adjustment_plan_dir, new_project
 from core.project_layout import PROJECTS_ROOT, REPO_ROOT, require_id, sanitize_id, to_posix
 
 RESOURCE_OPTION_LABELS = {
     "scenario_sets": ("scenario_set_id", "case_count"),
-    "datasets": ("dataset_id", "case_count"),
     "models": ("model_id", "sample_count"),
 }
 
@@ -107,13 +111,35 @@ class RailGraphBackend:
     def _resource_items(self, project_id: str, resource: str) -> List[Dict[str, object]]:
         if resource == "scenario_sets":
             return self.repository.list_scenario_sets(project_id)
-        if resource == "datasets":
-            return self.repository.list_datasets(project_id)
         if resource == "models":
             return self.repository.list_models(project_id)
         raise ValueError("Unsupported resource: {}".format(resource))
 
+    def list_adjustment_plans(self, project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
+        return self.repository.list_adjustment_plans(project_id, scenario_set_id)
+
+    def list_adjustment_plan_options(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        *,
+        query: str = "",
+        limit: int = 50,
+    ) -> List[Dict[str, object]]:
+        query_text = query.strip().lower()
+        result: List[Dict[str, object]] = []
+        for item in self.repository.list_adjustment_plans(project_id, scenario_set_id):
+            value = str(item.get("plan_id", "") or "")
+            label = resource_option_label(value, item.get("case_count"))
+            if query_text and query_text not in value.lower() and query_text not in label.lower():
+                continue
+            result.append({"label": label, "value": value})
+            if len(result) >= max(1, limit):
+                break
+        return result
+
     def list_scenarios(self, project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
+        self.ensure_no_scenario_set_read_conflict(project_id, scenario_set_id)
         return self.repository.list_scenarios(project_id, scenario_set_id)
 
     def list_scenario_options(
@@ -132,12 +158,19 @@ class RailGraphBackend:
         )
 
     def read_scenario(self, project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
+        self.ensure_no_scenario_case_read_conflict(project_id, scenario_set_id, scenario_id)
         return self.repository.read_scenario(project_id, scenario_set_id, scenario_id)
 
+    def read_scenario_timetable(self, project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
+        self.ensure_no_scenario_case_read_conflict(project_id, scenario_set_id, scenario_id)
+        return read_scenario_timetable(self.repository.layout(project_id), scenario_set_id, scenario_id)
+
     def read_scenario_options(self, project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
+        self.ensure_no_scenario_case_read_conflict(project_id, scenario_set_id, scenario_id)
         return read_scenario_options(self.repository.layout(project_id), scenario_set_id, scenario_id)
 
     def read_scenario_set_visualization(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
+        self.ensure_no_scenario_set_read_conflict(project_id, scenario_set_id)
         return read_scenario_set_analysis(self.repository.layout(project_id), scenario_set_id)
 
     def create_scenario_case(
@@ -222,13 +255,72 @@ class RailGraphBackend:
         *,
         action: str = "scenario_add",
     ) -> None:
-        ensure_no_active_conflict(
-            self.tasks.list_active_tasks(group=normalize_project_id(project_id)),
+        self.ensure_no_resource_conflict(
+            project_id,
             action=action,
             params={
                 "scenario_set_id": scenario_set_id,
                 "scenario_id": scenario_id,
             },
+        )
+
+    def ensure_no_scenario_set_read_conflict(self, project_id: str, scenario_set_id: str) -> None:
+        self.ensure_no_resource_conflict(
+            project_id,
+            action="scenario_set_read",
+            params={"scenario_set_id": scenario_set_id},
+        )
+
+    def ensure_no_scenario_case_read_conflict(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
+    ) -> None:
+        self.ensure_no_resource_conflict(
+            project_id,
+            action="scenario_case_read",
+            params={"scenario_set_id": scenario_set_id, "scenario_id": scenario_id},
+        )
+
+    def ensure_no_adjustment_plan_read_conflict(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        plan_id: str,
+    ) -> None:
+        self.ensure_no_resource_conflict(
+            project_id,
+            action="adjustment_plan_read",
+            params={"scenario_set_id": scenario_set_id, "plan_id": plan_id},
+        )
+
+    def ensure_no_adjustment_plan_case_read_conflict(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        plan_id: str,
+        case_id: str,
+    ) -> None:
+        self.ensure_no_resource_conflict(
+            project_id,
+            action="adjustment_plan_case_read",
+            params={"scenario_set_id": scenario_set_id, "plan_id": plan_id, "case_id": case_id},
+        )
+
+    def ensure_no_resource_conflict(
+        self,
+        project_id: str,
+        *,
+        action: str,
+        params: Dict[str, Any],
+        active_tasks: List[Dict[str, object]] | None = None,
+    ) -> None:
+        project_id = normalize_project_id(project_id)
+        ensure_no_active_conflict(
+            active_tasks if active_tasks is not None else self.tasks.list_active_tasks(group=project_id),
+            action=action,
+            params=params,
         )
 
     def save_task_upload_file(self, project_id: str, task_id: str, filename: str, content: bytes) -> str:
@@ -238,23 +330,60 @@ class RailGraphBackend:
         target.write_bytes(content)
         return to_posix(target)
 
-    def read_case_timetable(self, project_id: str, dataset_id: str, case_id: str) -> Dict[str, object]:
-        return read_case_timetable(self.repository.layout(project_id), dataset_id, case_id)
+    def read_case_timetable(self, project_id: str, scenario_set_id: str, plan_id: str, case_id: str) -> Dict[str, object]:
+        self.ensure_no_adjustment_plan_case_read_conflict(project_id, scenario_set_id, plan_id, case_id)
+        return read_case_timetable(self.repository.layout(project_id), scenario_set_id, plan_id, case_id)
 
-    def list_case_artifacts(self, project_id: str, dataset_id: str) -> List[Dict[str, object]]:
-        return self.repository.list_case_artifacts(project_id, dataset_id)
+    def list_case_artifacts(self, project_id: str, scenario_set_id: str, plan_id: str) -> List[Dict[str, object]]:
+        return self.repository.list_case_artifacts(project_id, scenario_set_id, plan_id)
 
-    def read_dataset_detail(self, project_id: str, dataset_id: str) -> Dict[str, object]:
-        return read_dataset_detail(self.repository.layout(project_id), dataset_id)
+    def read_adjustment_plan_detail(self, project_id: str, scenario_set_id: str, plan_id: str) -> Dict[str, object]:
+        return read_adjustment_plan_detail(self.repository.layout(project_id), scenario_set_id, plan_id)
 
-    def read_dataset_solve_analysis(self, project_id: str, dataset_ids: List[str]) -> Dict[str, object]:
-        return read_dataset_solve_analysis(self.repository.layout(project_id), dataset_ids)
+    def read_adjustment_plan_solve_analysis(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        plan_ids: List[str],
+    ) -> Dict[str, object]:
+        project_id = normalize_project_id(project_id)
+        active_tasks = self.tasks.list_active_tasks(group=project_id)
+        for plan_id in plan_ids:
+            self.ensure_no_resource_conflict(
+                project_id,
+                action="adjustment_plan_read",
+                params={"scenario_set_id": scenario_set_id, "plan_id": plan_id},
+                active_tasks=active_tasks,
+            )
+        return read_adjustment_plan_solve_analysis(self.repository.layout(project_id), scenario_set_id, plan_ids)
+
+    def read_project_adjustment_plan_solve_analysis(
+        self,
+        project_id: str,
+        plan_refs: List[Dict[str, object]],
+    ) -> Dict[str, object]:
+        project_id = normalize_project_id(project_id)
+        active_tasks = self.tasks.list_active_tasks(group=project_id)
+        for ref in plan_refs:
+            self.ensure_no_resource_conflict(
+                project_id,
+                action="adjustment_plan_read",
+                params={
+                    "scenario_set_id": str(ref.get("scenario_set_id") or ""),
+                    "plan_id": str(ref.get("plan_id") or ""),
+                },
+                active_tasks=active_tasks,
+            )
+        return read_project_adjustment_plan_solve_analysis(self.repository.layout(project_id), plan_refs)
 
     def read_training_summary(self, project_id: str, model_id: str) -> Dict[str, object]:
         return self.repository.read_training_summary(project_id, model_id)
 
     def read_model_detail(self, project_id: str, model_id: str) -> Dict[str, object]:
-        return self.repository.read_model_detail(project_id, model_id)
+        project_id = normalize_project_id(project_id)
+        model_id = require_id(model_id, "model_id")
+        detail = self.repository.read_model_detail(project_id, model_id)
+        return merge_model_task_progress(detail, latest_train_task(self.tasks.list_tasks(group=project_id), model_id))
 
     def list_model_files(self, project_id: str, model_id: str) -> List[Dict[str, object]]:
         return self.repository.list_model_files(project_id, model_id)
@@ -387,30 +516,39 @@ class RailGraphBackend:
             label="normal_generate",
         )
 
-    def create_dataset(self, project_id: str, dataset_id: str, *, exist_ok: bool = False) -> Dict[str, object]:
-        return self.submit_task(
-            project_id,
-            "dataset_create",
-            {"dataset_id": dataset_id, "exist_ok": exist_ok},
-            label="dataset_create",
-        )
-
-    def delete_dataset(self, project_id: str, dataset_id: str) -> Dict[str, object]:
+    def create_adjustment_plan(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        plan_id: str,
+        *,
+        exist_ok: bool = False,
+    ) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
-        dataset_id = require_id(dataset_id, "dataset_id")
-        ensure_no_active_reference(
+        scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+        plan_id = require_id(plan_id, "plan_id")
+        create_adjustment_plan_dir(self.repository.layout(project_id), scenario_set_id, plan_id, exist_ok=exist_ok)
+        for item in self.repository.list_adjustment_plans(project_id, scenario_set_id):
+            if item["plan_id"] == plan_id:
+                return item
+        raise FileNotFoundError(f"Adjustment plan not found after create: {scenario_set_id}/{plan_id}")
+
+    def delete_adjustment_plan(self, project_id: str, scenario_set_id: str, plan_id: str) -> Dict[str, object]:
+        project_id = normalize_project_id(project_id)
+        scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+        plan_id = require_id(plan_id, "plan_id")
+        ensure_no_active_conflict(
             self.tasks.list_active_tasks(group=project_id),
-            field="dataset_id",
-            value=dataset_id,
-            action_labels=("dataset_create", "build", "solve", "export_timetable"),
+            action="adjustment_plan_delete",
+            params={"scenario_set_id": scenario_set_id, "plan_id": plan_id},
         )
-        return delete_dataset(self.repository.layout(project_id), dataset_id)
+        return delete_adjustment_plan(self.repository.layout(project_id), scenario_set_id, plan_id)
 
     def build(
         self,
         project_id: str,
         scenario_set_id: str,
-        dataset_id: str,
+        plan_id: str,
         *,
         scenario_id: str = TASK_DEFAULTS["build"]["scenario_id"],
         objective_delay_weight: float = TASK_DEFAULTS["build"]["objective_delay_weight"],
@@ -428,7 +566,7 @@ class RailGraphBackend:
             "build",
             {
                 "scenario_set_id": scenario_set_id,
-                "dataset_id": dataset_id,
+                "plan_id": plan_id,
                 "scenario_id": scenario_id,
                 "objective_delay_weight": objective_delay_weight,
                 "objective_mode": objective_mode,
@@ -446,7 +584,8 @@ class RailGraphBackend:
     def solve(
         self,
         project_id: str,
-        dataset_id: str,
+        scenario_set_id: str,
+        plan_id: str,
         *,
         case_id: str = TASK_DEFAULTS["solve"]["case_id"],
         limit: int = TASK_DEFAULTS["solve"]["limit"],
@@ -459,7 +598,8 @@ class RailGraphBackend:
             project_id,
             "solve",
             {
-                "dataset_id": dataset_id,
+                "scenario_set_id": scenario_set_id,
+                "plan_id": plan_id,
                 "case_id": case_id,
                 "limit": limit,
                 "time_limit": time_limit,
@@ -468,25 +608,6 @@ class RailGraphBackend:
                 "skip_solved": skip_solved,
             },
             label="solve",
-        )
-
-    def export_timetable(
-        self,
-        project_id: str,
-        dataset_id: str,
-        *,
-        case_id: str = TASK_DEFAULTS["export_timetable"]["case_id"],
-        limit: int = TASK_DEFAULTS["export_timetable"]["limit"],
-    ) -> Dict[str, object]:
-        return self.submit_task(
-            project_id,
-            "export_timetable",
-            {
-                "dataset_id": dataset_id,
-                "case_id": case_id,
-                "limit": limit,
-            },
-            label="export_timetable",
         )
 
     def train(
@@ -503,6 +624,7 @@ class RailGraphBackend:
         latent_dim: int = TASK_DEFAULTS["train"]["latent_dim"],
         message_passing_steps: int = TASK_DEFAULTS["train"]["message_passing_steps"],
         epochs: int = TASK_DEFAULTS["train"]["epochs"],
+        checkpoint_every: int = TASK_DEFAULTS["train"]["checkpoint_every"],
         batch_size: int = TASK_DEFAULTS["train"]["batch_size"],
         lr: float = TASK_DEFAULTS["train"]["lr"],
         seed: int = TASK_DEFAULTS["train"]["seed"],
@@ -512,6 +634,7 @@ class RailGraphBackend:
         anchor_weight: float = TASK_DEFAULTS["train"]["anchor_weight"],
         param_weight: float = TASK_DEFAULTS["train"]["param_weight"],
         kl_weight: float = TASK_DEFAULTS["train"]["kl_weight"],
+        use_relation_graph: bool = TASK_DEFAULTS["train"]["use_relation_graph"],
         relation_weight: float = TASK_DEFAULTS["train"]["relation_weight"],
     ) -> Dict[str, object]:
         return self.submit_task(
@@ -528,6 +651,7 @@ class RailGraphBackend:
                 "latent_dim": latent_dim,
                 "message_passing_steps": message_passing_steps,
                 "epochs": epochs,
+                "checkpoint_every": checkpoint_every,
                 "batch_size": batch_size,
                 "lr": lr,
                 "seed": seed,
@@ -537,6 +661,7 @@ class RailGraphBackend:
                 "anchor_weight": anchor_weight,
                 "param_weight": param_weight,
                 "kl_weight": kl_weight,
+                "use_relation_graph": use_relation_graph,
                 "relation_weight": relation_weight,
             },
             label="train",
@@ -610,3 +735,90 @@ class RailGraphBackend:
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
         return path
+
+
+def latest_train_task(tasks: List[Dict[str, object]], model_id: str) -> Dict[str, object] | None:
+    candidates = [
+        task
+        for task in tasks
+        if str(task.get("action") or task.get("label") or "") == "train"
+        and str(dict_value(task.get("params")).get("model_id") or "") == model_id
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda task: int(task.get("id") or 0))
+
+
+def merge_model_task_progress(
+    detail: Dict[str, object],
+    task: Dict[str, object] | None,
+) -> Dict[str, object]:
+    if task is None:
+        return detail
+    progress = dict_value(detail.get("training_progress"))
+    status = str(task.get("status") or "")
+    if status in RUNNING_TASK_STATUSES:
+        if progress.get("status") == "idle":
+            progress["status"] = "graphing"
+            progress["label"] = "构建训练图"
+            progress["detail"] = "训练任务已提交"
+        elif progress.get("status") == "incomplete":
+            progress["status"] = "training"
+        progress["task"] = task_summary(task)
+    elif task_failed(task) and progress.get("status") != "ready":
+        progress["status"] = "failed"
+        progress["label"] = "训练异常"
+        progress["detail"] = "任务日志中包含异常退出信息"
+        progress["task"] = task_summary(task)
+    detail["training_progress"] = progress
+    return detail
+
+
+def task_failed(task: Dict[str, object]) -> bool:
+    status = str(task.get("status") or "")
+    if status in {"Failed", "Killed"}:
+        return True
+    return status == "Done" and detail_indicates_failure(task.get("status_detail"))
+
+
+def detail_indicates_failure(detail: object) -> bool:
+    if detail is None:
+        return False
+    if isinstance(detail, str):
+        return failure_text(detail)
+    if isinstance(detail, (int, float, bool)):
+        return False
+    if isinstance(detail, list):
+        return any(detail_indicates_failure(item) for item in detail)
+    if isinstance(detail, dict):
+        return any(
+            failure_text(str(key))
+            or (
+                isinstance(value, (int, float))
+                and value != 0
+                and any(token in str(key).lower() for token in ("exit", "code", "status"))
+            )
+            or detail_indicates_failure(value)
+            for key, value in detail.items()
+        )
+    return False
+
+
+def failure_text(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ("fail", "error", "killed", "signal", "non-zero", "nonzero"))
+
+
+def task_summary(task: Dict[str, object]) -> Dict[str, object]:
+    return {
+        "id": task.get("id"),
+        "status": task.get("status"),
+        "display_name": task.get("display_name"),
+        "created_at": task.get("created_at"),
+        "started_at": task.get("started_at"),
+        "finished_at": task.get("finished_at"),
+    }
+
+
+def dict_value(value: object) -> Dict[str, object]:
+    return value if isinstance(value, dict) else {}

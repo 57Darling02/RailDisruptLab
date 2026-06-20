@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from backend.analysis.timetable import materialize_case_timetable
 from core.base_context import build_base_context, load_base_context, write_base_context
 from core.disturbance_graph import disturbance_graph_to_scenario
 from core.file_ops import copy_or_link_file
@@ -30,6 +31,7 @@ from core.vae_learning_graph import (
     DEFAULT_EVENT_TOP_K,
     DEFAULT_MAX_SLOTS,
     DEFAULT_SECTION_ORDER_WINDOW,
+    DEFAULT_USE_RELATION_GRAPH,
     infer_math_dataset_schema,
     scenario_config_to_typed_vae_learning_graph,
     typed_generated_graph_to_disturbance_graph,
@@ -40,7 +42,6 @@ from core.vae_learning_graph import (
 def new_project(layout: ProjectLayout) -> None:
     for directory in (
         layout.scenario_sets_dir,
-        layout.datasets_dir,
         layout.model_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
@@ -57,23 +58,30 @@ def delete_project(layout: ProjectLayout, *, force: bool = False) -> None:
     print(f"Project deleted: {layout.root}")
 
 
-def create_dataset(layout: ProjectLayout, dataset_id: str, *, exist_ok: bool = False) -> None:
-    require_project(layout)
-    root = layout.dataset(dataset_id).root
-    if root.exists():
-        if not root.is_dir():
-            raise NotADirectoryError(f"Dataset path is not a directory: {root}")
-        if not exist_ok:
-            raise FileExistsError(f"Dataset already exists: {root}")
-    else:
-        root.mkdir(parents=True, exist_ok=False)
-    print(f"MILP dataset ready: {root}")
-
-
-def build_dataset(
+def create_adjustment_plan(
     layout: ProjectLayout,
     scenario_set_id: str,
-    dataset_id: str,
+    plan_id: str,
+    *,
+    exist_ok: bool = False,
+) -> None:
+    require_project(layout)
+    scenario_set = layout.scenario_set(scenario_set_id)
+    root = scenario_set.adjustment_plan(plan_id).root
+    if root.exists():
+        if not root.is_dir():
+            raise NotADirectoryError(f"Adjustment plan path is not a directory: {root}")
+        if not exist_ok:
+            raise FileExistsError(f"Adjustment plan already exists: {root}")
+    else:
+        root.mkdir(parents=True, exist_ok=False)
+    print(f"Adjustment plan ready: {root}")
+
+
+def build_adjustment_plan(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    plan_id: str,
     *,
     scenario_id: str = "",
     objective_delay_weight: float = 1.0,
@@ -88,17 +96,17 @@ def build_dataset(
 ) -> None:
     docs = load_scenario_documents(layout, scenario_set_id, scenario_id=scenario_id)
     require_activated_scenarios(docs)
-    dataset = layout.dataset(dataset_id)
-    if dataset.root.exists() and not dataset.root.is_dir():
-        raise NotADirectoryError(f"MILP dataset path is not a directory: {dataset.root}")
-    if not dataset.root.is_dir():
-        dataset.root.mkdir(parents=True, exist_ok=False)
-    prepare_output_dir(dataset.root, overwrite=True)
+    plan = layout.scenario_set(scenario_set_id).adjustment_plan(plan_id)
+    if plan.root.exists() and not plan.root.is_dir():
+        raise NotADirectoryError(f"Adjustment plan path is not a directory: {plan.root}")
+    if not plan.root.is_dir():
+        plan.root.mkdir(parents=True, exist_ok=False)
+    prepare_output_dir(plan.root, overwrite=True)
 
     for index, doc in enumerate(docs, start=1):
         started = datetime.now()
         case_id = sanitize_id(doc.name)
-        case_dir = dataset.cases_dir / case_id
+        case_dir = plan.cases_dir / case_id
         record = base_record(index, case_id)
         build_config = {
             "objective_delay_weight": objective_delay_weight,
@@ -181,13 +189,35 @@ def build_dataset(
         )
         print(f"[{index}/{len(docs)}] {record['status']} | {case_id}")
 
-    fail_if_records_failed(read_case_stage_records(dataset.cases_dir, "build.json"), "build")
-    print(f"Dataset built: {dataset.root}")
+    write_json(
+        plan.root / "plan.json",
+        {
+            "plan_id": sanitize_id(plan_id),
+            "scenario_set_id": sanitize_id(scenario_set_id),
+            "scenario_id": sanitize_id(scenario_id) if scenario_id else "",
+            "build_config": {
+                "objective_delay_weight": objective_delay_weight,
+                "objective_mode": objective_mode,
+                "cancellation_enabled": cancellation_enabled,
+                "cancellation_penalty_weight": cancellation_penalty_weight,
+                "arr_arr_headway_seconds": arr_arr_headway_seconds,
+                "dep_dep_headway_seconds": dep_dep_headway_seconds,
+                "dwell_seconds_at_stops": dwell_seconds_at_stops,
+                "big_m": big_m,
+                "tolerance_delay_seconds": tolerance_delay_seconds,
+            },
+            "case_count": len(docs),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        },
+    )
+    fail_if_records_failed(read_case_stage_records(plan.cases_dir, "build.json"), "build")
+    print(f"Adjustment plan built: {plan.root}")
 
 
-def solve_dataset(
+def solve_adjustment_plan(
     layout: ProjectLayout,
-    dataset_id: str,
+    scenario_set_id: str,
+    plan_id: str,
     *,
     case_id: str = "",
     limit: int = 0,
@@ -196,8 +226,8 @@ def solve_dataset(
     threads: int = 0,
     skip_solved: bool = False,
 ) -> None:
-    dataset = layout.dataset(dataset_id)
-    case_dirs = [dataset_case_dir(dataset, case_id)] if case_id else limit_items(dataset_case_dirs(dataset), limit)
+    plan = layout.scenario_set(scenario_set_id).adjustment_plan(plan_id)
+    case_dirs = [plan_case_dir(plan, case_id)] if case_id else limit_items(plan_case_dirs(plan), limit)
     records = [
         solve_case(
             case_dir,
@@ -211,6 +241,7 @@ def solve_dataset(
     ]
 
     fail_if_records_failed(records, "solve")
+    fail_if_derived_records_failed(records, "timetable", "timetable materialization")
     ok_count = sum(1 for record in records if record.get("status") in {"ok", "timeout", "skipped"})
     print(f"Solve finished: {ok_count}/{len(records)} case(s)")
 
@@ -229,7 +260,9 @@ def solve_case(
     lp_path = case_dir / f"{case_id}.lp"
     sol_path = case_dir / f"{case_id}.sol"
     summary_path = case_dir / "core_solve_summary.json"
+    timetable_path = case_dir / "adjusted_timetable.json"
     record = base_record(index, case_id)
+    timetable_record: Dict[str, object] = {"status": "pending"}
     solver_config = {
         "time_limit": max(0.0, float(time_limit or 0.0)),
         "mip_gap": max(0.0, float(mip_gap or 0.0)),
@@ -265,6 +298,8 @@ def solve_case(
             if not isinstance(summary, dict):
                 raise ValueError(f"Solve summary must be an object: {summary_path}")
             record.update(summary)
+        if record.get("status") in {"ok", "timeout", "skipped"} and sol_path.is_file():
+            timetable_record = materialize_case_timetable(case_dir, index)
     except Exception as exc:
         record.update({"status": "failed", "error": str(exc)})
     record["duration_sec"] = elapsed_seconds(started)
@@ -278,12 +313,18 @@ def solve_case(
                 "lp": to_posix(lp_path),
                 "solution": to_posix(sol_path),
                 "solution_csv": to_posix(sol_path.with_suffix(".sol.csv")),
+                "timetable": to_posix(timetable_path),
                 "summary": to_posix(summary_path),
+            },
+            "derived": {
+                "timetable": timetable_record,
             },
         },
     )
-    print(f"[{index}] {record['status']} | {case_id}")
-    return record
+    timetable_status = str(timetable_record.get("status") or "")
+    suffix = f" | timetable:{timetable_status}" if timetable_status and timetable_status != "pending" else ""
+    print(f"[{index}] {record['status']} | {case_id}{suffix}")
+    return {**record, "derived": {"timetable": timetable_record}}
 
 
 def train_model(
@@ -299,6 +340,7 @@ def train_model(
     latent_dim: int = 16,
     message_passing_steps: int = 2,
     epochs: int = 800,
+    checkpoint_every: int = 5,
     batch_size: int = 8,
     lr: float = 0.0003,
     seed: int = 1,
@@ -308,6 +350,7 @@ def train_model(
     anchor_weight: float = 1.0,
     param_weight: float = 2.0,
     kl_weight: float = 0.0015,
+    use_relation_graph: bool = DEFAULT_USE_RELATION_GRAPH,
     relation_weight: float = 0.5,
 ) -> None:
     scenario_set_id = sanitize_id(scenario_set_id)
@@ -328,6 +371,7 @@ def train_model(
             "event_time_window": event_time_window,
             "event_top_k": event_top_k,
             "section_order_window": section_order_window,
+            "use_relation_graph": use_relation_graph,
         },
     )
 
@@ -347,6 +391,8 @@ def train_model(
             str(message_passing_steps),
             "--epochs",
             str(epochs),
+            "--checkpoint-every",
+            str(checkpoint_every),
             "--batch-size",
             str(batch_size),
             "--lr",
@@ -365,6 +411,7 @@ def train_model(
             str(param_weight),
             "--kl-weight",
             str(kl_weight),
+            *relation_graph_cli_args(use_relation_graph),
             "--relation-weight",
             str(relation_weight),
         ]
@@ -567,6 +614,8 @@ def copy_generation_context(source_context_path: Path, target_context_path: Path
 
 def generation_graph_settings(model: Any) -> Dict[str, object]:
     config = read_json_if_exists(model.root / "training_config.json")
+    if "use_relation_graph" not in config:
+        raise ValueError("Model training_config.json is missing use_relation_graph; retrain the model.")
     return {
         "max_slots": int(config.get("max_slots", DEFAULT_MAX_SLOTS) or DEFAULT_MAX_SLOTS),
         "event_time_window": int(config.get("event_time_window", DEFAULT_EVENT_TIME_WINDOW) or DEFAULT_EVENT_TIME_WINDOW),
@@ -574,7 +623,24 @@ def generation_graph_settings(model: Any) -> Dict[str, object]:
         "section_order_window": int(
             config.get("section_order_window", DEFAULT_SECTION_ORDER_WINDOW) or DEFAULT_SECTION_ORDER_WINDOW
         ),
+        "use_relation_graph": graph_setting_bool(config["use_relation_graph"]),
     }
+
+
+def graph_setting_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
+
+def relation_graph_cli_args(use_relation_graph: bool) -> List[str]:
+    return ["--use-relation-graph"] if use_relation_graph else ["--no-relation-graph"]
 
 
 def export_generation_context_graphs(
@@ -731,6 +797,7 @@ def write_generation_context_graph(
         event_time_window=int(graph_settings.get("event_time_window", DEFAULT_EVENT_TIME_WINDOW)),
         event_top_k=int(graph_settings.get("event_top_k", DEFAULT_EVENT_TOP_K)),
         section_order_window=int(graph_settings.get("section_order_window", DEFAULT_SECTION_ORDER_WINDOW)),
+        use_relation_graph=graph_setting_bool(graph_settings["use_relation_graph"]),
     )
     write_json(output_path, typed_learning_graph_to_math_context_graph(typed))
 
@@ -788,6 +855,9 @@ def export_training_graphs(
                 str(int(graph_settings.get("event_top_k", DEFAULT_EVENT_TOP_K))),
                 "--section-order-window",
                 str(int(graph_settings.get("section_order_window", DEFAULT_SECTION_ORDER_WINDOW))),
+                *relation_graph_cli_args(
+                    graph_setting_bool(graph_settings["use_relation_graph"])
+                ),
             ]
         )
         context = read_json(context_path)
@@ -848,6 +918,12 @@ def math_context_graph_to_dataset_profile(
     rules = context_graph.get("rules", {})
     pools = list(dict(rules).get("pools", [])) if isinstance(rules, dict) else []
     tasks = list(dict(rules).get("tasks", [])) if isinstance(rules, dict) else []
+    relation_feature_dim = int(dict(rules).get("target_relation_feature_dim", 0) or 0) if isinstance(rules, dict) else 0
+    if "use_relation_graph" not in export_profile:
+        raise ValueError("Dataset export_profile is missing use_relation_graph.")
+    use_relation_graph = graph_setting_bool(export_profile["use_relation_graph"])
+    if use_relation_graph != (relation_feature_dim > 0):
+        raise ValueError("Dataset relation graph setting does not match target_relation_feature_dim.")
     return {
         "schema_version": context_graph.get("schema_version", 1),
         "graph_type": "vae_math_dataset_profile",
@@ -858,6 +934,10 @@ def math_context_graph_to_dataset_profile(
         else "",
         "export_profile": dict(export_profile),
         "type_system": {},
+        "relation_graph": {
+            "enabled": use_relation_graph,
+            "target_relation_feature_dim": relation_feature_dim,
+        },
         "pools": {
             str(item.get("pool_id")): {
                 "size": item.get("size"),
@@ -998,20 +1078,20 @@ def limit_items(items: List[Any], limit: int) -> List[Any]:
     return items[:limit] if limit and limit > 0 else items
 
 
-def dataset_case_dirs(dataset: Any) -> List[Path]:
-    root = dataset.cases_dir
+def plan_case_dirs(plan: Any) -> List[Path]:
+    root = plan.cases_dir
     if not root.is_dir():
-        raise FileNotFoundError(f"Dataset cases not found: {root}")
+        raise FileNotFoundError(f"Adjustment plan cases not found: {root}")
     case_dirs = sorted(path for path in root.iterdir() if path.is_dir())
     if not case_dirs:
-        raise FileNotFoundError(f"No cases found in dataset: {root}")
+        raise FileNotFoundError(f"No cases found in adjustment plan: {root}")
     return case_dirs
 
 
-def dataset_case_dir(dataset: Any, case_id: str) -> Path:
-    case_dir = dataset.cases_dir / sanitize_id(case_id)
+def plan_case_dir(plan: Any, case_id: str) -> Path:
+    case_dir = plan.cases_dir / sanitize_id(case_id)
     if not case_dir.is_dir():
-        raise FileNotFoundError(f"Dataset case not found: {case_dir}")
+        raise FileNotFoundError(f"Adjustment plan case not found: {case_dir}")
     return case_dir
 
 
@@ -1041,6 +1121,19 @@ def read_case_stage_records(cases_dir: Path, filename: str) -> List[Dict[str, ob
 
 def fail_if_records_failed(records: Iterable[Dict[str, object]], stage: str) -> None:
     failed = [record for record in records if record.get("status") == "failed"]
+    if failed:
+        raise RuntimeError(f"{stage} failed for {len(failed)} case(s). First failure: {record_error(failed[0])}")
+
+
+def fail_if_derived_records_failed(records: Iterable[Dict[str, object]], key: str, stage: str) -> None:
+    failed: List[Dict[str, object]] = []
+    for record in records:
+        derived = record.get("derived")
+        if not isinstance(derived, dict):
+            continue
+        item = derived.get(key)
+        if isinstance(item, dict) and item.get("status") == "failed":
+            failed.append(item)
     if failed:
         raise RuntimeError(f"{stage} failed for {len(failed)} case(s). First failure: {record_error(failed[0])}")
 

@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - Pydantic v1 compatibility
 from backend import RailGraphBackend
 from backend.pueue_client import PueueError
 from backend.task_contracts import TASK_DEFAULTS
+from backend.task_resources import TaskResourceConflict
 from core.project_layout import REPO_ROOT
 
 
@@ -56,8 +57,6 @@ class NormalGenerateRequest(BaseModel):
 
 
 class BuildRequest(BaseModel):
-    scenario_set_id: str
-    dataset_id: str
     scenario_id: str = TASK_DEFAULTS["build"]["scenario_id"]
     objective_delay_weight: float = TASK_DEFAULTS["build"]["objective_delay_weight"]
     objective_mode: str = TASK_DEFAULTS["build"]["objective_mode"]
@@ -70,25 +69,27 @@ class BuildRequest(BaseModel):
     tolerance_delay_seconds: int = TASK_DEFAULTS["build"]["tolerance_delay_seconds"]
 
 
-class DatasetCreateRequest(BaseModel):
-    dataset_id: str
+class AdjustmentPlanCreateRequest(BaseModel):
+    plan_id: str
     exist_ok: bool = False
 
 
+class AdjustmentPlanRefRequest(BaseModel):
+    scenario_set_id: str
+    plan_id: str
+
+
+class AdjustmentPlanAnalysisRequest(BaseModel):
+    plans: List[AdjustmentPlanRefRequest]
+
+
 class SolveRequest(BaseModel):
-    dataset_id: str
     case_id: str = TASK_DEFAULTS["solve"]["case_id"]
     limit: int = TASK_DEFAULTS["solve"]["limit"]
     time_limit: Optional[float] = None
     mip_gap: Optional[float] = None
     threads: Optional[int] = None
     skip_solved: bool = TASK_DEFAULTS["solve"]["skip_solved"]
-
-
-class ExportTimetableRequest(BaseModel):
-    dataset_id: str
-    case_id: str = TASK_DEFAULTS["export_timetable"]["case_id"]
-    limit: int = TASK_DEFAULTS["export_timetable"]["limit"]
 
 
 class TrainRequest(BaseModel):
@@ -102,6 +103,7 @@ class TrainRequest(BaseModel):
     latent_dim: int = TASK_DEFAULTS["train"]["latent_dim"]
     message_passing_steps: int = TASK_DEFAULTS["train"]["message_passing_steps"]
     epochs: int = TASK_DEFAULTS["train"]["epochs"]
+    checkpoint_every: int = TASK_DEFAULTS["train"]["checkpoint_every"]
     batch_size: int = TASK_DEFAULTS["train"]["batch_size"]
     lr: float = TASK_DEFAULTS["train"]["lr"]
     seed: int = TASK_DEFAULTS["train"]["seed"]
@@ -111,6 +113,7 @@ class TrainRequest(BaseModel):
     anchor_weight: float = TASK_DEFAULTS["train"]["anchor_weight"]
     param_weight: float = TASK_DEFAULTS["train"]["param_weight"]
     kl_weight: float = TASK_DEFAULTS["train"]["kl_weight"]
+    use_relation_graph: bool = TASK_DEFAULTS["train"]["use_relation_graph"]
     relation_weight: float = TASK_DEFAULTS["train"]["relation_weight"]
 
 
@@ -217,16 +220,70 @@ def read_scenario_set_visualization(project_id: str, scenario_set_id: str) -> Di
     return backend.read_scenario_set_visualization(project_id, scenario_set_id)
 
 
-@api.get("/projects/{project_id}/analysis/dataset-solve")
-def read_dataset_solve_analysis(project_id: str, dataset_ids: List[str] = Query(...)) -> Dict[str, object]:
-    if not dataset_ids:
-        raise HTTPException(status_code=400, detail="dataset_ids is required")
-    return backend.read_dataset_solve_analysis(project_id, dataset_ids)
+@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans")
+def list_adjustment_plans(project_id: str, scenario_set_id: str) -> List[Dict[str, object]]:
+    return backend.list_adjustment_plans(project_id, scenario_set_id)
+
+
+@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plan-options")
+def list_adjustment_plan_options(
+    project_id: str,
+    scenario_set_id: str,
+    q: str = "",
+    limit: int = 50,
+) -> List[Dict[str, object]]:
+    return backend.list_adjustment_plan_options(project_id, scenario_set_id, query=q, limit=limit)
+
+
+@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans")
+def create_adjustment_plan(
+    project_id: str,
+    scenario_set_id: str,
+    request: AdjustmentPlanCreateRequest,
+) -> Dict[str, object]:
+    return backend.create_adjustment_plan(project_id, scenario_set_id, request.plan_id, exist_ok=request.exist_ok)
+
+
+@api.delete("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans/{plan_id}")
+def delete_adjustment_plan(project_id: str, scenario_set_id: str, plan_id: str) -> Dict[str, object]:
+    return backend.delete_adjustment_plan(project_id, scenario_set_id, plan_id)
+
+
+@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/analysis/adjustment-plan-solve")
+def read_adjustment_plan_solve_analysis(
+    project_id: str,
+    scenario_set_id: str,
+    plan_ids: List[str] = Query(...),
+) -> Dict[str, object]:
+    if not plan_ids:
+        raise HTTPException(status_code=400, detail="plan_ids is required")
+    return backend.read_adjustment_plan_solve_analysis(project_id, scenario_set_id, plan_ids)
+
+
+@api.post("/projects/{project_id}/analysis/adjustment-plan-solve")
+def read_project_adjustment_plan_solve_analysis(
+    project_id: str,
+    request: AdjustmentPlanAnalysisRequest,
+) -> Dict[str, object]:
+    if not request.plans:
+        raise HTTPException(status_code=400, detail="plans is required")
+    return backend.read_project_adjustment_plan_solve_analysis(
+        project_id,
+        [
+            {"scenario_set_id": item.scenario_set_id, "plan_id": item.plan_id}
+            for item in request.plans
+        ],
+    )
 
 
 @api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}")
 def read_scenario(project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
     return backend.read_scenario(project_id, scenario_set_id, scenario_id)
+
+
+@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/timetable")
+def read_scenario_timetable(project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
+    return backend.read_scenario_timetable(project_id, scenario_set_id, scenario_id)
 
 
 @api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/options")
@@ -396,13 +453,13 @@ def submit_normal_generate_upload(
     )
 
 
-@api.post("/projects/{project_id}/tasks/build")
-def submit_build(project_id: str, request: BuildRequest) -> Dict[str, object]:
+@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans/{plan_id}/tasks/build")
+def submit_build(project_id: str, scenario_set_id: str, plan_id: str, request: BuildRequest) -> Dict[str, object]:
     return _task_response(
         backend.build(
             project_id,
-            request.scenario_set_id,
-            request.dataset_id,
+            scenario_set_id,
+            plan_id,
             scenario_id=request.scenario_id,
             objective_delay_weight=request.objective_delay_weight,
             objective_mode=request.objective_mode,
@@ -417,40 +474,19 @@ def submit_build(project_id: str, request: BuildRequest) -> Dict[str, object]:
     )
 
 
-@api.post("/projects/{project_id}/datasets")
-def create_dataset(project_id: str, request: DatasetCreateRequest) -> Dict[str, object]:
-    return _task_response(backend.create_dataset(project_id, request.dataset_id, exist_ok=request.exist_ok))
-
-
-@api.delete("/projects/{project_id}/datasets/{dataset_id}")
-def delete_dataset(project_id: str, dataset_id: str) -> Dict[str, object]:
-    return backend.delete_dataset(project_id, dataset_id)
-
-
-@api.post("/projects/{project_id}/tasks/solve")
-def submit_solve(project_id: str, request: SolveRequest) -> Dict[str, object]:
+@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans/{plan_id}/tasks/solve")
+def submit_solve(project_id: str, scenario_set_id: str, plan_id: str, request: SolveRequest) -> Dict[str, object]:
     return _task_response(
         backend.solve(
             project_id,
-            request.dataset_id,
+            scenario_set_id,
+            plan_id,
             case_id=request.case_id,
             limit=request.limit,
             time_limit=request.time_limit,
             mip_gap=request.mip_gap,
             threads=request.threads,
             skip_solved=request.skip_solved,
-        )
-    )
-
-
-@api.post("/projects/{project_id}/tasks/export-timetable")
-def submit_export_timetable(project_id: str, request: ExportTimetableRequest) -> Dict[str, object]:
-    return _task_response(
-        backend.export_timetable(
-            project_id,
-            request.dataset_id,
-            case_id=request.case_id,
-            limit=request.limit,
         )
     )
 
@@ -470,6 +506,7 @@ def submit_train(project_id: str, request: TrainRequest) -> Dict[str, object]:
             latent_dim=request.latent_dim,
             message_passing_steps=request.message_passing_steps,
             epochs=request.epochs,
+            checkpoint_every=request.checkpoint_every,
             batch_size=request.batch_size,
             lr=request.lr,
             seed=request.seed,
@@ -479,6 +516,7 @@ def submit_train(project_id: str, request: TrainRequest) -> Dict[str, object]:
             anchor_weight=request.anchor_weight,
             param_weight=request.param_weight,
             kl_weight=request.kl_weight,
+            use_relation_graph=request.use_relation_graph,
             relation_weight=request.relation_weight,
         )
     )
@@ -579,19 +617,19 @@ def cancel_task(task_id: int) -> Dict[str, object]:
     return backend.cancel_task(task_id)
 
 
-@api.get("/projects/{project_id}/datasets/{dataset_id}/cases/{case_id}/timetable")
-def read_case_timetable(project_id: str, dataset_id: str, case_id: str) -> Dict[str, object]:
-    return backend.read_case_timetable(project_id, dataset_id, case_id)
+@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans/{plan_id}/cases/{case_id}/timetable")
+def read_case_timetable(project_id: str, scenario_set_id: str, plan_id: str, case_id: str) -> Dict[str, object]:
+    return backend.read_case_timetable(project_id, scenario_set_id, plan_id, case_id)
 
 
-@api.get("/projects/{project_id}/datasets/{dataset_id}/artifacts")
-def list_case_artifacts(project_id: str, dataset_id: str) -> List[Dict[str, object]]:
-    return backend.list_case_artifacts(project_id, dataset_id)
+@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans/{plan_id}/artifacts")
+def list_case_artifacts(project_id: str, scenario_set_id: str, plan_id: str) -> List[Dict[str, object]]:
+    return backend.list_case_artifacts(project_id, scenario_set_id, plan_id)
 
 
-@api.get("/projects/{project_id}/datasets/{dataset_id}/detail")
-def read_dataset_detail(project_id: str, dataset_id: str) -> Dict[str, object]:
-    return backend.read_dataset_detail(project_id, dataset_id)
+@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans/{plan_id}/detail")
+def read_adjustment_plan_detail(project_id: str, scenario_set_id: str, plan_id: str) -> Dict[str, object]:
+    return backend.read_adjustment_plan_detail(project_id, scenario_set_id, plan_id)
 
 
 @api.get("/projects/{project_id}/models/{model_id}/training-summary")
@@ -626,6 +664,11 @@ def pueue_exception_handler(_request, exc: PueueError) -> JSONResponse:
 @api.exception_handler(FileNotFoundError)
 def not_found_exception_handler(_request, exc: FileNotFoundError) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@api.exception_handler(TaskResourceConflict)
+def task_resource_conflict_handler(_request, exc: TaskResourceConflict) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @api.exception_handler(ValueError)

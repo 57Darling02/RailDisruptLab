@@ -8,10 +8,10 @@ from typing import Any, Dict, List, Mapping, Sequence
 from backend.analysis.disturbances import parse_seconds_of_day, read_scenario_disturbances
 from backend.analysis.scenario_set import (
     disturbance_counts,
+    disturbance_time_coverage,
     metric_card,
     relation_rows,
     scenario_category,
-    scenario_set_summary,
 )
 from backend.analysis.timetable import plan_rows
 from core.base_context import build_base_context, load_base_context, write_base_context
@@ -157,7 +157,18 @@ def read_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id:
         "context_stats": context_stats(case.context_json) if active else None,
         "source_files": source_file_summaries(case),
         "scenario": read_yaml_if_exists_safe(case.scenario_yml),
-        "timetable": scenario_timetable(case) if active else None,
+    }
+
+
+def read_scenario_timetable(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
+    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
+    check = check_scenario_activation(case, scenario_id)
+    if check["activation_status"] != ACTIVE_STATUS:
+        reason = str(check.get("activation_reason") or activation_status_label(str(check["activation_status"])))
+        raise ValueError(f"Scenario is not active: {reason}")
+    return {
+        "project_id": layout.name,
+        **scenario_timetable(case),
     }
 
 
@@ -169,9 +180,14 @@ def read_scenario_set_analysis(layout: ProjectLayout, scenario_set_id: str) -> D
 
     scenarios = []
     for path in scenario_files(root):
+        scenario_id = path.parent.name
         item = scenario_case_visualization_item(layout, scenario_set_id, path)
         scenarios.append(item)
-    return scenario_set_analysis_payload(layout, scenario_set_id, scenarios, None)
+    return scenario_set_analysis_payload(
+        layout,
+        scenario_set_id,
+        scenarios,
+    )
 
 
 def cached_base_context(path: Path, cache: Dict[str, object]) -> object:
@@ -188,7 +204,6 @@ def scenario_set_analysis_payload(
     layout: ProjectLayout,
     scenario_set_id: str,
     scenarios: List[Dict[str, object]],
-    context: Any | None,
 ) -> Dict[str, object]:
     all_disturbances = [
         dict(item, scenario_id=scenario["scenario_id"])
@@ -196,21 +211,15 @@ def scenario_set_analysis_payload(
         for item in scenario.get("disturbances", [])
         if isinstance(item, dict)
     ]
-    station_order = list(context.station_order) if context is not None else []
-    plan = {"rows": plan_rows(context)} if context is not None else {"rows": []}
     return {
         "project_id": layout.name,
         "scenario_set_id": scenario_set_id,
         "scenarios": scenarios,
-        "station_order": station_order,
-        "mileage_by_station": dict(context.mileage_by_station) if context is not None else {},
-        "train_routes": dict(context.translated.train_routes) if context is not None else {},
-        "plan": plan,
-        "summary": (
-            scenario_set_summary(scenarios, context, station_order, plan["rows"])
-            if context is not None
-            else lightweight_scenario_set_summary(scenarios)
-        ),
+        "station_order": [],
+        "mileage_by_station": {},
+        "train_routes": {},
+        "plan": {"rows": []},
+        "summary": lightweight_scenario_set_summary(scenarios),
         "time_distribution": time_distribution(all_disturbances),
         "space_distribution": space_distribution(all_disturbances),
     }
@@ -245,7 +254,7 @@ def lightweight_scenario_set_summary(scenarios: List[Dict[str, object]]) -> Dict
             }
             for key, count in sorted(category_counts.items())
         ],
-        "coverage": {"time_span_seconds": 0, "space_span_units": 0, "rows": []},
+        "coverage": disturbance_time_coverage(all_disturbances, []),
         "disturbances": all_disturbances,
         "math_graph_metrics": {
             "cards": [
@@ -281,10 +290,11 @@ def scenario_case_visualization_item(
     layout: ProjectLayout,
     scenario_set_id: str,
     scenario_path: Path,
+    check: Dict[str, object] | None = None,
 ) -> Dict[str, object]:
     scenario_id = sanitize_id(scenario_path.parent.name)
     case = layout.scenario_set(scenario_set_id).scenario(scenario_id)
-    check = check_scenario_yaml(case, scenario_id)
+    check = check or check_scenario_yaml(case, scenario_id)
     doc = check.get("_document") if isinstance(check.get("_document"), ScenarioDocument) else None
     disturbances = scenario_document_disturbances(doc) if doc is not None else []
     counts = disturbance_counts(disturbances)
@@ -292,8 +302,8 @@ def scenario_case_visualization_item(
         "scenario_id": scenario_id,
         "name": doc.name if doc is not None else scenario_id,
         "path": to_posix(case.root),
-        "yaml_status": check["yaml_status"],
-        "yaml_reason": check["yaml_reason"],
+        "yaml_status": VALID_STATUS if doc is not None else INVALID_STATUS,
+        "yaml_reason": str(check.get("yaml_reason", "") or ""),
         "disturbances": disturbances,
         "counts": counts,
         "category": scenario_category(disturbances),
@@ -311,16 +321,24 @@ def scenario_document_disturbances(
     for index, item in enumerate(list_payload(doc.scenarios.get("delays")), start=1):
         anchor_id = str(item.get("event_anchor_id", "") or "")
         anchor = event_anchors.get(anchor_id)
+        train_id = str(item.get("train_id", "") or getattr(anchor, "train_id", "") or "")
+        station = str(item.get("station", "") or getattr(anchor, "station", "") or "")
+        event_type = str(item.get("event_type", "") or getattr(anchor, "event_type", "") or "")
+        if anchor is None and context is not None and train_id and station and event_type:
+            anchor = event_anchor_by_semantic(context).get((train_id, station, event_type))
+        start_time = getattr(anchor, "planned_time", None)
+        if start_time is None and context is not None:
+            start_time = context.translated.event_time.get((train_id, station, event_type))
         disturbances.append(
             {
                 "id": f"delay_{index}",
                 "type": "delay",
-                "event_anchor_id": anchor_id,
-                "train_id": str(item.get("train_id", "") or getattr(anchor, "train_id", "") or ""),
-                "station": str(item.get("station", "") or getattr(anchor, "station", "") or ""),
-                "event_type": str(item.get("event_type", "") or getattr(anchor, "event_type", "") or ""),
+                "event_anchor_id": str(getattr(anchor, "anchor_id", "") or anchor_id),
+                "train_id": train_id,
+                "station": station,
+                "event_type": event_type,
                 "seconds": int(float(item.get("seconds", 0) or 0)),
-                "start_time": getattr(anchor, "planned_time", None) or 0,
+                **({"start_time": int(start_time)} if start_time is not None else {}),
                 "station_order": getattr(anchor, "station_order", None),
             }
         )
@@ -328,6 +346,10 @@ def scenario_document_disturbances(
     for index, item in enumerate(list_payload(doc.scenarios.get("speed_limits")), start=1):
         anchor_id = str(item.get("section_anchor_id", "") or "")
         anchor = section_anchors.get(anchor_id)
+        start_station = str(item.get("start_station", "") or getattr(anchor, "start_station", "") or "")
+        end_station = str(item.get("end_station", "") or getattr(anchor, "end_station", "") or "")
+        if anchor is None and context is not None and start_station and end_station:
+            anchor = section_anchor_by_semantic(context).get((start_station, end_station))
         start_time = parse_seconds_of_day(item.get("start_time", 0))
         duration = int(float(item.get("duration", 0) or 0))
         limit_speed = float(item.get("limit_speed", 0) or 0)
@@ -335,9 +357,9 @@ def scenario_document_disturbances(
             {
                 "id": f"speed_{index}",
                 "type": "interruption" if limit_speed <= 20 else "speed_limit",
-                "section_anchor_id": anchor_id,
-                "start_station": str(item.get("start_station", "") or getattr(anchor, "start_station", "") or ""),
-                "end_station": str(item.get("end_station", "") or getattr(anchor, "end_station", "") or ""),
+                "section_anchor_id": str(getattr(anchor, "anchor_id", "") or anchor_id),
+                "start_station": start_station,
+                "end_station": end_station,
                 "start_time": start_time,
                 "end_time": start_time + duration,
                 "duration": duration,
@@ -348,6 +370,20 @@ def scenario_document_disturbances(
         )
 
     return disturbances
+
+
+def event_anchor_by_semantic(context: Any) -> Dict[tuple[str, str, str], Any]:
+    return {
+        (str(anchor.train_id), str(anchor.station), str(anchor.event_type)): anchor
+        for anchor in getattr(context, "event_anchors", {}).values()
+    }
+
+
+def section_anchor_by_semantic(context: Any) -> Dict[tuple[str, str], Any]:
+    return {
+        (str(anchor.start_station), str(anchor.end_station)): anchor
+        for anchor in getattr(context, "section_anchors", {}).values()
+    }
 
 
 def scenario_category_label(category: str) -> str:
@@ -425,7 +461,9 @@ def disturbance_location(item: Mapping[str, object]) -> str:
 
 
 def time_bin_label(value: object) -> str:
-    seconds = int(float(value or 0))
+    if value is None or value == "":
+        return "未知"
+    seconds = int(float(value))
     hour = max(0, min(23, seconds // 3600))
     start = (hour // 2) * 2
     return f"{start:02d}-{start + 2:02d}时"
@@ -820,11 +858,18 @@ def activation_status_label(status: str) -> str:
 
 def time_distribution(disturbances: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
     buckets = {hour: 0 for hour in range(24)}
+    unknown_count = 0
     for item in disturbances:
-        start = int(float(item.get("start_time", 0) or 0))
+        if "start_time" not in item or item.get("start_time") in {None, ""}:
+            unknown_count += 1
+            continue
+        start = int(float(item.get("start_time") or 0))
         hour = max(0, min(23, start // 3600))
         buckets[hour] += 1
-    return [{"label": f"{hour:02d}:00", "count": count} for hour, count in buckets.items()]
+    rows = [{"label": f"{hour:02d}:00", "count": count} for hour, count in buckets.items()]
+    if unknown_count:
+        rows.append({"label": "未知", "count": unknown_count})
+    return rows
 
 
 def space_distribution(disturbances: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:

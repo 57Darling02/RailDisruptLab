@@ -12,7 +12,8 @@ const TIMETABLE_TABLE_HEIGHT = 460
 const props = defineProps<{
   modelValue: boolean
   projectId: string
-  datasetId: string
+  scenarioSetId: string
+  planId: string
   caseId: string
 }>()
 
@@ -127,7 +128,7 @@ const changedAdjustedRows = computed(() => {
 })
 
 watch(
-  () => [props.modelValue, props.projectId, props.datasetId, props.caseId] as const,
+  () => [props.modelValue, props.projectId, props.scenarioSetId, props.planId, props.caseId] as const,
   ([visible]) => {
     if (visible) {
       void loadTimetable()
@@ -141,13 +142,14 @@ watch(
 
 async function loadTimetable() {
   const projectId = props.projectId
-  const datasetId = props.datasetId
+  const scenarioSetId = props.scenarioSetId
+  const planId = props.planId
   const caseId = props.caseId
   const seq = requestSeq + 1
   requestSeq = seq
   errorMessage.value = ''
 
-  if (!props.modelValue || !projectId || !datasetId || !caseId) {
+  if (!props.modelValue || !projectId || !scenarioSetId || !planId || !caseId) {
     timetable.value = null
     loading.value = false
     return
@@ -155,11 +157,12 @@ async function loadTimetable() {
 
   loading.value = true
   try {
-    const result = await api.readCaseTimetable(projectId, datasetId, caseId)
+    const result = await api.readCaseTimetable(projectId, scenarioSetId, planId, caseId)
     if (
       seq !== requestSeq ||
       projectId !== props.projectId ||
-      datasetId !== props.datasetId ||
+      scenarioSetId !== props.scenarioSetId ||
+      planId !== props.planId ||
       caseId !== props.caseId
     ) {
       return
@@ -169,7 +172,8 @@ async function loadTimetable() {
     if (
       seq !== requestSeq ||
       projectId !== props.projectId ||
-      datasetId !== props.datasetId ||
+      scenarioSetId !== props.scenarioSetId ||
+      planId !== props.planId ||
       caseId !== props.caseId
     ) {
       return
@@ -180,7 +184,8 @@ async function loadTimetable() {
     if (
       seq === requestSeq &&
       projectId === props.projectId &&
-      datasetId === props.datasetId &&
+      scenarioSetId === props.scenarioSetId &&
+      planId === props.planId &&
       caseId === props.caseId
     ) {
       loading.value = false
@@ -215,18 +220,24 @@ function formatError(error: unknown) {
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div v-loading="loading" class="timetable-dialog-body" element-loading-text="正在加载时刻表数据...">
-      <el-empty v-if="!projectId || !datasetId || !caseId" description="请选择实例资源" />
+      <el-empty v-if="!projectId || !scenarioSetId || !planId || !caseId" description="请选择实例资源" />
       <el-result v-else-if="errorMessage" icon="error" title="时刻表加载失败" :sub-title="errorMessage">
         <template #extra>
-          <el-button type="primary" :icon="Refresh" :loading="loading" @click="loadTimetable">
+          <el-button
+            type="primary"
+            :icon="Refresh"
+            :loading-icon="Refresh"
+            :loading="loading"
+            @click="loadTimetable"
+          >
             重试
           </el-button>
         </template>
       </el-result>
       <template v-else-if="timetable">
         <el-descriptions :column="3" border size="small">
-          <el-descriptions-item label="数据集">
-            {{ timetable.dataset_id }}
+          <el-descriptions-item label="调整计划">
+            {{ timetable.plan_id }}
           </el-descriptions-item>
           <el-descriptions-item label="Case">
             {{ timetable.case_id }}

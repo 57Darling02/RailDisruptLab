@@ -52,8 +52,15 @@ class ScenarioSetLayout:
     def scenarios_dir(self) -> Path:
         return self.root / "scenarios"
 
+    @property
+    def adjustment_plans_dir(self) -> Path:
+        return self.root / "adjustment_plans"
+
     def scenario(self, scenario_id: str) -> "ScenarioCaseLayout":
         return ScenarioCaseLayout(self.scenarios_dir / require_id(scenario_id, "scenario_id"))
+
+    def adjustment_plan(self, plan_id: str) -> "AdjustmentPlanLayout":
+        return AdjustmentPlanLayout(self.adjustment_plans_dir / require_id(plan_id, "plan_id"))
 
 
 @dataclass(frozen=True)
@@ -82,7 +89,7 @@ class ScenarioCaseLayout:
 
 
 @dataclass(frozen=True)
-class DatasetLayout:
+class AdjustmentPlanLayout:
     root: Path
 
     @property
@@ -114,10 +121,6 @@ class ModelLayout:
     def graph_progress(self) -> Path:
         return self.graph_dir / "graph_progress.json"
 
-    @property
-    def best_model(self) -> Path:
-        return self.root / "best_model.pt"
-
 
 @dataclass(frozen=True)
 class ProjectLayout:
@@ -138,22 +141,11 @@ class ProjectLayout:
         return self.root / "scenario_sets"
 
     @property
-    def datasets_dir(self) -> Path:
-        return self.root / "datasets"
-
-    @property
     def model_dir(self) -> Path:
         return self.root / "model"
 
-    @property
-    def context_json(self) -> Path:
-        return self.root / "context.json"
-
     def scenario_set(self, scenario_set_id: str) -> ScenarioSetLayout:
         return ScenarioSetLayout(self.scenario_sets_dir / require_id(scenario_set_id, "scenario_set_id"))
-
-    def dataset(self, dataset_id: str) -> DatasetLayout:
-        return DatasetLayout(self.datasets_dir / require_id(dataset_id, "dataset_id"))
 
     def model(self, model_id: str) -> ModelLayout:
         return ModelLayout(self.model_dir / require_id(model_id, "model_id"))

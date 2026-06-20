@@ -19,6 +19,7 @@ from core.vae_learning_graph import (
     DEFAULT_EVENT_TOP_K,
     DEFAULT_MAX_SLOTS,
     DEFAULT_SECTION_ORDER_WINDOW,
+    DEFAULT_USE_RELATION_GRAPH,
     scenario_config_to_typed_vae_learning_graph,
     typed_learning_graph_to_math_context_graph,
     typed_learning_graph_to_math_learning_sample,
@@ -74,6 +75,17 @@ def main() -> None:
     vae_parser.add_argument("--event-time-window", type=int, default=DEFAULT_EVENT_TIME_WINDOW)
     vae_parser.add_argument("--event-top-k", type=int, default=DEFAULT_EVENT_TOP_K)
     vae_parser.add_argument("--section-order-window", type=int, default=DEFAULT_SECTION_ORDER_WINDOW)
+    vae_parser.add_argument(
+        "--use-relation-graph",
+        dest="use_relation_graph",
+        action="store_true",
+        default=DEFAULT_USE_RELATION_GRAPH,
+    )
+    vae_parser.add_argument(
+        "--no-relation-graph",
+        dest="use_relation_graph",
+        action="store_false",
+    )
 
     args = parser.parse_args()
     if args.command == "build-context":
@@ -210,6 +222,7 @@ def export_vae_case_graph(args: argparse.Namespace) -> None:
         event_time_window=args.event_time_window,
         event_top_k=args.event_top_k,
         section_order_window=args.section_order_window,
+        use_relation_graph=args.use_relation_graph,
     )
     context_output = Path(args.context_output)
     sample_output = Path(args.sample_output)

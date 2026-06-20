@@ -1,20 +1,35 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import type { Component } from 'vue'
 
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
-import { Delete, Document, Refresh, VideoPause } from '@/icons'
+import {
+  CircleCheck,
+  CircleHelp,
+  CircleX,
+  Clock,
+  Delete,
+  Document,
+  LoaderCircle,
+  Refresh,
+  VideoPause,
+} from '@/icons'
 import {
   isTaskCancellable,
-  isTaskFailed,
   isTaskTerminal,
+  taskOutcome,
   taskDisplayLabel,
   taskDisplayStatus,
-  taskTagType,
 } from '@/task-status'
 import { formatTaskDuration, formatTaskTime, taskSortTime } from '@/task-time'
 import type { Task } from '@/types'
 
 type TaskOption = { label: string; value: string }
+type TaskStatusVisual = {
+  icon: Component
+  className: string
+  spinning?: boolean
+}
 
 const props = withDefaults(
   defineProps<{
@@ -97,6 +112,24 @@ function compareTasks(left: Task, right: Task) {
 
   return right.id - left.id
 }
+
+function taskDurationText(task: Task) {
+  return task.started_at || task.finished_at ? formatTaskDuration(task, props.now) : ''
+}
+
+function taskStatusVisual(task: Task): TaskStatusVisual {
+  const outcome = taskOutcome(task)
+  if (outcome === 'success') return { icon: CircleCheck, className: 'status-success' }
+  if (outcome === 'failed') return { icon: CircleX, className: 'status-failed' }
+  if (task.status === 'Running') return { icon: LoaderCircle, className: 'status-running', spinning: true }
+  if (outcome === 'running') return { icon: Clock, className: 'status-pending' }
+  return { icon: CircleHelp, className: 'status-unknown' }
+}
+
+function taskStatusTooltip(task: Task) {
+  const duration = taskDurationText(task)
+  return duration ? `${taskDisplayStatus(task)} · ${duration}` : taskDisplayStatus(task)
+}
 </script>
 
 <template>
@@ -144,18 +177,23 @@ function compareTasks(left: Task, right: Task) {
               <span>#{{ task.id }}</span>
               <el-text truncated>{{ taskDisplayLabel(task) }}</el-text>
             </div>
-            <el-tag
-              size="small"
-              :type="taskTagType(task)"
-              :class="{ 'task-status-failed': isTaskFailed(task) }"
-            >
-              {{ taskDisplayStatus(task) }}
-            </el-tag>
+            <el-tooltip :content="taskStatusTooltip(task)" placement="top">
+              <div class="task-status-pill" :class="taskStatusVisual(task).className">
+                <el-icon
+                  class="task-status-icon"
+                  :class="{ 'is-spinning': taskStatusVisual(task).spinning }"
+                >
+                  <component :is="taskStatusVisual(task).icon" />
+                </el-icon>
+                <span v-if="taskDurationText(task)" class="task-status-duration">
+                  {{ taskDurationText(task) }}
+                </span>
+              </div>
+            </el-tooltip>
           </div>
           <div class="task-meta">
             <div class="task-meta-row">
               <span>项目：{{ task.group || '-' }}</span>
-              <span v-if="task.started_at || task.finished_at">耗时：{{ formatTaskDuration(task, now) }}</span>
             </div>
             <span>提交：{{ formatTaskTime(task.created_at) }}</span>
             <span v-if="task.started_at">开始：{{ formatTaskTime(task.started_at) }}</span>
@@ -299,9 +337,8 @@ function compareTasks(left: Task, right: Task) {
 
 .task-footer {
   display: flex;
-  align-items: flex-start;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
   margin: 9px -9px -9px;
   padding: 7px 9px;
   border-top: 1px solid var(--el-border-color-lighter);
@@ -318,7 +355,7 @@ function compareTasks(left: Task, right: Task) {
 
 .task-action-buttons {
   display: flex;
-  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
   flex-wrap: wrap;
   gap: 5px;
@@ -329,11 +366,73 @@ function compareTasks(left: Task, right: Task) {
   padding: 5px 7px;
 }
 
-.task-status-failed {
-  border-color: #ff1f1f;
-  color: #fff;
-  font-weight: 700;
-  background: #e60012;
-  box-shadow: 0 0 0 1px rgb(230 0 18 / 18%);
+.task-status-pill {
+  display: inline-flex;
+  max-width: 118px;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  color: var(--el-text-color-regular);
+  background: var(--el-fill-color-extra-light);
+  font-size: 12px;
+  line-height: 1;
 }
+
+.task-status-icon {
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.task-status-duration {
+  overflow: hidden;
+  max-width: 72px;
+  opacity: 0.78;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-status-icon.is-spinning {
+  animation: task-status-spin 1s linear infinite;
+}
+
+.task-status-pill.status-success {
+  border-color: var(--el-color-success-light-7);
+  color: var(--el-color-success);
+  background: var(--el-color-success-light-9);
+}
+
+.task-status-pill.status-failed {
+  border-color: #ffb3b3;
+  color: #e60012;
+  background: #fff0f0;
+}
+
+.task-status-pill.status-running {
+  border-color: var(--el-color-primary-light-7);
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.task-status-pill.status-pending {
+  border-color: var(--el-color-warning-light-7);
+  color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+}
+
+.task-status-pill.status-unknown {
+  border-color: var(--el-border-color);
+  color: var(--el-text-color-secondary);
+}
+
+@keyframes task-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 </style>

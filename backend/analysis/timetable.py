@@ -1,86 +1,69 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
+import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
 from backend.analysis.disturbances import read_scenario_disturbances
 from core.base_context import load_base_context
-from core.project_layout import DatasetLayout, ProjectLayout, REPO_ROOT, require_id, sanitize_id, to_posix
+from core.postprocess import adjusted_timetable_rows
+from core.project_layout import ProjectLayout, require_id, sanitize_id
+from core.solver import load_solution_values
 
 
-def export_dataset_timetables(
-    layout: ProjectLayout,
-    dataset_id: str,
-    *,
-    case_id: str = "",
-    limit: int = 0,
-) -> None:
-    dataset = layout.dataset(dataset_id)
-    case_dirs = [dataset_case_dir(dataset, case_id)] if case_id else limit_items(dataset_case_dirs(dataset), limit)
-    records = [
-        export_case_timetable(case_dir, index)
-        for index, case_dir in enumerate(case_dirs, start=1)
-    ]
-
-    fail_if_records_failed(records, "export-timetable")
-    ok_count = sum(1 for record in records if record.get("status") == "ok")
-    print(f"Export timetable finished: {ok_count}/{len(records)} case(s)")
-
-
-def export_case_timetable(case_dir: Path, index: int) -> Dict[str, object]:
+def materialize_case_timetable(case_dir: Path, index: int = 1) -> Dict[str, object]:
     started = datetime.now()
     case_id = sanitize_id(case_dir.name)
     sol_path = case_dir / f"{case_id}.sol"
+    context_path = case_dir / "context.json"
     output_path = case_dir / "adjusted_timetable.json"
-    summary_path = case_dir / "core_timetable_summary.json"
     record = base_record(index, case_id)
     try:
         if not sol_path.is_file():
             raise FileNotFoundError(f"Solution not found: {sol_path}")
-        run(
-            [
-                sys.executable,
-                "core_cli.py",
-                "export-timetable-case",
-                "--context",
-                to_posix(case_dir / "context.json"),
-                "--solution",
-                to_posix(sol_path),
-                "--output",
-                to_posix(output_path),
-                "--summary-output",
-                to_posix(summary_path),
-            ]
+        context = load_base_context(context_path)
+        rows = adjusted_timetable_rows(
+            context.translated,
+            load_solution_values(sol_path),
         )
-        summary = read_json(summary_path)
-        if not isinstance(summary, dict):
-            raise ValueError(f"Timetable summary must be an object: {summary_path}")
-        record.update(summary)
+        write_json(
+            output_path,
+            {
+                "case_id": case_id,
+                "station_order": list(context.station_order),
+                "source": timetable_source_signature(case_dir),
+                "rows": rows,
+            },
+        )
+        record.update({"status": "ok", "row_count": len(rows)})
     except Exception as exc:
         record.update({"status": "failed", "error": str(exc)})
     record["duration_sec"] = elapsed_seconds(started)
-    print(f"[{index}] {record['status']} | {case_id}")
     return record
 
 
-def read_case_timetable(layout: ProjectLayout, dataset_id: str, case_id: str) -> Dict[str, object]:
-    dataset_id = require_id(dataset_id, "dataset_id")
+def read_case_timetable(layout: ProjectLayout, scenario_set_id: str, plan_id: str, case_id: str) -> Dict[str, object]:
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+    plan_id = require_id(plan_id, "plan_id")
     case_id = require_id(case_id, "case_id")
-    dataset = layout.dataset(dataset_id)
-    case_dir = dataset.cases_dir / case_id
+    plan = layout.scenario_set(scenario_set_id).adjustment_plan(plan_id)
+    case_dir = plan.cases_dir / case_id
     if not case_dir.is_dir():
-        raise FileNotFoundError(f"Dataset case not found: {case_dir}")
+        raise FileNotFoundError(f"Adjustment plan case not found: {case_dir}")
+
+    if not is_case_timetable_fresh(case_dir):
+        record = materialize_case_timetable(case_dir)
+        if record.get("status") != "ok":
+            raise RuntimeError(record_error(record))
 
     adjusted = read_json(case_dir / "adjusted_timetable.json")
     context = load_base_context(case_dir / "context.json")
     return {
         "project_id": layout.name,
-        "dataset_id": dataset_id,
+        "scenario_set_id": scenario_set_id,
+        "plan_id": plan_id,
         "case_id": case_id,
         "station_order": list(context.station_order),
         "mileage_by_station": dict(context.mileage_by_station),
@@ -117,27 +100,6 @@ def read_case_disturbances(
     return read_scenario_disturbances(scenario_path, context)
 
 
-def dataset_case_dirs(dataset: DatasetLayout) -> List[Path]:
-    root = dataset.cases_dir
-    if not root.is_dir():
-        raise FileNotFoundError(f"Dataset cases not found: {root}")
-    case_dirs = sorted(path for path in root.iterdir() if path.is_dir())
-    if not case_dirs:
-        raise FileNotFoundError(f"No cases found in dataset: {root}")
-    return case_dirs
-
-
-def dataset_case_dir(dataset: DatasetLayout, case_id: str) -> Path:
-    case_dir = dataset.cases_dir / require_id(case_id, "case_id")
-    if not case_dir.is_dir():
-        raise FileNotFoundError(f"Dataset case not found: {case_dir}")
-    return case_dir
-
-
-def limit_items(items: List[Path], limit: int) -> List[Path]:
-    return items[:limit] if limit and limit > 0 else items
-
-
 def base_record(index: int, case_id: str) -> Dict[str, object]:
     return {
         "index": index,
@@ -146,12 +108,6 @@ def base_record(index: int, case_id: str) -> Dict[str, object]:
         "error": "",
         "duration_sec": 0.0,
     }
-
-
-def fail_if_records_failed(records: Iterable[Dict[str, object]], stage: str) -> None:
-    failed = [record for record in records if record.get("status") == "failed"]
-    if failed:
-        raise RuntimeError(f"{stage} failed for {len(failed)} case(s). First failure: {record_error(failed[0])}")
 
 
 def record_error(record: Dict[str, object]) -> str:
@@ -164,9 +120,48 @@ def elapsed_seconds(started: datetime) -> float:
     return round((datetime.now() - started).total_seconds(), 3)
 
 
+def is_case_timetable_fresh(case_dir: Path) -> bool:
+    path = case_dir / "adjusted_timetable.json"
+    if not path.is_file():
+        return False
+    try:
+        payload = read_json(path)
+        return payload.get("source") == timetable_source_signature(case_dir)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def timetable_source_signature(case_dir: Path) -> Dict[str, Dict[str, object]]:
+    case_id = sanitize_id(case_dir.name)
+    return {
+        "context": file_signature(case_dir / "context.json"),
+        "solution": file_signature(case_dir / f"{case_id}.sol"),
+    }
+
+
+def file_signature(path: Path) -> Dict[str, object]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Source file not found: {path}")
+    return {
+        "path": path.name,
+        "size": path.stat().st_size,
+        "sha256": file_digest(path),
+    }
+
+
+def file_digest(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def write_json(path: Path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def read_json(path: Path) -> Dict[str, object]:
@@ -176,11 +171,3 @@ def read_json(path: Path) -> Dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON must contain an object: {path}")
     return payload
-
-
-def run(cmd: List[str]) -> None:
-    if cmd and Path(cmd[0]).name.startswith("python") and "-u" not in cmd[1:2]:
-        cmd = [cmd[0], "-u", *cmd[1:]]
-    print(" ".join(cmd))
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
-    subprocess.run(cmd, cwd=REPO_ROOT, check=True, env=env)

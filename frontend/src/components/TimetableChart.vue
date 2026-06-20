@@ -19,6 +19,9 @@ const DISTURBANCE_LABEL = {
   speed_limit: '限速',
   interruption: '中断',
 } as const
+const DELAY_BAND_HEIGHT = 0.16
+const SECTION_BAND_PADDING = 0.12
+const MIN_SECTION_BAND_HEIGHT = 0.18
 const TRAIN_SERIES_ID_PREFIX = 'train:'
 const props = withDefaults(
   defineProps<{
@@ -122,6 +125,7 @@ function buildTimetableOption(input: BuildInput) {
       type: 'scroll',
       selectedMode: true,
       data: legendItems(input.compareMode),
+      selected: legendSelected(input.compareMode),
     },
     tooltip: {
       trigger: 'item',
@@ -139,14 +143,27 @@ function buildTimetableOption(input: BuildInput) {
       axisLabel: { formatter: secondsToHm },
       splitLine: { show: true, lineStyle: { color: '#f3f4f6' } },
     },
-    yAxis: {
-      type: 'category',
-      name: '车站',
-      data: stations,
-      axisTick: { show: false },
-      axisLabel: { interval: 0 },
-      splitLine: { show: false },
-    },
+    yAxis: [
+      {
+        type: 'value',
+        min: -0.5,
+        max: Math.max(stations.length - 0.5, 0.5),
+        interval: 1,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { show: false },
+        splitLine: { show: false },
+      },
+      {
+        type: 'category',
+        name: '车站',
+        position: 'left',
+        data: stations,
+        axisTick: { show: false },
+        axisLabel: { interval: 0 },
+        splitLine: { show: false },
+      },
+    ],
     series: [
       stationLineSeries(stations, extent),
       ...disturbanceSeries(input.disturbances, stationIndex),
@@ -282,6 +299,10 @@ function overlaps(leftStart: number, leftEnd: number, rightStart: number, rightE
 function legendItems(compareMode: boolean) {
   if (!compareMode) return ['原计划', '晚点', '限速', '中断']
   return ['原计划-未受影响', '原计划-受影响', '调整计划', '晚点', '限速', '中断']
+}
+
+function legendSelected(compareMode: boolean) {
+  return compareMode ? { '原计划-受影响': false } : {}
 }
 
 function isAdjustedRow(row: TimetableRowState, planByKey: Map<string, TimetableRowState>) {
@@ -494,7 +515,7 @@ function disturbanceRect(
       start,
       end: start + seconds,
       yCenter: stationY,
-      height: 0.16,
+      height: DELAY_BAND_HEIGHT,
       detail: `${DISTURBANCE_LABEL.delay} ${item.train_id ?? ''} ${item.station} ${item.event_type ?? ''} +${item.seconds ?? 0}s`,
     })
   }
@@ -512,9 +533,14 @@ function disturbanceRect(
     start,
     end,
     yCenter: (lower + upper) / 2,
-    height: Math.max(0.72, upper - lower),
+    height: sectionBandHeight(upper - lower),
     detail: `${DISTURBANCE_LABEL[item.type]} ${item.start_station}-${item.end_station} ${secondsToHms(start)}-${secondsToHms(end)}`,
   })
+}
+
+function sectionBandHeight(sectionSpan: number) {
+  if (sectionSpan <= 0) return MIN_SECTION_BAND_HEIGHT
+  return Math.max(MIN_SECTION_BAND_HEIGHT, sectionSpan - SECTION_BAND_PADDING * 2)
 }
 
 function makeRect({

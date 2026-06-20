@@ -12,10 +12,11 @@ import RemoteResourceSelect from '@/components/RemoteResourceSelect.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 import TimetableDialog from '@/components/TimetableDialog.vue'
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
-import AblationView from '@/views/AblationView.vue'
+import AdjustmentPlanAnalysisView from '@/views/AdjustmentPlanAnalysisView.vue'
+import AdjustmentPlansView from '@/views/AdjustmentPlansView.vue'
 import DashboardView from '@/views/DashboardView.vue'
-import DatasetsView from '@/views/DatasetsView.vue'
 import ModelsView from '@/views/ModelsView.vue'
+import ScenarioComparisonView from '@/views/ScenarioComparisonView.vue'
 import ScenarioDetailView from '@/views/ScenarioDetailView.vue'
 import ScenarioSetsView from '@/views/ScenarioSetsView.vue'
 import { Menu, Tickets } from '@/icons'
@@ -26,12 +27,12 @@ import {
   isTaskTerminal,
 } from '@/task-status'
 import type {
-  DatasetBuildForm,
-  DatasetRunForm,
+  AdjustmentPlanBuildForm,
+  AdjustmentPlanRunForm,
   TrainForm,
 } from '@/views/types'
 import type {
-  DatasetSummary,
+  AdjustmentPlanSummary,
   ModelCheckpoint,
   ModelDetail,
   ProjectState,
@@ -42,22 +43,21 @@ import type {
   Task,
 } from '@/types'
 
-type PageKey = 'dashboard' | 'scenarios' | 'scenario-detail' | 'datasets' | 'models' | 'ablation-scenarios' | 'ablation-datasets'
-type DatasetBuildSource = 'scenario_set' | 'scenario'
-type DatasetCreateMode = 'empty' | 'scenario_set'
+type PageKey = 'dashboard' | 'scenario-overview' | 'scenario-resources' | 'scenario-detail' | 'adjustment-plans' | 'models' | 'ablation-scenarios' | 'ablation-plans'
+type AdjustmentPlanBuildSource = 'scenario_set' | 'scenario'
 type GenerationContextSourceMode = 'scenario_set' | 'upload'
-type ResourceKind = 'scenario_sets' | 'datasets' | 'models'
+type ResourceKind = 'scenario_sets' | 'models'
 
 const TASK_POLL_MS = 2500
 const TASK_DURATION_TICK_MS = 1000
-const DEFAULT_DATASET_RUN_FORM: DatasetRunForm = {
+const DEFAULT_PLAN_RUN_FORM: AdjustmentPlanRunForm = {
   solveLimit: 0,
   solveTimeLimit: 120,
   solveMipGap: 0,
   solveThreads: 0,
   skipSolved: false,
 }
-const DEFAULT_DATASET_BUILD_FORM: DatasetBuildForm = {
+const DEFAULT_PLAN_BUILD_FORM: AdjustmentPlanBuildForm = {
   objective_delay_weight: 1,
   objective_mode: 'abs',
   cancellation_enabled: false,
@@ -79,6 +79,7 @@ const DEFAULT_TRAIN_FORM: TrainForm = {
   latent_dim: 16,
   message_passing_steps: 2,
   epochs: 800,
+  checkpoint_every: 5,
   batch_size: 8,
   lr: 0.0003,
   seed: 1,
@@ -87,6 +88,7 @@ const DEFAULT_TRAIN_FORM: TrainForm = {
   anchor_weight: 1,
   param_weight: 2,
   kl_weight: 0.0015,
+  use_relation_graph: true,
   relation_weight: 0.5,
 }
 const DEFAULT_SPEED_INTERRUPTION_THRESHOLD = 20
@@ -94,14 +96,15 @@ const DEVICE_OPTIONS = ['auto', 'cpu', 'cuda:0', 'cuda:1', 'cuda:2', 'cuda:3']
 const TRAIN_FIELD_TIPS = {
   model_id: '本次训练产物的模型目录 ID，用于后续选择 checkpoint 生成场景。',
   scenario_set_id: '训练样本来源，固定使用一个完整场景分类。',
-  max_slots: '每类扰动最多保留/预测的事件槽位数，决定辅助扰动图的目标容量。',
-  event_time_window: '判断两个时刻事件是否存在近邻关系的时间窗口，单位秒。',
-  event_top_k: '每个时刻事件最多连接的近邻事件数量，用于控制辅助扰动图稠密度。',
-  section_order_window: '沿线路顺序连接前后区间的窗口大小，用于表达邻近区间关系。',
+  max_slots: '扰动目标图 G_D 中每类扰动任务最多保留/预测的最大扰动数。',
+  event_time_window: '上下文图 C 中，连接相邻时刻事件节点的时间窗口，单位秒。',
+  event_top_k: '上下文图 C 中，每个事件节点最多保留的事件近邻数量，用于控制 C 的事件边密度。',
+  section_order_window: '上下文图 C 中，沿线路顺序连接前后区间节点的邻接窗口。',
   hidden_dim: 'VAE 编码器/解码器隐藏层维度，越大表达能力越强但训练更重。',
   latent_dim: '潜变量维度，控制模型压缩扰动模式的容量。',
   message_passing_steps: '图神经网络消息传递轮数，越大可聚合更远邻域信息。',
   epochs: '完整遍历训练场景分类的轮数。',
+  checkpoint_every: '每隔多少轮评估并更新一次最佳 checkpoint；最后一轮仍会保存为最后模型。',
   batch_size: '每次优化使用的样本数量。',
   lr: '优化器学习率。',
   seed: '随机种子，用于复现实验。',
@@ -110,7 +113,8 @@ const TRAIN_FIELD_TIPS = {
   anchor_weight: '扰动锚点位置预测损失权重。',
   param_weight: '扰动参数预测损失权重，例如延误秒数、限速速度等。',
   kl_weight: 'VAE KL 散度损失权重，控制潜空间正则强度。',
-  relation_weight: '扰动关系辅助损失权重，用于强化 target_relations 的时空关联学习。',
+  use_relation_graph: '训练 posterior 是否引入扰动关系图 R；关闭后可用于 R 消融实验。',
+  relation_weight: '关系图 R 的辅助损失权重；仅在启用 R 时参与训练目标。',
 } as const
 const GENERATION_FIELD_TIPS = {
   scenario_set_id: '模型生成的场景会写入这个场景分类。',
@@ -123,7 +127,7 @@ const GENERATION_FIELD_TIPS = {
 } as const
 const TASK_LABELS = {
   scenarios: ['normal_generate', 'scenario_set_create', 'scenario_add', 'scenario_delete'],
-  datasets: ['dataset_create', 'build', 'solve', 'export_timetable'],
+  adjustmentPlans: ['build', 'solve'],
   models: ['train', 'generation'],
 } as const
 
@@ -138,6 +142,7 @@ const activePage = ref<PageKey>('dashboard')
 const activeOperation = ref('')
 const mainScrollbar = ref<ScrollbarInstance>()
 const navigationDrawerVisible = ref(false)
+const navigationPinnedExpanded = ref(false)
 const taskDrawerVisible = ref(false)
 
 const selectedScenarioSetId = ref('')
@@ -178,22 +183,21 @@ const normalGenerateForm = ref({
 const normalGenerateTimetableFiles = ref<UploadUserFile[]>([])
 const normalGenerateMileageFiles = ref<UploadUserFile[]>([])
 
-const selectedDatasetId = ref('')
-const loadedDatasetId = ref('')
-const datasetDetailRefreshKey = ref(0)
-const datasetDetailLoading = ref(false)
-const datasetOptions = ref<ResourceOption[]>([])
-const datasetOptionsLoading = ref(false)
-const datasetCreateDialogVisible = ref(false)
-const datasetCreateMode = ref<DatasetCreateMode>('scenario_set')
-const newDatasetId = ref('')
-const datasetCreateScenarioSetId = ref('')
-const datasetBuildDialogVisible = ref(false)
-const datasetBuildForm = ref({
+const selectedPlanId = ref('')
+const loadedPlanId = ref('')
+const planDetailRefreshKey = ref(0)
+const planDetailLoading = ref(false)
+const adjustmentPlans = ref<AdjustmentPlanSummary[]>([])
+const adjustmentPlanOptions = ref<ResourceOption[]>([])
+const adjustmentPlanOptionsLoading = ref(false)
+const planCreateDialogVisible = ref(false)
+const newPlanId = ref('')
+const planBuildDialogVisible = ref(false)
+const planBuildForm = ref({
   scenario_set_id: '',
-  source: 'scenario_set' as DatasetBuildSource,
+  source: 'scenario_set' as AdjustmentPlanBuildSource,
   scenario_id: '',
-  ...DEFAULT_DATASET_BUILD_FORM,
+  ...DEFAULT_PLAN_BUILD_FORM,
 })
 const solveDialogVisible = ref(false)
 const solveTargetCaseId = ref('')
@@ -201,7 +205,7 @@ const timetableDialogVisible = ref(false)
 const timetableCaseId = ref('')
 const taskLogDialogVisible = ref(false)
 const taskLogTarget = ref<Task | null>(null)
-const datasetRunForm = ref<DatasetRunForm>({ ...DEFAULT_DATASET_RUN_FORM })
+const planRunForm = ref<AdjustmentPlanRunForm>({ ...DEFAULT_PLAN_RUN_FORM })
 
 const selectedModelId = ref('')
 const loadedModelId = ref('')
@@ -216,7 +220,6 @@ const trainDialogMode = ref<'create' | 'retrain'>('create')
 const generationDialogVisible = ref(false)
 const trainForm = reactive<TrainForm>({ ...DEFAULT_TRAIN_FORM })
 const trainModelSuffix = ref('')
-const generationScenarioSetSuffix = ref('')
 const generationForm = ref({
   checkpoint: '',
   scenario_set_id: '',
@@ -238,9 +241,10 @@ let pollHandle = 0
 let durationTickHandle = 0
 const resourceOptionRequestSeq = reactive<Record<ResourceKind, number>>({
   scenario_sets: 0,
-  datasets: 0,
   models: 0,
 })
+let adjustmentPlanOptionRequestSeq = 0
+let adjustmentPlanListRequestSeq = 0
 let scenarioOptionRequestSeq = 0
 let projectOptionRequestSeq = 0
 
@@ -249,7 +253,6 @@ const trainModelPrefix = computed(() => {
   const scenarioSetId = trainForm.scenario_set_id.trim()
   return scenarioSetId ? `train_${scenarioSetId}` : ''
 })
-const generationScenarioSetPrefix = computed(() => loadedModelId.value.trim())
 const projectSelectOptions = computed(() =>
   mergeSelectedResourceOption(
     projectOptions.value,
@@ -258,7 +261,9 @@ const projectSelectOptions = computed(() =>
   ),
 )
 const scenarioSets = computed(() => project.value?.scenario_sets ?? [])
-const datasets = computed(() => project.value?.datasets ?? [])
+const adjustmentPlanCount = computed(() =>
+  scenarioSets.value.reduce((total, item) => total + (item.plan_count ?? 0), 0),
+)
 const models = computed(() => {
   const items = project.value?.models ?? []
   const pendingId = pendingModelId.value.trim()
@@ -289,12 +294,8 @@ const scenarioSetSelectOptions = computed(() =>
       label: resourceLabel(scenarioSets.value, 'scenario_set_id', loadedScenarioSetId.value, 'case_count'),
     },
     {
-      value: datasetCreateScenarioSetId.value,
-      label: resourceLabel(scenarioSets.value, 'scenario_set_id', datasetCreateScenarioSetId.value, 'case_count'),
-    },
-    {
-      value: datasetBuildForm.value.scenario_set_id,
-      label: resourceLabel(scenarioSets.value, 'scenario_set_id', datasetBuildForm.value.scenario_set_id, 'case_count'),
+      value: planBuildForm.value.scenario_set_id,
+      label: resourceLabel(scenarioSets.value, 'scenario_set_id', planBuildForm.value.scenario_set_id, 'case_count'),
     },
     {
       value: trainForm.scenario_set_id,
@@ -314,19 +315,19 @@ const scenarioSetSelectOptions = computed(() =>
 const scenarioSelectOptions = computed(() =>
   mergeSelectedResourceOption(
     scenarioOptions.value,
-    datasetBuildForm.value.scenario_id,
-    datasetBuildForm.value.scenario_id,
+    planBuildForm.value.scenario_id,
+    planBuildForm.value.scenario_id,
   ),
 )
-const datasetSelectOptions = computed(() =>
-  mergeSelectedResourceOptions(datasetOptions.value, [
+const adjustmentPlanSelectOptions = computed(() =>
+  mergeSelectedResourceOptions(adjustmentPlanOptions.value, [
     {
-      value: selectedDatasetId.value,
-      label: resourceLabel(datasets.value, 'dataset_id', selectedDatasetId.value, 'case_count'),
+      value: selectedPlanId.value,
+      label: resourceLabel(adjustmentPlans.value, 'plan_id', selectedPlanId.value, 'case_count'),
     },
     {
-      value: loadedDatasetId.value,
-      label: resourceLabel(datasets.value, 'dataset_id', loadedDatasetId.value, 'case_count'),
+      value: loadedPlanId.value,
+      label: resourceLabel(adjustmentPlans.value, 'plan_id', loadedPlanId.value, 'case_count'),
     },
   ]),
 )
@@ -342,8 +343,8 @@ const modelSelectOptions = computed(() =>
     },
   ]),
 )
-const loadedDataset = computed(
-  () => datasets.value.find((item) => item.dataset_id === loadedDatasetId.value) ?? null,
+const loadedPlan = computed(
+  () => adjustmentPlans.value.find((item) => item.plan_id === loadedPlanId.value) ?? null,
 )
 const loadedModel = computed(
   () => models.value.find((item) => item.model_id === loadedModelId.value) ?? null,
@@ -353,7 +354,6 @@ const taskProjectOptions = computed(() => [
   ...projects.value.map((item) => ({ label: item.project_id, value: item.project_id })),
 ])
 const scenarioTasks = computed(() => filterTasks(TASK_LABELS.scenarios))
-const datasetTasks = computed(() => filterTasks(TASK_LABELS.datasets))
 const modelTasks = computed(() => filterTasks(TASK_LABELS.models))
 const visibleTasks = computed(() => tasks.value)
 const hasRunningTasks = computed(() => tasks.value.some((task) => !isTaskTerminal(task)))
@@ -368,8 +368,9 @@ watch(selectedProjectId, async (_projectId, previousProjectId) => {
   if (previousProjectId) {
     selectedScenarioSetId.value = ''
     loadedScenarioSetId.value = ''
-    selectedDatasetId.value = ''
-    loadedDatasetId.value = ''
+    selectedPlanId.value = ''
+    loadedPlanId.value = ''
+    adjustmentPlans.value = []
     selectedModelId.value = ''
     loadedModelId.value = ''
     clearResourceOptions()
@@ -382,37 +383,21 @@ watch(activePage, async () => {
   await hydrateActivePage()
 })
 
-watch(selectedDatasetId, (datasetId) => {
+watch(selectedPlanId, (planId) => {
   timetableDialogVisible.value = false
   timetableCaseId.value = ''
-  loadedDatasetId.value = datasetId
-  if (datasetId) datasetDetailRefreshKey.value += 1
+  loadedPlanId.value = planId
+  if (planId) planDetailRefreshKey.value += 1
 })
 
-watch(selectedScenarioSetId, (scenarioSetId) => {
+watch(selectedScenarioSetId, async (scenarioSetId) => {
   loadedScenarioSetId.value = scenarioSetId
+  await loadAdjustmentPlans(false)
 })
 
 watch(selectedModelId, (modelId) => {
   loadedModelId.value = modelId
   retrainModelDetail.value = null
-})
-
-watch(datasetCreateMode, (mode) => {
-  if (mode === 'scenario_set' && !datasetCreateScenarioSetId.value) {
-    datasetCreateScenarioSetId.value = selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
-    syncDatasetCreateId()
-  }
-  if (mode === 'empty' && !newDatasetId.value) {
-    newDatasetId.value = ''
-  }
-})
-
-watch(datasetCreateScenarioSetId, () => {
-  if (datasetCreateMode.value === 'scenario_set') {
-    syncDatasetCreateId()
-    datasetBuildForm.value.scenario_set_id = datasetCreateScenarioSetId.value.trim()
-  }
 })
 
 watch(
@@ -424,10 +409,6 @@ watch(
 
 watch(trainModelSuffix, () => {
   if (trainDialogMode.value === 'create') syncTrainModelId()
-})
-
-watch(generationScenarioSetSuffix, () => {
-  if (generationDialogVisible.value) syncGenerationScenarioSetId()
 })
 
 watch(hasRunningTasks, (hasRunning) => {
@@ -509,41 +490,24 @@ async function loadSelectedProject(showMessage = true) {
 function clearResourceOptions() {
   scenarioSetOptions.value = []
   scenarioOptions.value = []
-  datasetOptions.value = []
+  adjustmentPlanOptions.value = []
+  adjustmentPlans.value = []
   modelOptions.value = []
 }
 
 function selectFirstOptions() {
-  if (!project.value) return
-  if (
-    selectedScenarioSetId.value &&
-    !project.value.scenario_sets.some(
-      (item) => item.scenario_set_id === selectedScenarioSetId.value,
-    )
-  ) {
-    selectedScenarioSetId.value = ''
+  const currentProject = project.value
+  if (!currentProject) return
+  const hasScenarioSet = (scenarioSetId: string) =>
+    currentProject.scenario_sets.some((item) => item.scenario_set_id === scenarioSetId)
+  const firstScenarioSetId = currentProject.scenario_sets[0]?.scenario_set_id ?? ''
+  if (!selectedScenarioSetId.value || !hasScenarioSet(selectedScenarioSetId.value)) {
+    selectedScenarioSetId.value = firstScenarioSetId
   }
-  if (
-    loadedScenarioSetId.value &&
-    !project.value.scenario_sets.some(
-      (item) => item.scenario_set_id === loadedScenarioSetId.value,
-    )
-  ) {
-    loadedScenarioSetId.value = ''
+  if (!loadedScenarioSetId.value || !hasScenarioSet(loadedScenarioSetId.value)) {
+    loadedScenarioSetId.value = selectedScenarioSetId.value
   }
-  if (
-    !selectedDatasetId.value ||
-    !project.value.datasets.some((item) => item.dataset_id === selectedDatasetId.value)
-  ) {
-    selectedDatasetId.value = project.value.datasets[0]?.dataset_id ?? ''
-  }
-  if (
-    loadedDatasetId.value &&
-    !project.value.datasets.some((item) => item.dataset_id === loadedDatasetId.value)
-  ) {
-    loadedDatasetId.value = ''
-  }
-  const readyPendingModel = project.value.models.find((item) => item.model_id === pendingModelId.value)
+  const readyPendingModel = currentProject.models.find((item) => item.model_id === pendingModelId.value)
   if (readyPendingModel) {
     selectedModelId.value = readyPendingModel.model_id
     loadedModelId.value = readyPendingModel.model_id
@@ -552,15 +516,15 @@ function selectFirstOptions() {
     !selectedModelId.value ||
     (
       selectedModelId.value !== pendingModelId.value &&
-      !project.value.models.some((item) => item.model_id === selectedModelId.value)
+      !currentProject.models.some((item) => item.model_id === selectedModelId.value)
     )
   ) {
-    selectedModelId.value = project.value.models[0]?.model_id ?? ''
+    selectedModelId.value = currentProject.models[0]?.model_id ?? ''
   }
   if (
     loadedModelId.value &&
     loadedModelId.value !== pendingModelId.value &&
-    !project.value.models.some((item) => item.model_id === loadedModelId.value)
+    !currentProject.models.some((item) => item.model_id === loadedModelId.value)
   ) {
     loadedModelId.value = ''
   }
@@ -647,6 +611,9 @@ function resourceOptionLabel(value: string, count: unknown) {
 async function hydrateActivePage(showLoading = true) {
   if (!hasProject.value) return
   void showLoading
+  if (activePage.value === 'adjustment-plans') {
+    await loadAdjustmentPlans(false)
+  }
 }
 
 async function refreshTasks(showMessage = true) {
@@ -724,11 +691,13 @@ function refreshLoadedResourceForTask(task: Task) {
     scenarioCategoryRefreshKey.value += 1
   }
   if (
-    loadedDatasetId.value &&
-    ['build', 'solve', 'export_timetable'].includes(label) &&
-    params.dataset_id === loadedDatasetId.value
+    loadedPlanId.value &&
+    ['build', 'solve'].includes(label) &&
+    params.scenario_set_id === loadedScenarioSetId.value &&
+    params.plan_id === loadedPlanId.value
   ) {
-    datasetDetailRefreshKey.value += 1
+    planDetailRefreshKey.value += 1
+    void loadAdjustmentPlans(false)
   }
 }
 
@@ -850,13 +819,13 @@ function reloadSelectedScenarioSetDetail() {
   scenarioCategoryRefreshKey.value += 1
 }
 
-function reloadSelectedDatasetDetail() {
-  if (!selectedDatasetId.value) {
-    ElMessage.warning('请先选择 MILP 实例集。')
+function reloadSelectedPlanDetail() {
+  if (!selectedPlanId.value) {
+    ElMessage.warning('请先选择调整计划。')
     return
   }
-  loadedDatasetId.value = selectedDatasetId.value
-  datasetDetailRefreshKey.value += 1
+  loadedPlanId.value = selectedPlanId.value
+  planDetailRefreshKey.value += 1
 }
 
 function reloadSelectedModelDetail() {
@@ -910,7 +879,7 @@ async function searchScenarioSetOptions(query: string) {
 
 async function loadScenarioOptions(query = '') {
   const projectId = selectedProjectId.value
-  const scenarioSetId = datasetBuildForm.value.scenario_set_id.trim()
+  const scenarioSetId = planBuildForm.value.scenario_set_id.trim()
   const requestSeq = scenarioOptionRequestSeq + 1
   scenarioOptionRequestSeq = requestSeq
 
@@ -925,7 +894,7 @@ async function loadScenarioOptions(query = '') {
     if (
       requestSeq === scenarioOptionRequestSeq &&
       projectId === selectedProjectId.value &&
-      scenarioSetId === datasetBuildForm.value.scenario_set_id.trim()
+      scenarioSetId === planBuildForm.value.scenario_set_id.trim()
     ) {
       scenarioOptions.value = options
     }
@@ -941,6 +910,80 @@ async function loadScenarioOptions(query = '') {
 
 function reloadScenarioOptionsOnOpen(visible: boolean) {
   if (visible) void loadScenarioOptions('')
+}
+
+async function loadAdjustmentPlans(showMessage = true) {
+  const projectId = selectedProjectId.value
+  const scenarioSetId = loadedScenarioSetId.value || selectedScenarioSetId.value
+  const requestSeq = adjustmentPlanListRequestSeq + 1
+  adjustmentPlanListRequestSeq = requestSeq
+  if (!projectId || !scenarioSetId) {
+    adjustmentPlans.value = []
+    selectedPlanId.value = ''
+    loadedPlanId.value = ''
+    return
+  }
+  try {
+    const result = await api.listAdjustmentPlans(projectId, scenarioSetId)
+    if (
+      requestSeq !== adjustmentPlanListRequestSeq ||
+      projectId !== selectedProjectId.value ||
+      scenarioSetId !== (loadedScenarioSetId.value || selectedScenarioSetId.value)
+    ) {
+      return
+    }
+    adjustmentPlans.value = result
+    if (!selectedPlanId.value || !result.some((item) => item.plan_id === selectedPlanId.value)) {
+      selectedPlanId.value = result[0]?.plan_id ?? ''
+    }
+    if (loadedPlanId.value && !result.some((item) => item.plan_id === loadedPlanId.value)) {
+      loadedPlanId.value = ''
+    }
+  } catch (error) {
+    if (requestSeq === adjustmentPlanListRequestSeq) {
+      adjustmentPlans.value = []
+      if (showMessage) notifyError(error)
+    }
+  }
+}
+
+async function loadAdjustmentPlanOptions(query = '') {
+  const projectId = selectedProjectId.value
+  const scenarioSetId = loadedScenarioSetId.value || selectedScenarioSetId.value
+  const requestSeq = adjustmentPlanOptionRequestSeq + 1
+  adjustmentPlanOptionRequestSeq = requestSeq
+  if (!projectId || !scenarioSetId) {
+    adjustmentPlanOptions.value = []
+    return
+  }
+  adjustmentPlanOptionsLoading.value = true
+  try {
+    const options = await api.listAdjustmentPlanOptions(projectId, scenarioSetId, query)
+    if (
+      requestSeq === adjustmentPlanOptionRequestSeq &&
+      projectId === selectedProjectId.value &&
+      scenarioSetId === (loadedScenarioSetId.value || selectedScenarioSetId.value)
+    ) {
+      adjustmentPlanOptions.value = options
+    }
+  } catch (error) {
+    if (requestSeq === adjustmentPlanOptionRequestSeq) {
+      adjustmentPlanOptions.value = []
+      notifyError(error)
+    }
+  } finally {
+    if (requestSeq === adjustmentPlanOptionRequestSeq) adjustmentPlanOptionsLoading.value = false
+  }
+}
+
+async function reloadAdjustmentPlansOnOpen(visible: boolean) {
+  if (!visible) return
+  await loadAdjustmentPlanOptions('')
+  await loadAdjustmentPlans(false)
+}
+
+async function searchAdjustmentPlanOptions(query: string) {
+  await loadAdjustmentPlanOptions(query)
 }
 
 function openScenarioDialog() {
@@ -991,7 +1034,7 @@ async function createScenarioCase() {
     scenarioCategoryRefreshKey.value += 1
     scenarioDialogVisible.value = false
     await loadSelectedProject(false)
-    return `场景 ${scenarioId} 已创建，尚未激活。`
+    return `场景 ${scenarioId} 已创建，待校验。`
   })
 }
 
@@ -1023,7 +1066,7 @@ function viewScenario(id: string) {
 }
 
 function backToScenarios() {
-  activePage.value = 'scenarios'
+  activePage.value = 'scenario-resources'
 }
 
 function openNormalGenerateDialog() {
@@ -1079,70 +1122,73 @@ async function submitNormalGenerate() {
   })
 }
 
-async function submitBuild() {
-  const datasetId = loadedDatasetId.value.trim()
-  const scenarioSetId = datasetBuildForm.value.scenario_set_id.trim()
+async function submitBuildPlan() {
+  const planId = loadedPlanId.value.trim()
+  const scenarioSetId = planBuildForm.value.scenario_set_id.trim()
   const scenarioId =
-    datasetBuildForm.value.source === 'scenario' ? datasetBuildForm.value.scenario_id.trim() : ''
-  if (!datasetId || !scenarioSetId) {
-    ElMessage.warning('请先选择 MILP 实例集和场景来源。')
+    planBuildForm.value.source === 'scenario' ? planBuildForm.value.scenario_id.trim() : ''
+  if (!planId || !scenarioSetId) {
+    ElMessage.warning('请先选择调整计划和场景来源。')
     return
   }
-  if (datasetBuildForm.value.source === 'scenario' && !scenarioId) {
+  if (planBuildForm.value.source === 'scenario' && !scenarioId) {
     ElMessage.warning('请选择要构建的场景。')
     return
   }
-  await submitTask('构建 MILP', async () => {
+  await submitTask('构建调整计划', async () => {
     const response = await api.submitBuild(
       selectedProjectId.value,
       scenarioSetId,
-      datasetId,
+      planId,
       scenarioId,
       normalizedBuildOptions(),
     )
     trackTask(response.task)
-    selectedDatasetId.value = datasetId
-    loadedDatasetId.value = datasetId
-    datasetBuildDialogVisible.value = false
+    selectedScenarioSetId.value = scenarioSetId
+    loadedScenarioSetId.value = scenarioSetId
+    selectedPlanId.value = planId
+    loadedPlanId.value = planId
+    planBuildDialogVisible.value = false
+    await loadAdjustmentPlans(false)
     return response.task
   })
 }
 
-function normalizedBuildOptions(): DatasetBuildForm {
+function normalizedBuildOptions(): AdjustmentPlanBuildForm {
   return {
     objective_delay_weight: positiveNumber(
-      datasetBuildForm.value.objective_delay_weight,
-      DEFAULT_DATASET_BUILD_FORM.objective_delay_weight,
+      planBuildForm.value.objective_delay_weight,
+      DEFAULT_PLAN_BUILD_FORM.objective_delay_weight,
     ),
-    objective_mode: datasetBuildForm.value.objective_mode || DEFAULT_DATASET_BUILD_FORM.objective_mode,
-    cancellation_enabled: Boolean(datasetBuildForm.value.cancellation_enabled),
+    objective_mode: planBuildForm.value.objective_mode || DEFAULT_PLAN_BUILD_FORM.objective_mode,
+    cancellation_enabled: Boolean(planBuildForm.value.cancellation_enabled),
     cancellation_penalty_weight: positiveNumber(
-      datasetBuildForm.value.cancellation_penalty_weight,
-      DEFAULT_DATASET_BUILD_FORM.cancellation_penalty_weight,
+      planBuildForm.value.cancellation_penalty_weight,
+      DEFAULT_PLAN_BUILD_FORM.cancellation_penalty_weight,
     ),
     arr_arr_headway_seconds: Math.floor(
       positiveNumber(
-        datasetBuildForm.value.arr_arr_headway_seconds,
-        DEFAULT_DATASET_BUILD_FORM.arr_arr_headway_seconds,
+        planBuildForm.value.arr_arr_headway_seconds,
+        DEFAULT_PLAN_BUILD_FORM.arr_arr_headway_seconds,
       ),
     ),
     dep_dep_headway_seconds: Math.floor(
       positiveNumber(
-        datasetBuildForm.value.dep_dep_headway_seconds,
-        DEFAULT_DATASET_BUILD_FORM.dep_dep_headway_seconds,
+        planBuildForm.value.dep_dep_headway_seconds,
+        DEFAULT_PLAN_BUILD_FORM.dep_dep_headway_seconds,
       ),
     ),
     dwell_seconds_at_stops: Math.floor(
       positiveNumber(
-        datasetBuildForm.value.dwell_seconds_at_stops,
-        DEFAULT_DATASET_BUILD_FORM.dwell_seconds_at_stops,
+        planBuildForm.value.dwell_seconds_at_stops,
+        DEFAULT_PLAN_BUILD_FORM.dwell_seconds_at_stops,
       ),
     ),
-    big_m: Math.floor(positiveNumber(datasetBuildForm.value.big_m, DEFAULT_DATASET_BUILD_FORM.big_m)),
+    big_m: Math.floor(positiveNumber(planBuildForm.value.big_m, DEFAULT_PLAN_BUILD_FORM.big_m)),
     tolerance_delay_seconds: Math.floor(
       positiveNumber(
-        datasetBuildForm.value.tolerance_delay_seconds,
-        DEFAULT_DATASET_BUILD_FORM.tolerance_delay_seconds,
+        planBuildForm.value.tolerance_delay_seconds,
+        DEFAULT_PLAN_BUILD_FORM.tolerance_delay_seconds,
       ),
     ),
   }
@@ -1152,70 +1198,62 @@ function positiveNumber(value: number | null | undefined, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-async function createDataset() {
-  const importScenarioSet = datasetCreateMode.value === 'scenario_set'
-  const scenarioSetId = datasetCreateScenarioSetId.value.trim()
-  if (importScenarioSet) syncDatasetCreateId()
-  const datasetId = newDatasetId.value.trim()
-  if (!datasetId) {
-    ElMessage.warning(
-      importScenarioSet
-        ? '请先选择要引入的场景分类。'
-        : '请填写 MILP 实例集 ID。',
-    )
+async function createAdjustmentPlan() {
+  const scenarioSetId = loadedScenarioSetId.value || selectedScenarioSetId.value
+  const planId = newPlanId.value.trim()
+  const scenarioId =
+    planBuildForm.value.source === 'scenario' ? planBuildForm.value.scenario_id.trim() : ''
+  if (!scenarioSetId) {
+    ElMessage.warning('请先选择场景分类。')
     return
   }
-  if (importScenarioSet && !scenarioSetId) {
-    ElMessage.warning('请先选择要引入的场景分类。')
+  if (!planId) {
+    ElMessage.warning('请填写调整计划 ID。')
     return
   }
-  const existingDataset = datasets.value.find((item) => item.dataset_id === datasetId)
-  if (existingDataset && !importScenarioSet) {
-    ElMessage.warning(`MILP 实例集 ${datasetId} 已存在，请换一个 ID。`)
+  if (planBuildForm.value.source === 'scenario' && !scenarioId) {
+    ElMessage.warning('请选择要构建的场景。')
     return
   }
-  if (existingDataset) {
+  const existingPlan = adjustmentPlans.value.find((item) => item.plan_id === planId)
+  if (existingPlan) {
     try {
       await ElMessageBox.confirm(
-        `MILP 实例集 ${datasetId} 已存在。继续会清空并重建该实例集产物。`,
-        '重建 MILP 实例集',
+        `调整计划 ${planId} 已存在。继续会清空并重建该计划产物。`,
+        '重建调整计划',
         { type: 'warning', confirmButtonText: '清空并重建', cancelButtonText: '取消' },
       )
     } catch {
       return
     }
   }
-  await submitTask(importScenarioSet ? '构建 MILP 实例集' : '创建空 MILP 实例集', async () => {
-    selectedDatasetId.value = datasetId
-    loadedDatasetId.value = datasetId
-    if (importScenarioSet) {
-      selectedScenarioSetId.value = scenarioSetId
-      const buildResponse = await api.submitBuild(
-        selectedProjectId.value,
-        scenarioSetId,
-        datasetId,
-        '',
-        normalizedBuildOptions(),
-      )
-      trackTask(buildResponse.task)
-      resetDatasetCreateForm()
-      datasetCreateDialogVisible.value = false
-      return buildResponse.task
-    }
-    const response = await api.createDataset(selectedProjectId.value, datasetId)
+  await submitTask('构建调整计划', async () => {
+    selectedScenarioSetId.value = scenarioSetId
+    loadedScenarioSetId.value = scenarioSetId
+    selectedPlanId.value = planId
+    loadedPlanId.value = planId
+    const response = await api.submitBuild(
+      selectedProjectId.value,
+      scenarioSetId,
+      planId,
+      scenarioId,
+      normalizedBuildOptions(),
+    )
     trackTask(response.task)
-    resetDatasetCreateForm()
-    datasetCreateDialogVisible.value = false
+    resetPlanCreateForm()
+    planCreateDialogVisible.value = false
+    await loadAdjustmentPlans(false)
     return response.task
   })
 }
 
-async function deleteDatasetById(datasetId: string) {
-  if (!selectedProjectId.value || !datasetId) return
+async function deleteAdjustmentPlanById(planId: string) {
+  const scenarioSetId = loadedScenarioSetId.value || selectedScenarioSetId.value
+  if (!selectedProjectId.value || !scenarioSetId || !planId) return
   try {
     await ElMessageBox.confirm(
-      `确认删除 MILP 实例集 ${datasetId}？该操作会删除构建、求解和时刻表产物。`,
-      '删除 MILP 实例集',
+      `确认删除调整计划 ${planId}？该操作会删除构建、求解和时刻表产物。`,
+      '删除调整计划',
       {
         type: 'warning',
         confirmButtonText: '删除',
@@ -1225,29 +1263,32 @@ async function deleteDatasetById(datasetId: string) {
   } catch {
     return
   }
-  await runAction('删除 MILP 实例集', async () => {
-    await api.deleteDataset(selectedProjectId.value, datasetId)
-    if (selectedDatasetId.value === datasetId) {
-      selectedDatasetId.value = ''
+  await runAction('删除调整计划', async () => {
+    await api.deleteAdjustmentPlan(selectedProjectId.value, scenarioSetId, planId)
+    if (selectedPlanId.value === planId) {
+      selectedPlanId.value = ''
       timetableCaseId.value = ''
       timetableDialogVisible.value = false
     }
-    if (loadedDatasetId.value === datasetId) {
-      loadedDatasetId.value = ''
+    if (loadedPlanId.value === planId) {
+      loadedPlanId.value = ''
     }
-    datasetOptions.value = datasetOptions.value.filter((item) => item.value !== datasetId)
+    adjustmentPlanOptions.value = adjustmentPlanOptions.value.filter((item) => item.value !== planId)
+    adjustmentPlans.value = adjustmentPlans.value.filter((item) => item.plan_id !== planId)
     await loadSelectedProject(false)
-    return `MILP 实例集 ${datasetId} 已删除`
+    await loadAdjustmentPlans(false)
+    return `调整计划 ${planId} 已删除`
   })
 }
 
 async function submitSolve(caseId = '') {
-  if (!loadedDatasetId.value) return
+  if (!loadedScenarioSetId.value || !loadedPlanId.value) return
   const options = normalizedSolveOptions()
   await submitTask('求解', async () => {
     const response = await api.submitSolve(
       selectedProjectId.value,
-      loadedDatasetId.value,
+      loadedScenarioSetId.value,
+      loadedPlanId.value,
       caseId ? 0 : options.solveLimit,
       options.solveTimeLimit,
       caseId,
@@ -1261,23 +1302,9 @@ async function submitSolve(caseId = '') {
   })
 }
 
-async function submitExportTimetable(caseId = '') {
-  if (!loadedDatasetId.value) return
-  await submitTask('导出时刻表', async () => {
-    const response = await api.submitExportTimetable(
-      selectedProjectId.value,
-      loadedDatasetId.value,
-      0,
-      caseId,
-    )
-    trackTask(response.task)
-    return response.task
-  })
-}
-
 function openSolveDialog(caseId = '') {
   if (operationPending.value) return
-  if (!loadedDatasetId.value) return
+  if (!loadedPlanId.value) return
   solveTargetCaseId.value = caseId
   resetSolveForm()
   solveDialogVisible.value = true
@@ -1288,21 +1315,21 @@ async function submitSolveDialog() {
 }
 
 function resetSolveForm() {
-  datasetRunForm.value = { ...DEFAULT_DATASET_RUN_FORM }
+  planRunForm.value = { ...DEFAULT_PLAN_RUN_FORM }
 }
 
-function normalizedSolveOptions(): DatasetRunForm {
+function normalizedSolveOptions(): AdjustmentPlanRunForm {
   return {
-    solveLimit: nonNegativeNumber(datasetRunForm.value.solveLimit, DEFAULT_DATASET_RUN_FORM.solveLimit),
+    solveLimit: nonNegativeNumber(planRunForm.value.solveLimit, DEFAULT_PLAN_RUN_FORM.solveLimit),
     solveTimeLimit: nonNegativeNumber(
-      datasetRunForm.value.solveTimeLimit,
-      DEFAULT_DATASET_RUN_FORM.solveTimeLimit,
+      planRunForm.value.solveTimeLimit,
+      DEFAULT_PLAN_RUN_FORM.solveTimeLimit,
     ),
-    solveMipGap: nonNegativeNumber(datasetRunForm.value.solveMipGap, DEFAULT_DATASET_RUN_FORM.solveMipGap),
+    solveMipGap: nonNegativeNumber(planRunForm.value.solveMipGap, DEFAULT_PLAN_RUN_FORM.solveMipGap),
     solveThreads: Math.floor(
-      nonNegativeNumber(datasetRunForm.value.solveThreads, DEFAULT_DATASET_RUN_FORM.solveThreads),
+      nonNegativeNumber(planRunForm.value.solveThreads, DEFAULT_PLAN_RUN_FORM.solveThreads),
     ),
-    skipSolved: Boolean(datasetRunForm.value.skipSolved),
+    skipSolved: Boolean(planRunForm.value.skipSolved),
   }
 }
 
@@ -1310,85 +1337,71 @@ function nonNegativeNumber(value: number | null | undefined, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
 }
 
-async function reloadDatasetsOnOpen(visible: boolean) {
-  if (!visible) return
-  await loadResourceOptions('datasets', '', {
-    target: datasetOptions,
-    loading: datasetOptionsLoading,
-  })
-  await loadSelectedProject(false)
-}
-
-async function searchDatasetOptions(query: string) {
-  await loadResourceOptions('datasets', query, {
-    target: datasetOptions,
-    loading: datasetOptionsLoading,
-  })
-}
-
-async function openDatasetCreateDialog() {
+async function openPlanCreateDialog() {
   if (operationPending.value) return
-  datasetCreateMode.value = scenarioSets.value.length ? 'scenario_set' : 'empty'
-  datasetCreateScenarioSetId.value = selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
-  newDatasetId.value = ''
-  resetDatasetBuildForm({
-    source: 'scenario_set',
-    scenarioSetId: datasetCreateScenarioSetId.value,
-  })
-  if (datasetCreateMode.value === 'scenario_set') syncDatasetCreateId()
-  datasetCreateDialogVisible.value = true
-}
-
-function resetDatasetCreateForm() {
-  newDatasetId.value = ''
-  datasetCreateScenarioSetId.value = ''
-  datasetCreateMode.value = 'scenario_set'
-}
-
-function syncDatasetCreateId() {
-  newDatasetId.value = datasetCreateScenarioSetId.value.trim()
-}
-
-async function openDatasetBuildDialog() {
-  if (operationPending.value) return
-  if (!loadedDatasetId.value) {
-    ElMessage.warning('请先载入一个 MILP 实例集。')
+  const scenarioSetId = loadedScenarioSetId.value || selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || ''
+  if (!scenarioSetId) {
+    ElMessage.warning('请先创建并选择场景分类。')
     return
   }
-  resetDatasetBuildForm({
+  selectedScenarioSetId.value = scenarioSetId
+  loadedScenarioSetId.value = scenarioSetId
+  newPlanId.value = ''
+  resetPlanBuildForm({
     source: 'scenario_set',
-    scenarioSetId: selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || '',
+    scenarioSetId,
   })
-  if (datasetBuildForm.value.scenario_set_id) {
-    selectedScenarioSetId.value = datasetBuildForm.value.scenario_set_id
-    await loadScenarioOptions('')
-  }
-  datasetBuildDialogVisible.value = true
+  planCreateDialogVisible.value = true
 }
 
-function resetDatasetBuildForm(options: { source: DatasetBuildSource; scenarioSetId: string }) {
-  datasetBuildForm.value = {
+function resetPlanCreateForm() {
+  newPlanId.value = ''
+  resetPlanBuildForm({
+    source: 'scenario_set',
+    scenarioSetId: loadedScenarioSetId.value || selectedScenarioSetId.value,
+  })
+}
+
+async function openPlanBuildDialog() {
+  if (operationPending.value) return
+  if (!loadedPlanId.value) {
+    ElMessage.warning('请先载入一个调整计划。')
+    return
+  }
+  resetPlanBuildForm({
+    source: 'scenario_set',
+    scenarioSetId: loadedScenarioSetId.value || selectedScenarioSetId.value || scenarioSets.value[0]?.scenario_set_id || '',
+  })
+  if (planBuildForm.value.scenario_set_id) {
+    selectedScenarioSetId.value = planBuildForm.value.scenario_set_id
+    await loadScenarioOptions('')
+  }
+  planBuildDialogVisible.value = true
+}
+
+function resetPlanBuildForm(options: { source: AdjustmentPlanBuildSource; scenarioSetId: string }) {
+  planBuildForm.value = {
     scenario_set_id: options.scenarioSetId,
     source: options.source,
     scenario_id: '',
-    ...DEFAULT_DATASET_BUILD_FORM,
+    ...DEFAULT_PLAN_BUILD_FORM,
   }
 }
 
-function updateDatasetBuildOptions(options: DatasetBuildForm) {
-  datasetBuildForm.value = {
-    ...datasetBuildForm.value,
+function updatePlanBuildOptions(options: AdjustmentPlanBuildForm) {
+  planBuildForm.value = {
+    ...planBuildForm.value,
     ...options,
   }
 }
 
-async function onDatasetBuildScenarioSetChange() {
-  datasetBuildForm.value.scenario_id = ''
+async function onPlanBuildScenarioSetChange() {
+  planBuildForm.value.scenario_id = ''
   await loadScenarioOptions('')
 }
 
 function openCaseTimetable(caseId: string) {
-  if (!selectedProjectId.value || !loadedDatasetId.value) return
+  if (!selectedProjectId.value || !loadedScenarioSetId.value || !loadedPlanId.value) return
   timetableCaseId.value = caseId
   timetableDialogVisible.value = true
 }
@@ -1508,8 +1521,7 @@ function openGenerationDialog(file: ModelCheckpoint) {
     return
   }
   generationForm.value.checkpoint = file.relative_path
-  generationScenarioSetSuffix.value = nextTimestampSuffix()
-  syncGenerationScenarioSetId()
+  generationForm.value.scenario_set_id = ''
   generationForm.value.source_mode = 'scenario_set'
   generationForm.value.source_scenario_set_id = ''
   generationForm.value.timetable_file = null
@@ -1520,15 +1532,8 @@ function openGenerationDialog(file: ModelCheckpoint) {
   generationDialogVisible.value = true
 }
 
-function syncGenerationScenarioSetId() {
-  const prefix = generationScenarioSetPrefix.value
-  const suffix = generationScenarioSetSuffix.value.trim()
-  generationForm.value.scenario_set_id = prefix && suffix ? `${prefix}_${suffix}` : prefix || suffix
-}
-
 async function submitGeneration() {
   if (!loadedModelId.value) return
-  syncGenerationScenarioSetId()
   if (!generationForm.value.checkpoint) {
     ElMessage.warning('请先选择 checkpoint 文件。')
     return
@@ -1664,7 +1669,7 @@ function reconcilePendingModel() {
     clearPendingModel()
     return
   }
-  if (isTaskFailed(task)) {
+  if (isTaskTerminal(task)) {
     clearPendingModel()
   }
 }
@@ -1686,6 +1691,8 @@ function trainFormDefaultsFromConfig(config: Record<string, unknown>): Partial<T
     if (typeof defaultValue === 'number' && typeof value === 'number') {
       result[key as keyof TrainForm] = value as never
     } else if (typeof defaultValue === 'string' && typeof value === 'string') {
+      result[key as keyof TrainForm] = value as never
+    } else if (typeof defaultValue === 'boolean' && typeof value === 'boolean') {
       result[key as keyof TrainForm] = value as never
     }
   }
@@ -1760,8 +1767,16 @@ function notifyError(error: unknown) {
 <template>
   <div class="common-layout">
     <el-container>
-      <el-aside width="220px" class="app-aside">
-        <AppNavigation :active-page="activePage" @select="selectPage" />
+      <el-aside
+        :width="navigationPinnedExpanded ? '220px' : '64px'"
+        class="app-aside"
+      >
+        <AppNavigation
+          :active-page="activePage"
+          variant="desktop"
+          @select="selectPage"
+          @pinned-expanded-change="navigationPinnedExpanded = $event"
+        />
       </el-aside>
 
       <el-container>
@@ -1831,7 +1846,7 @@ function notifyError(error: unknown) {
                   v-if="activePage === 'dashboard'"
                   :selected-project-id="selectedProjectId"
                   :scenario-set-count="scenarioSets.length"
-                  :datasets="datasets"
+                  :adjustment-plan-count="adjustmentPlanCount"
                   :models="models"
                   :tasks="tasks"
                   :running-task-count="runningTaskCount"
@@ -1839,13 +1854,13 @@ function notifyError(error: unknown) {
                   :failed-task-count="failedTaskCount"
                   :busy="operationPending"
                   @create-scenario-set="scenarioSetDialogVisible = true"
-                  @create-dataset="openDatasetCreateDialog"
+                  @create-plan="openPlanCreateDialog"
                   @train="() => openTrainDialog('create')"
                   @refresh-tasks="refreshTasks"
                 />
 
                 <ScenarioSetsView
-                  v-else-if="activePage === 'scenarios'"
+                  v-else-if="activePage === 'scenario-overview' || activePage === 'scenario-resources'"
                   :key="scenarioCategoryRefreshKey"
                   v-model:selected-scenario-set-id="selectedScenarioSetId"
                   :selected-project-id="selectedProjectId"
@@ -1855,6 +1870,7 @@ function notifyError(error: unknown) {
                   :resource-loading="scenarioSetOptionsLoading"
                   :detail-loading="scenarioCategoryDetailLoading"
                   :busy="operationPending"
+                  :section="activePage === 'scenario-overview' ? 'overview' : 'resources'"
                   @reload-scenario-sets="reloadScenarioSetsOnOpen"
                   @search-scenario-sets="searchScenarioSetOptions"
                   @create-scenario-set="scenarioSetDialogVisible = true"
@@ -1877,30 +1893,39 @@ function notifyError(error: unknown) {
                   @activated="loadSelectedProject(false)"
                 />
 
-                <DatasetsView
-                  v-else-if="activePage === 'datasets'"
-                  :key="datasetDetailRefreshKey"
-                  v-model:selected-dataset-id="selectedDatasetId"
+                <AdjustmentPlansView
+                  v-else-if="activePage === 'adjustment-plans'"
+                  :key="planDetailRefreshKey"
+                  v-model:selected-scenario-set-id="selectedScenarioSetId"
                   :selected-project-id="selectedProjectId"
-                  :loaded-dataset-id="loadedDatasetId"
-                  :loaded-dataset="loadedDataset"
-                  :datasets="datasets"
-                  :dataset-options="datasetSelectOptions"
-                  :resource-loading="datasetOptionsLoading"
-                  :detail-loading="datasetDetailLoading"
+                  :loaded-scenario-set-id="loadedScenarioSetId"
+                  :scenario-sets="scenarioSets"
+                  :scenario-set-options="scenarioSetSelectOptions"
+                  :scenario-set-resource-loading="scenarioSetOptionsLoading"
+                  :scenario-set-detail-loading="scenarioCategoryDetailLoading"
+                  v-model:selected-plan-id="selectedPlanId"
+                  :loaded-plan-id="loadedPlanId"
+                  :loaded-plan="loadedPlan"
+                  :adjustment-plans="adjustmentPlans"
+                  :adjustment-plan-options="adjustmentPlanSelectOptions"
+                  :adjustment-plan-loading="adjustmentPlanOptionsLoading"
+                  :detail-loading="planDetailLoading"
                   :busy="operationPending"
-                  @reload-datasets="reloadDatasetsOnOpen"
-                  @search-datasets="searchDatasetOptions"
-                  @create-dataset="openDatasetCreateDialog"
-                  @load-dataset="reloadSelectedDatasetDetail"
-                  @delete-dataset="deleteDatasetById"
-                  @build-dataset="openDatasetBuildDialog"
+                  @reload-scenario-sets="reloadScenarioSetsOnOpen"
+                  @search-scenario-sets="searchScenarioSetOptions"
+                  @create-scenario-set="scenarioSetDialogVisible = true"
+                  @load-scenario-set="reloadSelectedScenarioSetDetail"
+                  @delete-scenario-set="deleteScenarioSetById"
+                  @reload-plans="reloadAdjustmentPlansOnOpen"
+                  @search-plans="searchAdjustmentPlanOptions"
+                  @create-plan="openPlanCreateDialog"
+                  @load-plan="reloadSelectedPlanDetail"
+                  @delete-plan="deleteAdjustmentPlanById"
+                  @build-plan="openPlanBuildDialog"
                   @solve-all="() => openSolveDialog()"
                   @solve-case="openSolveDialog"
-                  @export-all-timetables="() => submitExportTimetable()"
-                  @export-timetable="submitExportTimetable"
                   @open-timetable="openCaseTimetable"
-                  @loading-change="datasetDetailLoading = $event"
+                  @loading-change="planDetailLoading = $event"
                 />
 
                 <ModelsView
@@ -1927,13 +1952,24 @@ function notifyError(error: unknown) {
                   @loading-change="modelDetailLoading = $event"
                 />
 
-                <AblationView
-                  v-else-if="activePage === 'ablation-scenarios' || activePage === 'ablation-datasets'"
-                  :page="activePage"
+                <ScenarioComparisonView
+                  v-else-if="activePage === 'ablation-scenarios'"
                   :selected-project-id="selectedProjectId"
                   :scenario-sets="scenarioSets"
-                  :datasets="datasets"
+                  :scenario-set-options="scenarioSetSelectOptions"
+                  :scenario-set-resource-loading="scenarioSetOptionsLoading"
                   :busy="operationPending"
+                  @reload-scenario-sets="reloadScenarioSetsOnOpen"
+                  @search-scenario-sets="searchScenarioSetOptions"
+                  @create-scenario-set="scenarioSetDialogVisible = true"
+                />
+
+                <AdjustmentPlanAnalysisView
+                  v-else-if="activePage === 'ablation-plans'"
+                  :selected-project-id="selectedProjectId"
+                  :scenario-sets="scenarioSets"
+                  :busy="operationPending"
+                  @create-scenario-set="scenarioSetDialogVisible = true"
                 />
               </template>
             </el-scrollbar>
@@ -1961,7 +1997,7 @@ function notifyError(error: unknown) {
       :with-header="false"
       class="navigation-drawer"
     >
-      <AppNavigation :active-page="activePage" @select="selectPage" />
+      <AppNavigation :active-page="activePage" variant="drawer" @select="selectPage" />
     </el-drawer>
 
     <el-drawer
@@ -2168,12 +2204,12 @@ function notifyError(error: unknown) {
             </el-col>
           </el-row>
 
-          <el-divider content-position="left">辅助扰动判断</el-divider>
+          <el-divider content-position="left">训练图结构</el-divider>
           <el-row :gutter="16">
             <el-col :xs="24" :sm="12" :md="8">
               <el-form-item>
                 <template #label>
-                  <FieldLabelTip label="最大槽位" :tip="TRAIN_FIELD_TIPS.max_slots" />
+                  <FieldLabelTip label="G_D 最大扰动数" :tip="TRAIN_FIELD_TIPS.max_slots" />
                 </template>
                 <el-input-number v-model="trainForm.max_slots" :min="1" :disabled="operationPending" />
               </el-form-item>
@@ -2181,7 +2217,7 @@ function notifyError(error: unknown) {
             <el-col :xs="24" :sm="12" :md="8">
               <el-form-item>
                 <template #label>
-                  <FieldLabelTip label="事件窗口" :tip="TRAIN_FIELD_TIPS.event_time_window" />
+                  <FieldLabelTip label="C 事件时间窗口" :tip="TRAIN_FIELD_TIPS.event_time_window" />
                 </template>
                 <el-input-number
                   v-model="trainForm.event_time_window"
@@ -2193,7 +2229,7 @@ function notifyError(error: unknown) {
             <el-col :xs="24" :sm="12" :md="8">
               <el-form-item>
                 <template #label>
-                  <FieldLabelTip label="事件 Top K" :tip="TRAIN_FIELD_TIPS.event_top_k" />
+                  <FieldLabelTip label="C 事件邻接上限" :tip="TRAIN_FIELD_TIPS.event_top_k" />
                 </template>
                 <el-input-number v-model="trainForm.event_top_k" :min="1" :disabled="operationPending" />
               </el-form-item>
@@ -2201,13 +2237,21 @@ function notifyError(error: unknown) {
             <el-col :xs="24" :sm="12" :md="8">
               <el-form-item>
                 <template #label>
-                  <FieldLabelTip label="区间窗口" :tip="TRAIN_FIELD_TIPS.section_order_window" />
+                  <FieldLabelTip label="C 区间邻接窗口" :tip="TRAIN_FIELD_TIPS.section_order_window" />
                 </template>
                 <el-input-number
                   v-model="trainForm.section_order_window"
                   :min="1"
                   :disabled="operationPending"
                 />
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :md="8">
+              <el-form-item>
+                <template #label>
+                  <FieldLabelTip label="启用关系图 R" :tip="TRAIN_FIELD_TIPS.use_relation_graph" />
+                </template>
+                <el-switch v-model="trainForm.use_relation_graph" :disabled="operationPending" />
               </el-form-item>
             </el-col>
           </el-row>
@@ -2248,6 +2292,14 @@ function notifyError(error: unknown) {
                   <FieldLabelTip label="训练轮数" :tip="TRAIN_FIELD_TIPS.epochs" />
                 </template>
                 <el-input-number v-model="trainForm.epochs" :min="1" :disabled="operationPending" />
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :md="8">
+              <el-form-item>
+                <template #label>
+                  <FieldLabelTip label="检查点间隔" :tip="TRAIN_FIELD_TIPS.checkpoint_every" />
+                </template>
+                <el-input-number v-model="trainForm.checkpoint_every" :min="1" :disabled="operationPending" />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" :md="8">
@@ -2360,13 +2412,13 @@ function notifyError(error: unknown) {
             <el-col :xs="24" :sm="12" :md="6">
               <el-form-item>
                 <template #label>
-                  <FieldLabelTip label="Relation" :tip="TRAIN_FIELD_TIPS.relation_weight" />
+                  <FieldLabelTip label="R 损失权重" :tip="TRAIN_FIELD_TIPS.relation_weight" />
                 </template>
                 <el-input-number
                   v-model="trainForm.relation_weight"
                   :min="0"
                   :step="0.1"
-                  :disabled="operationPending"
+                  :disabled="operationPending || !trainForm.use_relation_graph"
                 />
               </el-form-item>
             </el-col>
@@ -2386,7 +2438,7 @@ function notifyError(error: unknown) {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="generationDialogVisible" title="使用模型生成数据" width="560px">
+    <el-dialog v-model="generationDialogVisible" title="使用模型生成场景" width="560px">
       <el-form label-width="150px">
         <el-form-item label="模型">
           <el-input :model-value="selectedModelId" disabled />
@@ -2396,15 +2448,13 @@ function notifyError(error: unknown) {
         </el-form-item>
         <el-form-item>
           <template #label>
-            <FieldLabelTip label="输出场景分类" :tip="GENERATION_FIELD_TIPS.scenario_set_id" />
+            <FieldLabelTip label="生成到新的场景分类" :tip="GENERATION_FIELD_TIPS.scenario_set_id" />
           </template>
           <el-input
-            v-model="generationScenarioSetSuffix"
-            placeholder="默认使用当前时间戳"
+            v-model="generationForm.scenario_set_id"
+            placeholder="请输入完整场景分类 ID，例如 gen_real_R05"
             :disabled="operationPending"
-          >
-            <template #prepend>{{ generationScenarioSetPrefix }}_</template>
-          </el-input>
+          />
         </el-form-item>
         <el-form-item label="Context 来源">
           <el-radio-group v-model="generationForm.source_mode" :disabled="operationPending">
@@ -2416,7 +2466,7 @@ function notifyError(error: unknown) {
           <RemoteResourceSelect
             v-model="generationForm.source_scenario_set_id"
             :options="scenarioSetSelectOptions"
-            placeholder="选择已激活场景分类"
+            placeholder="选择已校验通过场景分类"
             :disabled="operationPending"
             :loading="scenarioSetOptionsLoading"
             @search="searchScenarioSetOptions"
@@ -2513,97 +2563,33 @@ function notifyError(error: unknown) {
           :disabled="operationPending"
           @click="submitGeneration"
         >
-          提交生成
+          使用模型生成场景
         </el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="datasetCreateDialogVisible" title="构建 MILP 实例集" width="560px">
-      <el-form label-width="130px" @submit.prevent="createDataset">
-        <el-form-item label="创建方式">
-          <el-radio-group v-model="datasetCreateMode" :disabled="operationPending">
-            <el-radio-button value="scenario_set" :disabled="!scenarioSets.length">
-              从场景分类构建
-            </el-radio-button>
-            <el-radio-button value="empty">创建空资源</el-radio-button>
-          </el-radio-group>
+    <el-dialog v-model="planCreateDialogVisible" title="构建调整计划" width="640px">
+      <el-form label-width="150px">
+        <el-form-item label="场景分类">
+          <el-input :model-value="loadedScenarioSetId || selectedScenarioSetId" disabled />
         </el-form-item>
-        <template v-if="datasetCreateMode === 'scenario_set'">
-          <el-form-item label="场景分类">
-            <RemoteResourceSelect
-              v-model="datasetCreateScenarioSetId"
-              :options="scenarioSetSelectOptions"
-              placeholder="选择场景分类"
-              :disabled="operationPending"
-              :loading="scenarioSetOptionsLoading"
-              @search="searchScenarioSetOptions"
-              @visible-change="reloadScenarioSetsOnOpen"
-            />
-          </el-form-item>
-          <el-form-item label="MILP 实例集 ID">
-            <el-input
-              :model-value="newDatasetId"
-              disabled
-              @keydown.enter.prevent="createDataset"
-            />
-          </el-form-item>
-          <el-collapse :model-value="['build-options']">
-            <el-collapse-item title="构建参数" name="build-options">
-              <BuildOptionsFields
-                :model-value="datasetBuildForm"
-                @update:model-value="updateDatasetBuildOptions"
-              />
-            </el-collapse-item>
-          </el-collapse>
-        </template>
-        <el-form-item v-else label="MILP 实例集 ID">
+        <el-form-item label="调整计划 ID">
           <el-input
-            v-model="newDatasetId"
-            placeholder="例如 milp_reference"
+            v-model="newPlanId"
+            placeholder="例如 plan_reference"
             :disabled="operationPending"
-            @keydown.enter.prevent="createDataset"
+            @keydown.enter.prevent="createAdjustmentPlan"
           />
         </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button :disabled="operationPending" @click="datasetCreateDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="activeOperation === '构建 MILP 实例集' || activeOperation === '创建空 MILP 实例集'"
-          :disabled="operationPending"
-          @click="createDataset"
-        >
-          {{ datasetCreateMode === 'scenario_set' ? '提交构建' : '创建空资源' }}
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="datasetBuildDialogVisible" title="构建/重建 MILP 实例集" width="640px">
-      <el-form label-width="150px">
-        <el-form-item label="MILP 实例集 ID">
-          <el-input :model-value="loadedDatasetId" disabled />
-        </el-form-item>
         <el-form-item label="构建来源">
-          <el-radio-group v-model="datasetBuildForm.source" :disabled="operationPending">
+          <el-radio-group v-model="planBuildForm.source" :disabled="operationPending">
             <el-radio-button value="scenario_set">从场景分类中构建</el-radio-button>
             <el-radio-button value="scenario">从场景中构建</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="场景分类">
+        <el-form-item v-if="planBuildForm.source === 'scenario'" label="场景">
           <RemoteResourceSelect
-            v-model="datasetBuildForm.scenario_set_id"
-            :options="scenarioSetSelectOptions"
-            placeholder="选择场景分类"
-            :disabled="operationPending"
-            :loading="scenarioSetOptionsLoading"
-            @search="searchScenarioSetOptions"
-            @visible-change="reloadScenarioSetsOnOpen"
-            @change="onDatasetBuildScenarioSetChange"
-          />
-        </el-form-item>
-        <el-form-item v-if="datasetBuildForm.source === 'scenario'" label="场景">
-          <RemoteResourceSelect
-            v-model="datasetBuildForm.scenario_id"
+            v-model="planBuildForm.scenario_id"
             :options="scenarioSelectOptions"
             placeholder="选择单个场景"
             :disabled="operationPending"
@@ -2615,25 +2601,81 @@ function notifyError(error: unknown) {
         <el-collapse :model-value="['build-options']">
           <el-collapse-item title="构建参数" name="build-options">
             <BuildOptionsFields
-              :model-value="datasetBuildForm"
-              @update:model-value="updateDatasetBuildOptions"
+              :model-value="planBuildForm"
+              @update:model-value="updatePlanBuildOptions"
+            />
+          </el-collapse-item>
+        </el-collapse>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="operationPending" @click="planCreateDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="activeOperation === '构建调整计划'"
+          :disabled="operationPending"
+          @click="createAdjustmentPlan"
+        >
+          提交构建
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="planBuildDialogVisible" title="构建/重建调整计划" width="640px">
+      <el-form label-width="150px">
+        <el-form-item label="调整计划 ID">
+          <el-input :model-value="loadedPlanId" disabled />
+        </el-form-item>
+        <el-form-item label="构建来源">
+          <el-radio-group v-model="planBuildForm.source" :disabled="operationPending">
+            <el-radio-button value="scenario_set">从场景分类中构建</el-radio-button>
+            <el-radio-button value="scenario">从场景中构建</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="场景分类">
+          <RemoteResourceSelect
+            v-model="planBuildForm.scenario_set_id"
+            :options="scenarioSetSelectOptions"
+            placeholder="选择场景分类"
+            :disabled="operationPending"
+            :loading="scenarioSetOptionsLoading"
+            @search="searchScenarioSetOptions"
+            @visible-change="reloadScenarioSetsOnOpen"
+            @change="onPlanBuildScenarioSetChange"
+          />
+        </el-form-item>
+        <el-form-item v-if="planBuildForm.source === 'scenario'" label="场景">
+          <RemoteResourceSelect
+            v-model="planBuildForm.scenario_id"
+            :options="scenarioSelectOptions"
+            placeholder="选择单个场景"
+            :disabled="operationPending"
+            :loading="scenarioOptionsLoading"
+            @search="loadScenarioOptions"
+            @visible-change="reloadScenarioOptionsOnOpen"
+          />
+        </el-form-item>
+        <el-collapse :model-value="['build-options']">
+          <el-collapse-item title="构建参数" name="build-options">
+            <BuildOptionsFields
+              :model-value="planBuildForm"
+              @update:model-value="updatePlanBuildOptions"
             />
           </el-collapse-item>
         </el-collapse>
         <el-alert
-          title="构建会写入并覆盖当前 MILP 实例集的 build 产物；从单个场景构建的实例集，后续求解和导出也只处理该场景。"
+          title="构建会写入并覆盖当前调整计划的 build 产物；从单个场景构建的计划，后续求解和导出也只处理该场景。"
           type="info"
           show-icon
           :closable="false"
         />
       </el-form>
       <template #footer>
-        <el-button :disabled="operationPending" @click="datasetBuildDialogVisible = false">取消</el-button>
+        <el-button :disabled="operationPending" @click="planBuildDialogVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :loading="activeOperation === '构建 MILP'"
+          :loading="activeOperation === '构建调整计划'"
           :disabled="operationPending"
-          @click="submitBuild"
+          @click="submitBuildPlan"
         >
           确认构建
         </el-button>
@@ -2647,26 +2689,26 @@ function notifyError(error: unknown) {
           <el-tag v-else type="primary">全部实例</el-tag>
         </el-form-item>
         <el-form-item v-if="!solveTargetCaseId" label="数量上限">
-          <el-input-number v-model="datasetRunForm.solveLimit" :min="0" :disabled="operationPending" />
+          <el-input-number v-model="planRunForm.solveLimit" :min="0" :disabled="operationPending" />
           <span class="form-hint">0 表示全部</span>
         </el-form-item>
         <el-form-item v-if="!solveTargetCaseId" label="已有解则跳过">
-          <el-switch v-model="datasetRunForm.skipSolved" :disabled="operationPending" />
+          <el-switch v-model="planRunForm.skipSolved" :disabled="operationPending" />
         </el-form-item>
         <el-form-item label="单次限时秒数">
-          <el-input-number v-model="datasetRunForm.solveTimeLimit" :min="0" :disabled="operationPending" />
+          <el-input-number v-model="planRunForm.solveTimeLimit" :min="0" :disabled="operationPending" />
           <span class="form-hint">0 表示不限制</span>
         </el-form-item>
         <el-form-item label="MIP Gap">
           <el-input-number
-            v-model="datasetRunForm.solveMipGap"
+            v-model="planRunForm.solveMipGap"
             :min="0"
             :step="0.001"
             :disabled="operationPending"
           />
         </el-form-item>
         <el-form-item label="线程数">
-          <el-input-number v-model="datasetRunForm.solveThreads" :min="0" :disabled="operationPending" />
+          <el-input-number v-model="planRunForm.solveThreads" :min="0" :disabled="operationPending" />
           <span class="form-hint">0 表示 Gurobi 默认</span>
         </el-form-item>
       </el-form>
@@ -2686,7 +2728,8 @@ function notifyError(error: unknown) {
     <TimetableDialog
       v-model="timetableDialogVisible"
       :project-id="selectedProjectId"
-      :dataset-id="loadedDatasetId"
+      :scenario-set-id="loadedScenarioSetId"
+      :plan-id="loadedPlanId"
       :case-id="timetableCaseId"
     />
 

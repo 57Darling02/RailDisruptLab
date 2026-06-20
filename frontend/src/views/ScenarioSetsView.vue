@@ -1,23 +1,24 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-
 import ScenarioCategoryDetail from '@/components/ScenarioCategoryDetail.vue'
-import EntityToolbar from '@/components/EntityToolbar.vue'
+import ScenarioSetSelectorCard from '@/components/ScenarioSetSelectorCard.vue'
+import { Refresh } from '@/icons'
 import type { ResourceOption, ScenarioSet } from '@/types'
 
-const props = defineProps<{
-  selectedProjectId: string
-  selectedScenarioSetId: string
-  loadedScenarioSetId: string
-  scenarioSets: ScenarioSet[]
-  scenarioSetOptions: ResourceOption[]
-  resourceLoading: boolean
-  detailLoading?: boolean
-  busy?: boolean
-}>()
-
-const reloadingSelection = computed(
-  () => Boolean(props.selectedScenarioSetId) && props.selectedScenarioSetId === props.loadedScenarioSetId && Boolean(props.detailLoading),
+withDefaults(
+  defineProps<{
+    selectedProjectId: string
+    selectedScenarioSetId: string
+    loadedScenarioSetId: string
+    scenarioSets: ScenarioSet[]
+    scenarioSetOptions: ResourceOption[]
+    resourceLoading: boolean
+    detailLoading?: boolean
+    busy?: boolean
+    section?: 'overview' | 'resources' | 'all'
+  }>(),
+  {
+    section: 'all',
+  },
 )
 
 defineEmits<{
@@ -36,35 +37,26 @@ defineEmits<{
 </script>
 
 <template>
-  <section class="page-layout">
-    <div class="page-stack">
-      <EntityToolbar
-        label="场景分类"
-        :model-value="selectedScenarioSetId"
-        :options="scenarioSetOptions"
-        :loading="resourceLoading"
-        placeholder="选择场景分类"
-        add-label="新增场景分类"
-        delete-label="删除场景分类"
-        add-in-dropdown
+  <section
+    class="page-layout scenario-sets-view"
+    :class="{ 'is-resource-list-layout': section === 'resources' && scenarioSets.length > 0 && !!loadedScenarioSetId }"
+  >
+    <div class="page-stack scenario-sets-stack">
+      <ScenarioSetSelectorCard
+        :selected-scenario-set-id="selectedScenarioSetId"
+        :loaded-scenario-set-id="loadedScenarioSetId"
+        :scenario-sets="scenarioSets"
+        :scenario-set-options="scenarioSetOptions"
+        :resource-loading="resourceLoading"
+        :detail-loading="detailLoading"
         :busy="busy"
-        @update:model-value="$emit('update:selectedScenarioSetId', $event)"
-        @visible-change="$emit('reloadScenarioSets', $event)"
-        @search="$emit('searchScenarioSets', $event)"
-        @add="$emit('createScenarioSet')"
-        @delete="$emit('deleteScenarioSet', $event)"
-      >
-        <template #actions>
-          <el-button
-            type="primary"
-            :disabled="busy || !selectedScenarioSetId"
-            :loading="reloadingSelection"
-            @click="$emit('loadScenarioSet')"
-          >
-            重新加载
-          </el-button>
-        </template>
-      </EntityToolbar>
+        @update:selected-scenario-set-id="$emit('update:selectedScenarioSetId', $event)"
+        @reload-scenario-sets="$emit('reloadScenarioSets', $event)"
+        @search-scenario-sets="$emit('searchScenarioSets', $event)"
+        @create-scenario-set="$emit('createScenarioSet')"
+        @load-scenario-set="$emit('loadScenarioSet')"
+        @delete-scenario-set="$emit('deleteScenarioSet', $event)"
+      />
 
       <div v-if="!scenarioSets.length" class="primary-empty-panel">
         <el-empty :image-size="120">
@@ -81,6 +73,7 @@ defineEmits<{
         v-else-if="selectedProjectId && loadedScenarioSetId"
         :project-id="selectedProjectId"
         :scenario-set-id="loadedScenarioSetId"
+        :section="section"
         :busy="busy"
         @create-scenario="$emit('createScenario')"
         @simulate-scenario="$emit('simulateScenario')"
@@ -90,8 +83,15 @@ defineEmits<{
       />
       <el-empty v-else description="请选择场景分类">
         <el-space>
-          <el-button type="primary" :disabled="busy || !selectedScenarioSetId" @click="$emit('loadScenarioSet')">
-            重新加载
+          <el-button
+            type="primary"
+            :icon="Refresh"
+            :loading-icon="Refresh"
+            :loading="detailLoading"
+            :disabled="busy || !selectedScenarioSetId"
+            @click="$emit('loadScenarioSet')"
+          >
+            加载
           </el-button>
           <el-button :disabled="busy || !selectedScenarioSetId" @click="$emit('createScenario')">新增场景</el-button>
         </el-space>
@@ -99,3 +99,18 @@ defineEmits<{
     </div>
   </section>
 </template>
+
+<style scoped>
+@media (min-width: 1101px) {
+  .scenario-sets-view.is-resource-list-layout {
+    height: calc(100vh - 92px);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .scenario-sets-view.is-resource-list-layout .scenario-sets-stack {
+    height: 100%;
+    min-height: 0;
+  }
+}
+</style>

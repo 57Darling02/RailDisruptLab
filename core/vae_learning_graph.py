@@ -29,6 +29,7 @@ DEFAULT_SPEED_LIMIT_MAX = 350.0
 DEFAULT_EVENT_TIME_WINDOW = 3600
 DEFAULT_EVENT_TOP_K = 8
 DEFAULT_SECTION_ORDER_WINDOW = 2
+DEFAULT_USE_RELATION_GRAPH = True
 
 NODE_TYPE_EVENT_ANCHOR = 0
 NODE_TYPE_SECTION_ANCHOR = 1
@@ -84,6 +85,7 @@ def scenario_to_typed_vae_learning_graph(
     event_time_window: int = DEFAULT_EVENT_TIME_WINDOW,
     event_top_k: int = DEFAULT_EVENT_TOP_K,
     section_order_window: int = DEFAULT_SECTION_ORDER_WINDOW,
+    use_relation_graph: bool = DEFAULT_USE_RELATION_GRAPH,
 ) -> Dict[str, object]:
     target_graph = scenario_to_disturbance_graph(config)
     return semantic_disturbance_graph_to_typed_learning_graph(
@@ -95,6 +97,7 @@ def scenario_to_typed_vae_learning_graph(
         event_time_window=event_time_window,
         event_top_k=event_top_k,
         section_order_window=section_order_window,
+        use_relation_graph=use_relation_graph,
     )
 
 
@@ -108,6 +111,7 @@ def scenario_config_to_typed_vae_learning_graph(
     event_time_window: int = DEFAULT_EVENT_TIME_WINDOW,
     event_top_k: int = DEFAULT_EVENT_TOP_K,
     section_order_window: int = DEFAULT_SECTION_ORDER_WINDOW,
+    use_relation_graph: bool = DEFAULT_USE_RELATION_GRAPH,
 ) -> Dict[str, object]:
     target_graph = disturbance_graph_from_scenario(scenarios, base_context_path=base_context_path)
     return semantic_disturbance_graph_to_typed_learning_graph(
@@ -119,6 +123,7 @@ def scenario_config_to_typed_vae_learning_graph(
         event_time_window=event_time_window,
         event_top_k=event_top_k,
         section_order_window=section_order_window,
+        use_relation_graph=use_relation_graph,
     )
 
 
@@ -132,15 +137,21 @@ def semantic_disturbance_graph_to_typed_learning_graph(
     event_time_window: int = DEFAULT_EVENT_TIME_WINDOW,
     event_top_k: int = DEFAULT_EVENT_TOP_K,
     section_order_window: int = DEFAULT_SECTION_ORDER_WINDOW,
+    use_relation_graph: bool = DEFAULT_USE_RELATION_GRAPH,
 ) -> Dict[str, object]:
     validate_disturbance_graph(graph, base_context)
     context_pools, event_index, section_index = _context_pools(base_context)
+    relation_graph = {
+        "enabled": bool(use_relation_graph),
+        "feature_names": list(DISTURBANCE_RELATION_FEATURES) if use_relation_graph else [],
+    }
     return {
         "schema_version": SCHEMA_VERSION,
         "graph_type": GRAPH_TYPE,
         "base_context_path": (base_context_path or str(graph.get("base_context_path", ""))).replace("\\", "/"),
         "source_config_path": source_config_path.replace("\\", "/"),
-        "type_system": _type_system(),
+        "type_system": _type_system(use_relation_graph=use_relation_graph),
+        "relation_graph": relation_graph,
         "context_pools": context_pools,
         "context_edges": _context_edges(
             base_context,
@@ -152,7 +163,7 @@ def semantic_disturbance_graph_to_typed_learning_graph(
         ),
         "generation_tasks": _generation_tasks(max_slots),
         "targets": _targets_from_disturbance_graph(graph, event_index, section_index, max_slots),
-        "derived_relations": derive_disturbance_relation_features(graph, base_context),
+        "derived_relations": derive_disturbance_relation_features(graph, base_context) if use_relation_graph else [],
         "decode_contract": _decode_contract(max_slots),
     }
 
@@ -249,7 +260,7 @@ def typed_learning_graph_to_math_context_graph(graph: Dict[str, object]) -> Dict
             "pools": _math_pool_rules(pools),
             "tasks": _math_task_rules(generation_tasks),
             "edge_types": _math_edge_type_rules(),
-            "target_relation_feature_dim": len(DISTURBANCE_RELATION_FEATURES),
+            "target_relation_feature_dim": len(_relation_feature_names(graph)),
         },
         "graph": {
             "pool_x": _math_pool_x(pools),
@@ -277,7 +288,9 @@ def typed_learning_graph_to_math_learning_sample(
         "context_ref": context_ref.replace("\\", "/"),
         "supervision": {
             "targets": _math_targets(targets),
-            "target_relations": _math_target_relations(graph.get("derived_relations", [])),
+            "target_relations": _math_target_relations(graph.get("derived_relations", []))
+            if _uses_relation_graph(graph)
+            else [],
         },
     }
     if sample_id:
@@ -336,6 +349,7 @@ def typed_learning_graph_to_dataset_profile(
         "base_context_path": str(graph.get("base_context_path", "")).replace("\\", "/"),
         "export_profile": dict(export_profile or {}),
         "type_system": graph.get("type_system", {}),
+        "relation_graph": _relation_graph_config(graph),
         "pools": _profile_pools(pools),
         "tasks": _objects(graph.get("generation_tasks"), "generation_tasks"),
         "inferred_schema": dict(inferred_schema or {}),
@@ -792,7 +806,26 @@ def _task_param_constraints(task_id: int) -> List[Dict[str, object]]:
     return []
 
 
-def _type_system() -> Dict[str, object]:
+def _uses_relation_graph(graph: Dict[str, object]) -> bool:
+    return bool(_relation_graph_config(graph).get("enabled"))
+
+
+def _relation_graph_config(graph: Dict[str, object]) -> Dict[str, object]:
+    relation_graph = graph.get("relation_graph")
+    if not isinstance(relation_graph, dict):
+        raise ValueError("Typed learning graph relation_graph must be a JSON object.")
+    enabled = bool(relation_graph.get("enabled"))
+    return {
+        "enabled": enabled,
+        "feature_names": list(DISTURBANCE_RELATION_FEATURES) if enabled else [],
+    }
+
+
+def _relation_feature_names(graph: Dict[str, object]) -> List[str]:
+    return list(DISTURBANCE_RELATION_FEATURES) if _uses_relation_graph(graph) else []
+
+
+def _type_system(*, use_relation_graph: bool = DEFAULT_USE_RELATION_GRAPH) -> Dict[str, object]:
     return {
         "node_types": {
             str(NODE_TYPE_EVENT_ANCHOR): "event_anchor",
@@ -820,7 +853,7 @@ def _type_system() -> Dict[str, object]:
             str(EDGE_TYPE_SECTION_SECTION_AUX): SECTION_SECTION_EDGE_FEATURES,
             str(EDGE_TYPE_EVENT_SECTION_AUX): EVENT_SECTION_EDGE_FEATURES,
         },
-        "relation_feature_names": DISTURBANCE_RELATION_FEATURES,
+        "relation_feature_names": list(DISTURBANCE_RELATION_FEATURES) if use_relation_graph else [],
     }
 
 

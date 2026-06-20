@@ -11,6 +11,7 @@ import {
   taskTagType,
 } from '@/task-status'
 import { formatTaskDuration, formatTaskTime } from '@/task-time'
+import { Refresh } from '@/icons'
 import type { Task } from '@/types'
 
 const RUNNING_LOG_POLL_MS = 1000
@@ -185,7 +186,14 @@ function formatParamValue(value: unknown) {
       <span class="log-refresh-note">
         {{ activeTaskRunning ? '运行中，自动每 1s 刷新' : '任务已结束，可手动刷新' }}
       </span>
-      <el-button :loading="loading" @click="refreshCurrentLog">刷新</el-button>
+      <el-button
+        :icon="Refresh"
+        :loading-icon="Refresh"
+        :loading="loading"
+        @click="refreshCurrentLog"
+      >
+        刷新
+      </el-button>
     </div>
     <pre ref="logView" v-loading="loading" class="task-log-view">{{ log || '暂无日志输出' }}</pre>
   </el-dialog>

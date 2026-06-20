@@ -47,6 +47,7 @@ export interface ScenarioSet {
   scenario_set_id: string
   root: string
   case_count: number
+  plan_count: number
 }
 
 export interface ScenarioSummary {
@@ -101,7 +102,6 @@ export interface ScenarioDetail {
   source_files: FileState[]
   context_stats: ScenarioContextStats | null
   scenario: JsonObject | null
-  timetable: PlanTimetableState | null
 }
 
 export interface ScenarioEventAnchorOption {
@@ -129,8 +129,9 @@ export interface ScenarioOptions {
   section_anchors: ScenarioSectionAnchorOption[]
 }
 
-export interface DatasetSummary {
-  dataset_id: string
+export interface AdjustmentPlanSummary {
+  scenario_set_id: string
+  plan_id: string
   root: string
   case_count: number
   built_count: number
@@ -141,8 +142,14 @@ export interface DatasetSummary {
   is_timetable_ready: boolean
 }
 
-export interface DatasetDetail {
-  dataset_id: string
+export interface AdjustmentPlanRef {
+  scenario_set_id: string
+  plan_id: string
+}
+
+export interface AdjustmentPlanDetail {
+  scenario_set_id: string
+  plan_id: string
   root: string
   case_count: number
   built_count: number
@@ -155,7 +162,7 @@ export interface DatasetDetail {
   source_scenario_sets: Array<{ scenario_set_id: string; count: number }>
 }
 
-export interface DatasetSolveMetricSummary {
+export interface AdjustmentPlanSolveMetricSummary {
   key: string
   label: string
   count: number
@@ -164,7 +171,7 @@ export interface DatasetSolveMetricSummary {
   max: number | null
 }
 
-export interface DatasetSolveCase {
+export interface AdjustmentPlanSolveCase {
   case_id: string
   status: string
   is_solved: boolean
@@ -173,8 +180,10 @@ export interface DatasetSolveCase {
   artifacts: Record<string, string>
 }
 
-export interface DatasetSolveState {
-  dataset_id: string
+export interface AdjustmentPlanSolveState {
+  scenario_set_id: string
+  plan_id: string
+  plan_key: string
   root: string
   case_count: number
   solved_count: number
@@ -183,12 +192,14 @@ export interface DatasetSolveState {
   solver_config: Record<string, number>
   solver_config_signatures: Array<{ signature: string; count: number }>
   status_counts: Array<{ label: string; count: number }>
-  summary_metrics: DatasetSolveMetricSummary[]
-  cases: DatasetSolveCase[]
+  summary_metrics: AdjustmentPlanSolveMetricSummary[]
+  cases: AdjustmentPlanSolveCase[]
 }
 
-export interface DatasetSolveErrorRow {
-  dataset_id: string
+export interface AdjustmentPlanSolveErrorRow {
+  scenario_set_id: string
+  plan_id: string
+  plan_key: string
   case_id: string
   metric: string
   metric_label: string
@@ -199,21 +210,23 @@ export interface DatasetSolveErrorRow {
   signed_delta: number
 }
 
-export interface DatasetSolveAnalysisWarning {
+export interface AdjustmentPlanSolveAnalysisWarning {
   type: string
-  dataset_id: string
+  plan_id: string
   message: string
 }
 
-export interface DatasetSolveAnalysis {
+export interface AdjustmentPlanSolveAnalysis {
   project_id: string
-  datasets: DatasetSolveState[]
+  scenario_set_id: string
+  adjustment_plans: AdjustmentPlanSolveState[]
   metric_labels: Record<string, string>
   comparison: {
-    baseline_dataset_id: string
-    rows: DatasetSolveErrorRow[]
+    baseline_plan_id: string
+    baseline_plan_key: string
+    rows: AdjustmentPlanSolveErrorRow[]
   }
-  warnings: DatasetSolveAnalysisWarning[]
+  warnings: AdjustmentPlanSolveAnalysisWarning[]
 }
 
 export interface ArtifactSummary {
@@ -280,8 +293,6 @@ export interface ScenarioCoverageRow {
   label: string
   time_seconds: number
   time_ratio: number
-  space_units: number
-  space_ratio: number
 }
 
 export interface ScenarioMetricCard {
@@ -350,7 +361,6 @@ export interface ScenarioSetVisualization {
   summary: ScenarioSetResourceSummary & {
     coverage: {
       time_span_seconds: number
-      space_span_units: number
       rows: ScenarioCoverageRow[]
     }
     disturbances: TimetableDisturbance[]
@@ -389,7 +399,8 @@ export interface PlanTimetableState {
 
 export interface CaseTimetableState {
   project_id: string
-  dataset_id: string
+  scenario_set_id: string
+  plan_id: string
   case_id: string
   station_order: string[]
   mileage_by_station: Record<string, number>
@@ -410,6 +421,7 @@ export interface ModelCheckpoint {
   relative_path: string
   path: string
   role: string
+  roles?: string[]
   size_bytes: number
 }
 
@@ -419,29 +431,48 @@ export interface ModelHistoryState {
   best: JsonObject
 }
 
-export interface ModelLossPoint {
-  step: number
+export interface ModelLossSeriesPoint {
+  metric: string
   epoch: number
-  epoch_step: number
-  total_steps: number
-  loss: number
-  count_loss?: number
-  anchor_loss?: number
-  param_loss?: number
-  kl?: number
-  elapsed?: number
+  value: number
+  count: number
+  min: number
+  max: number
+  last: number
 }
 
-export interface ModelGraphProgress {
-  global_graph?: {
-    status?: string
+export interface ModelTrainingProgressStage {
+  key: string
+  label: string
+  status: string
+  status_label: string
+  percentage: number
+  detail: string
+}
+
+export interface ModelTrainingProgress {
+  status: string
+  label: string
+  detail: string
+  percentage: number
+  stages: ModelTrainingProgressStage[]
+  metrics: {
+    latest_epoch?: number | null
+    total_epochs?: number | null
+    latest_step?: number | null
+    latest_loss?: number | null
+    best_epoch?: number | null
+    best_loss?: number | null
+    checkpoint_count: number
   }
-  sample_graphs?: {
+  task?: {
+    id?: number
     status?: string
-    total?: number
-    completed?: number
+    display_name?: string
+    created_at?: string
+    started_at?: string | null
+    finished_at?: string | null
   }
-  updated_at?: string
 }
 
 export interface ModelDetail {
@@ -450,10 +481,9 @@ export interface ModelDetail {
   summary: JsonObject
   config: JsonObject
   schema: JsonObject
-  graph_progress: ModelGraphProgress
   history: ModelHistoryState
-  loss_points: ModelLossPoint[]
-  training_log_tail: string
+  loss_series: Record<string, ModelLossSeriesPoint[]>
+  training_progress: ModelTrainingProgress
   checkpoints: ModelCheckpoint[]
 }
 
@@ -474,6 +504,5 @@ export interface ProjectState {
   root: string
   exists: boolean
   scenario_sets: ScenarioSet[]
-  datasets: DatasetSummary[]
   models: ModelSummary[]
 }

@@ -15,11 +15,19 @@ def delete_scenario_set(layout: ProjectLayout, scenario_set_id: str) -> Dict[str
     return {"deleted": True, "kind": "scenario_set", "scenario_set_id": scenario_set_id, "path": to_posix(root)}
 
 
-def delete_dataset(layout: ProjectLayout, dataset_id: str) -> Dict[str, object]:
-    dataset_id = require_id(dataset_id, "dataset_id")
-    root = layout.dataset(dataset_id).root
-    delete_project_child_dir(root, allowed_root=layout.datasets_dir)
-    return {"deleted": True, "kind": "dataset", "dataset_id": dataset_id, "path": to_posix(root)}
+def delete_adjustment_plan(layout: ProjectLayout, scenario_set_id: str, plan_id: str) -> Dict[str, object]:
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+    plan_id = require_id(plan_id, "plan_id")
+    scenario_set = layout.scenario_set(scenario_set_id)
+    root = scenario_set.adjustment_plan(plan_id).root
+    delete_project_child_dir(root, allowed_root=scenario_set.adjustment_plans_dir)
+    return {
+        "deleted": True,
+        "kind": "adjustment_plan",
+        "scenario_set_id": scenario_set_id,
+        "plan_id": plan_id,
+        "path": to_posix(root),
+    }
 
 
 def delete_model(layout: ProjectLayout, model_id: str) -> Dict[str, object]:

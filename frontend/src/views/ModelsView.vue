@@ -11,12 +11,13 @@ import type {
   JsonObject,
   ModelCheckpoint,
   ModelDetail,
-  ModelLossPoint,
+  ModelLossSeriesPoint,
+  ModelTrainingProgress,
   ModelSummary,
   ResourceOption,
   Task,
 } from '@/types'
-import { isTaskTerminal, taskOutcome } from '@/task-status'
+import { isTaskTerminal } from '@/task-status'
 import type { TaskTagType } from '@/task-status'
 
 const props = defineProps<{
@@ -48,14 +49,15 @@ const emit = defineEmits<{
 
 const TRAINING_CONFIG_LABELS: Record<string, string> = {
   scenario_set_id: '训练场景分类',
-  max_slots: '最大槽位',
-  event_time_window: '事件时间窗口',
-  event_top_k: '事件候选 Top K',
-  section_order_window: '区间序窗口',
+  max_slots: 'G_D 最大扰动数',
+  event_time_window: 'C 事件时间窗口',
+  event_top_k: 'C 事件邻接上限',
+  section_order_window: 'C 区间邻接窗口',
   hidden_dim: '隐藏维度',
   latent_dim: '潜变量维度',
   message_passing_steps: '消息传递步数',
   epochs: '训练轮数',
+  checkpoint_every: '检查点间隔',
   batch_size: 'Batch Size',
   lr: '学习率',
   seed: '随机种子',
@@ -64,9 +66,19 @@ const TRAINING_CONFIG_LABELS: Record<string, string> = {
   anchor_weight: 'Anchor 权重',
   param_weight: 'Param 权重',
   kl_weight: 'KL 权重',
+  use_relation_graph: '启用关系图 R',
+  relation_weight: 'R 损失权重',
 }
 const TRAINING_CONFIG_ORDER = Object.keys(TRAINING_CONFIG_LABELS)
 const MODEL_DETAIL_POLL_MS = 2500
+const LOSS_METRICS = [
+  { key: 'loss', label: '总 loss' },
+  { key: 'count_loss', label: '数量' },
+  { key: 'anchor_loss', label: '锚点' },
+  { key: 'param_loss', label: '参数' },
+  { key: 'relation_loss', label: 'Relation' },
+  { key: 'kl', label: 'KL' },
+] as const
 
 const modelDetail = ref<ModelDetail | null>(null)
 const modelDetailLoading = ref(false)
@@ -74,13 +86,25 @@ const modelDetailError = ref('')
 let modelDetailRequestSeq = 0
 let modelDetailPollHandle = 0
 
+type LossMetricKey = (typeof LOSS_METRICS)[number]['key']
+type ProgressStatus = 'success' | 'exception' | 'warning' | undefined
+
 interface LossSeriesDatum {
   value: [number, number]
   epoch: number
+  metric: LossMetricKey
+  label: string
   count: number
   min: number
   max: number
   last: number
+}
+
+interface TrainingMetricCard {
+  key: string
+  label: string
+  value: string
+  detail: string
 }
 
 interface LossTooltipParam {
@@ -91,6 +115,13 @@ interface LossTooltipParam {
 
 const trainingSummary = computed(() => modelDetail.value?.summary ?? null)
 const modelCheckpoints = computed(() => modelDetail.value?.checkpoints ?? [])
+const primaryCheckpoint = computed(
+  () =>
+    modelCheckpoints.value.find((item) => checkpointRoles(item).includes('best')) ??
+    modelCheckpoints.value.find((item) => checkpointRoles(item).includes('last')) ??
+    modelCheckpoints.value[0] ??
+    null,
+)
 const modelSummaryEntries = computed(() =>
   modelInfoEntries(trainingSummary.value, modelDetail.value?.history),
 )
@@ -104,11 +135,11 @@ const modelTaskRows = computed(() => schemaTaskRows(modelDetail.value?.schema ??
 const hasTrainingSummary = computed(() => hasEntries(trainingSummary.value))
 const hasTrainingConfig = computed(() => hasEntries(modelDetail.value?.config))
 const hasSchemaSummary = computed(() => hasEntries(modelDetail.value?.schema))
-const lossPoints = computed(() => modelDetail.value?.loss_points || [])
-const epochLossPoints = computed(() => epochLossSeries(lossPoints.value))
-const lossChartOption = computed(() => buildLossChartOption(epochLossPoints.value))
-const latestLoss = computed(() => lossPoints.value.at(-1))
-const latestEpochLoss = computed(() => epochLossPoints.value.at(-1))
+const trainingProgress = computed(() => modelDetail.value?.training_progress ?? null)
+const epochLossSeriesByMetric = computed(() => normalizeLossSeries(modelDetail.value?.loss_series ?? {}))
+const primaryEpochLossPoints = computed(() => epochLossSeriesByMetric.value.loss)
+const lossChartOption = computed(() => buildLossChartOption(epochLossSeriesByMetric.value))
+const latestEpochLoss = computed(() => primaryEpochLossPoints.value.at(-1))
 const loadedTrainTask = computed(() => findModelTrainTask(props.tasks, props.loadedModelId))
 const loadedModelRunning = computed(() => Boolean(loadedTrainTask.value && !isTaskTerminal(loadedTrainTask.value)))
 const reloadingSelection = computed(
@@ -118,59 +149,13 @@ const reloadingSelection = computed(
     loadedModelRunning.value &&
     Boolean(props.detailLoading),
 )
-const trainProgress = computed(() => modelTrainingProgress())
-const graphProgress = computed(() => modelDetail.value?.graph_progress ?? {})
-const graphSampleProgress = computed(() => graphProgress.value.sample_graphs ?? {})
-const graphSamplePercent = computed(() => {
-  const total = graphSampleProgress.value.total ?? 0
-  const completed = graphSampleProgress.value.completed ?? 0
-  if (!total) return graphSampleProgress.value.status === 'done' ? 100 : 0
-  return Math.min(100, Math.max(0, Math.round((completed / total) * 100)))
-})
-const loadedTrainTaskFailed = computed(
-  () => Boolean(loadedTrainTask.value) && taskOutcome(loadedTrainTask.value as Task) === 'failed',
-)
-const trainingStepActive = computed(() => {
-  if (props.loadedModel?.is_ready) return 3
-  if (lossPoints.value.length > 0) return 2
-  if (graphProgress.value.sample_graphs?.status === 'done') return 2
-  if (graphProgress.value.sample_graphs?.status === 'running') return 1
-  if (graphProgress.value.global_graph?.status === 'done') return 1
-  return 0
-})
-const trainingStepProcessStatus = computed(() =>
-  loadedTrainTaskFailed.value ? 'error' : 'process',
-)
-const stageProgress = computed(() => {
-  if (loadedTrainTaskFailed.value) {
-    return {
-      percentage: Math.max(graphSamplePercent.value, trainProgress.value),
-      label: '任务异常',
-      detail: '查看任务日志',
-    }
-  }
-  if (props.loadedModel?.is_ready) {
-    return { percentage: 100, label: '训练完成', detail: 'checkpoint 已生成' }
-  }
-  if (trainingStepActive.value === 2) {
-    return { percentage: trainProgress.value, label: 'GNN + 训练 VAE', detail: `${trainProgress.value}%` }
-  }
-  if (trainingStepActive.value === 1) {
-    return {
-      percentage: graphSamplePercent.value,
-      label: '构造扰动图G_D / 辅助图R',
-      detail: `${graphSampleProgress.value.completed ?? 0}/${graphSampleProgress.value.total ?? 0}`,
-    }
-  }
-  return { percentage: 0, label: '构建全局图C', detail: '准备图结构' }
-})
-const trainProgressStatus = computed(() => {
-  if (loadedTrainTaskFailed.value) return 'exception'
-  if (trainProgress.value >= 100 && props.loadedModel?.is_ready) return 'success'
-  return undefined
-})
+const overallTrainingProgress = computed(() => trainingProgress.value?.percentage ?? 0)
+const overallProgressStatus = computed<ProgressStatus>(() => progressStatus(trainingProgress.value?.status))
+const trainingStatus = computed(() => trainingProgressStatus(trainingProgress.value))
+const trainingMetricCards = computed(() => modelTrainingMetricCards())
+const progressStages = computed(() => modelProgressStages())
 const bestLoss = computed(() =>
-  epochLossPoints.value.reduce<LossSeriesDatum | null>(
+  primaryEpochLossPoints.value.reduce<LossSeriesDatum | null>(
     (best, point) => (!best || point.value[1] < best.value[1] ? point : best),
     null,
   ),
@@ -253,6 +238,11 @@ function handleRetrain() {
   emit('retrain', modelDetail.value)
 }
 
+function useCheckpointForGeneration(checkpoint: ModelCheckpoint | null) {
+  if (!checkpoint || props.busy) return
+  emit('generate', checkpoint)
+}
+
 function startModelDetailPolling() {
   if (modelDetailPollHandle) return
   modelDetailPollHandle = window.setInterval(() => {
@@ -273,6 +263,7 @@ function formatMetadataValue(key: string, value: unknown) {
     if (value === 'scenario') return '单个场景'
     if (value === 'scenario_set') return '场景分类'
   }
+  if (typeof value === 'boolean') return value ? '是' : '否'
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }
@@ -381,6 +372,15 @@ function checkpointRoleType(role: string): TaskTagType {
   return 'info'
 }
 
+function checkpointRoles(checkpoint: ModelCheckpoint) {
+  const roles = checkpoint.roles?.length ? checkpoint.roles : [checkpoint.role]
+  return roles.filter(Boolean)
+}
+
+function checkpointTooltip(checkpoint: ModelCheckpoint) {
+  return `${checkpointRoles(checkpoint).map(checkpointRoleLabel).join(' / ')} · ${checkpoint.relative_path} · ${formatBytes(checkpoint.size_bytes)}`
+}
+
 function objectValue(value: unknown): JsonObject | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : null
 }
@@ -400,80 +400,144 @@ function formatError(error: unknown) {
   return String(error)
 }
 
-function modelTrainingProgress() {
-  if (props.loadedModel?.is_ready) return 100
-  const latest = latestLoss.value
-  const epochs = numberFromConfig(modelDetail.value?.config?.epochs)
-  if (!latest || !epochs || !latest.total_steps) return 0
-  const total = epochs * latest.total_steps
-  return Math.min(99, Math.max(0, Math.round((latest.step / total) * 100)))
+function modelTrainingMetricCards(): TrainingMetricCard[] {
+  const metrics = trainingProgress.value?.metrics
+  return [
+    {
+      key: 'epoch',
+      label: 'Epoch',
+      value: metrics?.latest_epoch ? String(metrics.latest_epoch) : '无',
+      detail: metrics?.total_epochs ? `目标 ${metrics.total_epochs}` : '未开始',
+    },
+    {
+      key: 'latest_loss',
+      label: '最新 Loss',
+      value: formatMetric(metrics?.latest_loss),
+      detail: metrics?.latest_step ? `step ${metrics.latest_step}` : '等待日志',
+    },
+    {
+      key: 'best_loss',
+      label: '最佳 Loss',
+      value: formatMetric(metrics?.best_loss),
+      detail: metrics?.best_epoch ? `epoch ${metrics.best_epoch}` : '等待日志',
+    },
+    {
+      key: 'checkpoints',
+      label: 'Checkpoint',
+      value: String(metrics?.checkpoint_count ?? 0),
+      detail: props.loadedModel?.is_ready ? '可用于生成' : '训练完成后生成',
+    },
+  ]
 }
 
-function numberFromConfig(value: unknown) {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
-  if (typeof value === 'string') {
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : 0
+function modelProgressStages() {
+  return (trainingProgress.value?.stages ?? []).map((stage) => ({
+    ...stage,
+    tagType: stageTagType(stage.status),
+    progressStatus: progressStatus(stage.status),
+  }))
+}
+
+function trainingProgressStatus(progress: ModelTrainingProgress | null) {
+  return {
+    label: progress?.label ?? '等待训练',
+    tag: progressStatusLabel(progress?.status),
+    tagType: progressTagType(progress?.status),
+    detail: progress?.detail ?? '点击训练新模型开始',
   }
-  return 0
 }
 
-function epochLossSeries(points: ModelLossPoint[]) {
-  const groups = new Map<number, ModelLossPoint[]>()
-  for (const point of points) {
-    const epoch = Number(point.epoch)
-    if (!Number.isFinite(epoch)) continue
-    const items = groups.get(epoch) ?? []
-    items.push(point)
-    groups.set(epoch, items)
+function progressStatusLabel(status: string | undefined) {
+  return {
+    idle: '空闲',
+    graphing: '构图中',
+    training: '训练中',
+    ready: '可用',
+    incomplete: '未完成',
+    failed: '失败',
+  }[status || 'idle'] ?? status ?? '空闲'
+}
+
+function progressTagType(status: string | undefined): TaskTagType {
+  if (status === 'ready') return 'success'
+  if (status === 'graphing' || status === 'training') return 'primary'
+  if (status === 'incomplete') return 'warning'
+  if (status === 'failed') return 'danger'
+  return 'info'
+}
+
+function stageTagType(status: string): TaskTagType {
+  if (status === 'done') return 'success'
+  if (status === 'running') return 'primary'
+  if (status === 'failed') return 'danger'
+  return 'info'
+}
+
+function progressStatus(status: string | undefined): ProgressStatus {
+  if (status === 'ready' || status === 'done') return 'success'
+  if (status === 'failed') return 'exception'
+  return undefined
+}
+
+function normalizeLossSeries(series: Record<string, ModelLossSeriesPoint[]>) {
+  const result: Record<LossMetricKey, LossSeriesDatum[]> = {
+    loss: [],
+    count_loss: [],
+    anchor_loss: [],
+    param_loss: [],
+    relation_loss: [],
+    kl: [],
   }
-  return [...groups.entries()]
-    .sort(([left], [right]) => left - right)
-    .map<LossSeriesDatum>(([epoch, items]) => {
-      const losses = items.map((item) => Number(item.loss)).filter(Number.isFinite)
-      const mean = losses.reduce((total, loss) => total + loss, 0) / Math.max(losses.length, 1)
-      return {
-        value: [epoch, mean],
-        epoch,
-        count: losses.length,
-        min: Math.min(...losses),
-        max: Math.max(...losses),
-        last: losses.at(-1) ?? mean,
-      }
-    })
+  for (const metric of LOSS_METRICS) {
+    result[metric.key] = (series[metric.key] ?? []).map((point) => ({
+      value: [point.epoch, point.value],
+      epoch: point.epoch,
+      metric: metric.key,
+      label: metric.label,
+      count: point.count,
+      min: point.min,
+      max: point.max,
+      last: point.last,
+    }))
+  }
+  return result
 }
 
-function buildLossChartOption(data: LossSeriesDatum[]) {
+function buildLossChartOption(seriesByMetric: Record<LossMetricKey, LossSeriesDatum[]>) {
+  const series = LOSS_METRICS
+    .map((metric) => ({ metric, data: seriesByMetric[metric.key] ?? [] }))
+    .filter((item) => item.data.length)
+    .map((item) => ({
+      name: item.metric.label,
+      type: 'line',
+      smooth: true,
+      showSymbol: item.data.length <= 80,
+      data: item.data,
+    }))
   return {
     animationDuration: 300,
-    grid: { top: 24, right: 24, bottom: 36, left: 58 },
+    legend: { top: 0, type: 'scroll' },
+    grid: { top: 34, right: 24, bottom: 36, left: 58 },
     tooltip: {
       trigger: 'axis',
       formatter: (params: LossTooltipParam[] | LossTooltipParam) => {
-        const item = Array.isArray(params) ? params[0] : params
-        const point = item?.data
-        if (!point) return ''
-        const [epoch, loss] = point.value
+        const items = Array.isArray(params) ? params : [params]
+        const firstPoint = items.find((item) => item?.data)?.data
+        if (!firstPoint) return ''
         return [
-          `epoch ${epoch}`,
-          `${item.marker || ''}${item.seriesName || 'loss'}: ${loss.toFixed(6)}`,
-          `样本数 ${point.count}`,
-          `最小 ${point.min.toFixed(6)} · 最大 ${point.max.toFixed(6)}`,
-          `最后 ${point.last.toFixed(6)}`,
+          `epoch ${firstPoint.epoch}`,
+          ...items
+            .filter((item) => item?.data)
+            .map((item) => {
+              const point = item.data as LossSeriesDatum
+              return `${item.marker || ''}${item.seriesName || point.label}: ${point.value[1].toFixed(6)}`
+            }),
         ].join('<br/>')
       },
     },
     xAxis: { type: 'value', name: 'epoch', minInterval: 1 },
     yAxis: { type: 'value', name: 'loss', scale: true },
-    series: [
-      {
-        name: 'epoch 平均 loss',
-        type: 'line',
-        smooth: true,
-        showSymbol: data.length <= 80,
-        data,
-      },
-    ],
+    series,
   }
 }
 
@@ -521,11 +585,13 @@ function escapeRegExp(value: string) {
         <template #actions>
           <el-button
             type="primary"
-            :disabled="busy || !selectedModelId"
+            :icon="Refresh"
+            :loading-icon="Refresh"
             :loading="reloadingSelection"
+            :disabled="busy || !selectedModelId"
             @click="$emit('loadModel')"
           >
-            重新加载
+            加载
           </el-button>
         </template>
       </EntityToolbar>
@@ -562,25 +628,43 @@ function escapeRegExp(value: string) {
                 重新训练
               </el-button>
             </el-space>
-            <el-button
-              :icon="Refresh"
-              :disabled="busy || !loadedModelId"
-              :loading="modelDetailLoading"
-              @click="refreshModelDetails"
-            >
-              刷新
-            </el-button>
+            <el-space wrap>
+              <el-tooltip
+                :disabled="!primaryCheckpoint"
+                :content="primaryCheckpoint ? checkpointTooltip(primaryCheckpoint) : ''"
+                placement="top"
+              >
+                <el-button
+                  type="primary"
+                  :disabled="busy || !primaryCheckpoint"
+                  @click="useCheckpointForGeneration(primaryCheckpoint)"
+                >
+                  使用模型生成场景
+                </el-button>
+              </el-tooltip>
+              <el-button
+                :icon="Refresh"
+                :loading-icon="Refresh"
+                :disabled="busy || !loadedModelId"
+                :loading="modelDetailLoading"
+                @click="refreshModelDetails"
+              >
+                刷新
+              </el-button>
+            </el-space>
           </div>
         </template>
 
         <el-empty v-if="!loadedModelId" description="请选择模型">
           <el-button
             type="primary"
-            :disabled="busy || !selectedModelId"
+            :icon="Refresh"
+            :loading-icon="Refresh"
             :loading="reloadingSelection"
+            :disabled="busy || !selectedModelId"
             @click="$emit('loadModel')"
           >
-            重新加载
+            加载
           </el-button>
         </el-empty>
         <el-result v-else-if="modelDetailError" icon="error" title="模型数据加载失败" :sub-title="modelDetailError">
@@ -588,6 +672,7 @@ function escapeRegExp(value: string) {
             <el-button
               type="primary"
               :icon="Refresh"
+              :loading-icon="Refresh"
               :loading="modelDetailLoading"
               :disabled="busy"
               @click="refreshModelDetails"
@@ -597,66 +682,82 @@ function escapeRegExp(value: string) {
           </template>
         </el-result>
         <template v-else>
-          <div class="model-overview">
-            <div class="model-overview-main">
-              <el-descriptions class="model-metadata" :column="1" border size="small">
-                <el-descriptions-item label="训练样本数">
-                  {{ loadedModel?.sample_count ?? 0 }}
-                </el-descriptions-item>
-                <el-descriptions-item label="日志">
+          <div class="model-progress-board">
+            <div class="training-status-panel">
+              <div class="training-status-heading">
+                <div>
+                  <span class="training-status-title">{{ trainingStatus.label }}</span>
+                  <span class="training-status-detail">{{ trainingStatus.detail }}</span>
+                </div>
+                <el-tag :type="trainingStatus.tagType" size="large">{{ trainingStatus.tag }}</el-tag>
+              </div>
+              <el-progress
+                :percentage="overallTrainingProgress"
+                :status="overallProgressStatus"
+                :stroke-width="12"
+              />
+              <div class="training-metric-grid">
+                <div v-for="item in trainingMetricCards" :key="item.key" class="training-metric">
+                  <span class="training-metric-label">{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                  <span>{{ item.detail }}</span>
+                </div>
+              </div>
+              <div class="training-stage-grid">
+                <div v-for="stage in progressStages" :key="stage.key" class="training-stage">
+                  <div class="training-stage-header">
+                    <span>{{ stage.label }}</span>
+                    <el-tag :type="stage.tagType" size="small">{{ stage.status }}</el-tag>
+                  </div>
+                  <el-progress
+                    :percentage="stage.percentage"
+                    :status="stage.progressStatus"
+                    :stroke-width="8"
+                  />
+                  <span class="training-stage-detail">{{ stage.detail }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="checkpoint-panel">
+              <div class="checkpoint-panel-header">
+                <span>模型产物</span>
+                <el-button
+                  v-if="loadedTrainTask"
+                  link
+                  type="primary"
+                  @click="$emit('openTaskLog', loadedTrainTask)"
+                >
+                  任务 #{{ loadedTrainTask.id }}
+                </el-button>
+              </div>
+              <div v-if="modelCheckpoints.length" class="checkpoint-list">
+                <div v-for="checkpoint in modelCheckpoints" :key="checkpoint.relative_path" class="checkpoint-row">
+                  <div class="checkpoint-tags">
+                    <el-tag
+                      v-for="role in checkpointRoles(checkpoint)"
+                      :key="role"
+                      :type="checkpointRoleType(role)"
+                      size="small"
+                    >
+                      {{ checkpointRoleLabel(role) }}
+                    </el-tag>
+                  </div>
+                  <el-tooltip :content="checkpointTooltip(checkpoint)" placement="top">
+                    <span class="checkpoint-name">{{ checkpoint.name }}</span>
+                  </el-tooltip>
+                  <span class="checkpoint-size">{{ formatBytes(checkpoint.size_bytes) }}</span>
                   <el-button
-                    v-if="loadedTrainTask"
                     link
                     type="primary"
-                    @click="$emit('openTaskLog', loadedTrainTask)"
+                    :disabled="busy"
+                    @click="useCheckpointForGeneration(checkpoint)"
                   >
-                    查看任务 #{{ loadedTrainTask.id }}
+                    用此产物生成
                   </el-button>
-                  <span v-else>暂无任务日志</span>
-                </el-descriptions-item>
-              </el-descriptions>
-              <el-steps
-                class="training-steps"
-                :active="trainingStepActive"
-                finish-status="success"
-                :process-status="trainingStepProcessStatus"
-              >
-                <el-step title="构建全局图C" />
-                <el-step title="构造扰动图G_D / 辅助图R" />
-                <el-step title="GNN + 训练 VAE" />
-              </el-steps>
-              <el-scrollbar class="checkpoint-scroll" max-height="190px">
-                <el-table :data="modelCheckpoints" empty-text="暂无可用 checkpoint" size="small">
-                  <el-table-column label="类型" width="88">
-                    <template #default="{ row }">
-                      <el-tag :type="checkpointRoleType(row.role)" size="small">
-                        {{ checkpointRoleLabel(row.role) }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column prop="name" label="模型检查点" show-overflow-tooltip />
-                  <el-table-column label="大小" width="100">
-                    <template #default="{ row }">{{ formatBytes(row.size_bytes) }}</template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="120">
-                    <template #default="{ row }">
-                      <el-button link type="primary" :disabled="busy" @click="$emit('generate', row)">
-                        生成数据
-                      </el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-              </el-scrollbar>
-            </div>
-            <div class="training-progress">
-              <el-progress
-                type="dashboard"
-                :percentage="stageProgress.percentage"
-                :status="trainProgressStatus"
-                :width="132"
-              />
-              <span class="training-progress-label">{{ stageProgress.label }}</span>
-              <span class="training-progress-detail">{{ stageProgress.detail }}</span>
+                </div>
+              </div>
+              <el-empty v-else description="暂无可用 checkpoint" :image-size="72" />
             </div>
           </div>
 
@@ -706,11 +807,11 @@ function escapeRegExp(value: string) {
                 </el-space>
               </div>
               <ChartPanel
-                v-if="epochLossPoints.length"
+                v-if="primaryEpochLossPoints.length"
                 :option="lossChartOption"
                 filename="training-loss"
                 chart-class="loss-chart"
-                height="220px"
+                height="260px"
               />
               <el-empty v-else description="刷新后将从训练日志解析 loss" :image-size="72" />
             </div>
@@ -768,52 +869,146 @@ function escapeRegExp(value: string) {
 </template>
 
 <style scoped>
-.model-overview {
+.model-progress-board {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 180px;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.38fr);
   gap: 16px;
   align-items: stretch;
 }
 
-.model-overview-main {
+.training-status-panel,
+.checkpoint-panel {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
-}
-
-.model-metadata,
-.checkpoint-scroll {
-  min-width: 0;
-}
-
-.training-steps {
-  min-width: 0;
-  padding: 10px 12px;
+  gap: 14px;
+  padding: 14px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   background: var(--el-fill-color-blank);
 }
 
-.training-progress {
+.training-status-heading,
+.checkpoint-panel-header,
+.training-stage-header {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 244px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px;
-  background: var(--el-fill-color-blank);
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.training-progress-label {
+.training-status-heading > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+
+.training-status-title,
+.checkpoint-panel-header {
   font-weight: 600;
 }
 
-.training-progress-detail {
+.training-status-detail,
+.training-metric span,
+.training-stage-detail {
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.training-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.training-metric {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+}
+
+.training-metric strong {
+  overflow: hidden;
+  font-size: 18px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.training-metric-label {
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+}
+
+.training-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.training-stage {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+}
+
+.training-stage-header span:first-child {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.checkpoint-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checkpoint-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 72px auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.checkpoint-tags {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+}
+
+.checkpoint-row:last-child {
+  border-bottom: 0;
+}
+
+.checkpoint-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.checkpoint-size {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .loss-panel {
@@ -839,8 +1034,18 @@ function escapeRegExp(value: string) {
 }
 
 @media (max-width: 760px) {
-  .model-overview {
+  .model-progress-board,
+  .training-metric-grid,
+  .training-stage-grid {
     grid-template-columns: 1fr;
+  }
+
+  .checkpoint-row {
+    grid-template-columns: 92px minmax(0, 1fr) auto;
+  }
+
+  .checkpoint-size {
+    display: none;
   }
 }
 

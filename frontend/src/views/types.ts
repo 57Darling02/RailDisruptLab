@@ -7,7 +7,6 @@ export interface ArtifactGroup {
   has_lp: boolean
   has_solution: boolean
   has_solution_csv: boolean
-  has_timetable_data: boolean
 }
 
 export function groupArtifactsByCase(artifacts: ArtifactSummary[]) {
@@ -19,13 +18,11 @@ export function groupArtifactsByCase(artifacts: ArtifactSummary[]) {
       has_lp: false,
       has_solution: false,
       has_solution_csv: false,
-      has_timetable_data: false,
     }
     group.size_bytes += artifact.size_bytes
     group.has_lp = group.has_lp || artifact.name.endsWith('.lp')
     group.has_solution = group.has_solution || artifact.name.endsWith('.sol')
     group.has_solution_csv = group.has_solution_csv || artifact.name.endsWith('.sol.csv')
-    group.has_timetable_data = group.has_timetable_data || artifact.name === 'adjusted_timetable.json'
     groups.set(artifact.case_id, group)
   }
   return [...groups.values()]
@@ -64,7 +61,7 @@ export interface SchemaTaskRow {
   param_dim: string
 }
 
-export interface DatasetRunForm {
+export interface AdjustmentPlanRunForm {
   solveLimit: number
   solveTimeLimit: number
   solveMipGap: number
@@ -72,7 +69,7 @@ export interface DatasetRunForm {
   skipSolved: boolean
 }
 
-export interface DatasetBuildForm {
+export interface AdjustmentPlanBuildForm {
   objective_delay_weight: number
   objective_mode: string
   cancellation_enabled: boolean
@@ -95,6 +92,7 @@ export interface TrainForm {
   latent_dim: number
   message_passing_steps: number
   epochs: number
+  checkpoint_every: number
   batch_size: number
   lr: number
   seed: number
@@ -103,6 +101,7 @@ export interface TrainForm {
   anchor_weight: number
   param_weight: number
   kl_weight: number
+  use_relation_graph: boolean
   relation_weight: number
 }
 

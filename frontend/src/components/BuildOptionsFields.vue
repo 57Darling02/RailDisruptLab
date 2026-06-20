@@ -1,15 +1,15 @@
 <script setup lang="ts">
-import type { DatasetBuildForm } from '@/views/types'
+import type { AdjustmentPlanBuildForm } from '@/views/types'
 
 const props = defineProps<{
-  modelValue: DatasetBuildForm
+  modelValue: AdjustmentPlanBuildForm
 }>()
 
 const emit = defineEmits<{
-  'update:modelValue': [value: DatasetBuildForm]
+  'update:modelValue': [value: AdjustmentPlanBuildForm]
 }>()
 
-function patch<K extends keyof DatasetBuildForm>(key: K, value: DatasetBuildForm[K]) {
+function patch<K extends keyof AdjustmentPlanBuildForm>(key: K, value: AdjustmentPlanBuildForm[K]) {
   emit('update:modelValue', { ...props.modelValue, [key]: value })
 }
 </script>

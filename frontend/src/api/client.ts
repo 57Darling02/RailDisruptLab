@@ -1,11 +1,14 @@
 import type {
+  AdjustmentPlanDetail,
+  AdjustmentPlanRef,
+  AdjustmentPlanSummary,
+  AdjustmentPlanSolveAnalysis,
   ArtifactSummary,
   CaseTimetableState,
-  DatasetDetail,
-  DatasetSolveAnalysis,
   JsonObject,
   ModelCheckpoint,
   ModelDetail,
+  PlanTimetableState,
   ProjectState,
   ProjectSummary,
   ResourceOption,
@@ -29,6 +32,18 @@ export class ApiError extends Error {
   }
 }
 
+export function formatApiError(error: unknown): string {
+  if (error instanceof ApiError) {
+    return error.status === 409 ? error.message : `${error.status}: ${error.message}`
+  }
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
+export function isApiConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_PREFIX}${path}`, {
     ...init,
@@ -49,11 +64,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 async function readError(response: Response): Promise<string> {
+  const body = await response.text()
+  if (!body) return ''
   try {
-    const payload = (await response.json()) as { detail?: unknown }
+    const payload = JSON.parse(body) as { detail?: unknown }
     return typeof payload.detail === 'string' ? payload.detail : JSON.stringify(payload.detail)
   } catch {
-    return await response.text()
+    return body
   }
 }
 
@@ -118,6 +135,10 @@ export const api = {
   readScenario: (projectId: string, scenarioSetId: string, scenarioId: string) =>
     request<ScenarioDetail>(
       `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}`,
+    ),
+  readScenarioTimetable: (projectId: string, scenarioSetId: string, scenarioId: string) =>
+    request<PlanTimetableState>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}/timetable`,
     ),
   readScenarioOptions: (projectId: string, scenarioSetId: string, scenarioId: string) =>
     request<ScenarioOptions>(
@@ -241,34 +262,55 @@ export const api = {
       body: data,
     })
   },
-  createDataset: (projectId: string, datasetId: string, existOk = false) =>
-    request<TaskResponse>(`/projects/${projectId}/datasets`, {
-      method: 'POST',
-      ...jsonBody({ dataset_id: datasetId, exist_ok: existOk }),
-    }),
-  deleteDataset: (projectId: string, datasetId: string) =>
-    request<JsonObject>(`/projects/${projectId}/datasets/${datasetId}`, {
-      method: 'DELETE',
-    }),
+  listAdjustmentPlans: (projectId: string, scenarioSetId: string) =>
+    request<AdjustmentPlanSummary[]>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans`,
+    ),
+  listAdjustmentPlanOptions: (projectId: string, scenarioSetId: string, query = '', limit = 50) => {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+    })
+    return request<ResourceOption[]>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plan-options?${params}`,
+    )
+  },
+  createAdjustmentPlan: (projectId: string, scenarioSetId: string, planId: string, existOk = false) =>
+    request<AdjustmentPlanSummary>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans`,
+      {
+        method: 'POST',
+        ...jsonBody({ plan_id: planId, exist_ok: existOk }),
+      },
+    ),
+  deleteAdjustmentPlan: (projectId: string, scenarioSetId: string, planId: string) =>
+    request<JsonObject>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans/${planId}`,
+      {
+        method: 'DELETE',
+      },
+    ),
   submitBuild: (
     projectId: string,
     scenarioSetId: string,
-    datasetId: string,
+    planId: string,
     scenarioId = '',
     options: object = {},
   ) =>
-    request<TaskResponse>(`/projects/${projectId}/tasks/build`, {
-      method: 'POST',
-      ...jsonBody({
-        scenario_set_id: scenarioSetId,
-        dataset_id: datasetId,
-        scenario_id: scenarioId,
-        ...options,
-      }),
-    }),
+    request<TaskResponse>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans/${planId}/tasks/build`,
+      {
+        method: 'POST',
+        ...jsonBody({
+          scenario_id: scenarioId,
+          ...options,
+        }),
+      },
+    ),
   submitSolve: (
     projectId: string,
-    datasetId: string,
+    scenarioSetId: string,
+    planId: string,
     limit = 0,
     timeLimit?: number,
     caseId = '',
@@ -276,27 +318,20 @@ export const api = {
     threads?: number,
     skipSolved = false,
   ) =>
-    request<TaskResponse>(`/projects/${projectId}/tasks/solve`, {
-      method: 'POST',
-      ...jsonBody({
-        dataset_id: datasetId,
-        case_id: caseId,
-        limit,
-        time_limit: timeLimit ?? null,
-        mip_gap: mipGap ?? null,
-        threads: threads ?? null,
-        skip_solved: skipSolved,
-      }),
-    }),
-  submitExportTimetable: (projectId: string, datasetId: string, limit = 0, caseId = '') =>
-    request<TaskResponse>(`/projects/${projectId}/tasks/export-timetable`, {
-      method: 'POST',
-      ...jsonBody({
-        dataset_id: datasetId,
-        case_id: caseId,
-        limit,
-      }),
-    }),
+    request<TaskResponse>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans/${planId}/tasks/solve`,
+      {
+        method: 'POST',
+        ...jsonBody({
+          case_id: caseId,
+          limit,
+          time_limit: timeLimit ?? null,
+          mip_gap: mipGap ?? null,
+          threads: threads ?? null,
+          skip_solved: skipSolved,
+        }),
+      },
+    ),
   submitTrain: (projectId: string, payload: unknown) =>
     request<TaskResponse>(`/projects/${projectId}/tasks/train`, {
       method: 'POST',
@@ -373,20 +408,34 @@ export const api = {
     request<string>(`/tasks/${taskId}/log?lines=${lines}`),
   cancelTask: (taskId: number) =>
     request<Task | JsonObject>(`/tasks/${taskId}/cancel`, { method: 'POST' }),
-  listArtifacts: (projectId: string, datasetId: string) =>
-    request<ArtifactSummary[]>(`/projects/${projectId}/datasets/${datasetId}/artifacts`),
-  readDatasetDetail: (projectId: string, datasetId: string) =>
-    request<DatasetDetail>(`/projects/${projectId}/datasets/${datasetId}/detail`),
-  readCaseTimetable: (projectId: string, datasetId: string, caseId: string) =>
-    request<CaseTimetableState>(
-      `/projects/${projectId}/datasets/${datasetId}/cases/${caseId}/timetable`,
+  listArtifacts: (projectId: string, scenarioSetId: string, planId: string) =>
+    request<ArtifactSummary[]>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans/${planId}/artifacts`,
     ),
-  readDatasetSolveAnalysis: (projectId: string, datasetIds: string[]) => {
-    const query = datasetIds
-      .map((datasetId) => `dataset_ids=${encodeURIComponent(datasetId)}`)
+  readAdjustmentPlanDetail: (projectId: string, scenarioSetId: string, planId: string) =>
+    request<AdjustmentPlanDetail>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans/${planId}/detail`,
+    ),
+  readCaseTimetable: (projectId: string, scenarioSetId: string, planId: string, caseId: string) =>
+    request<CaseTimetableState>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans/${planId}/cases/${caseId}/timetable`,
+    ),
+  readAdjustmentPlanSolveAnalysis: (projectId: string, scenarioSetId: string, planIds: string[]) => {
+    const query = planIds
+      .map((planId) => `plan_ids=${encodeURIComponent(planId)}`)
       .join('&')
-    return request<DatasetSolveAnalysis>(`/projects/${projectId}/analysis/dataset-solve?${query}`)
+    return request<AdjustmentPlanSolveAnalysis>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/analysis/adjustment-plan-solve?${query}`,
+    )
   },
+  readProjectAdjustmentPlanSolveAnalysis: (projectId: string, plans: AdjustmentPlanRef[]) =>
+    request<AdjustmentPlanSolveAnalysis>(
+      `/projects/${projectId}/analysis/adjustment-plan-solve`,
+      {
+        method: 'POST',
+        ...jsonBody({ plans }),
+      },
+    ),
   readTrainingSummary: (projectId: string, modelId: string) =>
     request<JsonObject>(`/projects/${projectId}/models/${modelId}/training-summary`),
   readModelDetail: (projectId: string, modelId: string) =>

@@ -33,6 +33,7 @@ RELATION_LABELS = {
     "spatial_near": "空间相邻",
 }
 
+DAY_SECONDS = 24 * 3600
 TIME_BIN_SECONDS = 2 * 3600
 NEAR_TIME_SECONDS = 30 * 60
 NEAR_SPACE_UNITS = 1.0
@@ -63,7 +64,6 @@ def scenario_visualization_item(path: Path, context: Any) -> Dict[str, object]:
 def scenario_set_summary(
     scenarios: List[Dict[str, object]],
     context: Any,
-    station_order: List[str],
     plan_rows_payload: List[Dict[str, object]],
 ) -> Dict[str, object]:
     all_disturbances = [
@@ -87,7 +87,7 @@ def scenario_set_summary(
             }
             for key, count in sorted(category_counts.items())
         ],
-        "coverage": disturbance_coverage(all_disturbances, station_order, plan_rows_payload),
+        "coverage": disturbance_time_coverage(all_disturbances, plan_rows_payload),
         "disturbances": all_disturbances,
         "math_graph_metrics": math_graph_metrics(
             scenarios,
@@ -440,28 +440,21 @@ def scenario_category(disturbances: List[Dict[str, object]]) -> str:
     return "mixed"
 
 
-def disturbance_coverage(
+def disturbance_time_coverage(
     disturbances: List[Dict[str, object]],
-    station_order: List[str],
     plan_rows_payload: List[Dict[str, object]],
 ) -> Dict[str, object]:
     time_min, time_max = plan_time_extent(plan_rows_payload)
     total_time = max(time_max - time_min, 1)
-    station_count = max(len(station_order), 1)
-    section_count = max(len(station_order) - 1, 1)
-    total_space = station_count + section_count
-    station_index = {station: index for index, station in enumerate(station_order)}
 
     rows = [
-        coverage_row(
+        time_coverage_row(
             "all",
             "全部扰动",
             disturbances,
-            station_index,
             time_min,
             time_max,
             total_time,
-            total_space,
         )
     ]
     for item_type, label in [
@@ -471,53 +464,39 @@ def disturbance_coverage(
     ]:
         typed = [item for item in disturbances if item.get("type") == item_type]
         rows.append(
-            coverage_row(
+            time_coverage_row(
                 item_type,
                 label,
                 typed,
-                station_index,
                 time_min,
                 time_max,
                 total_time,
-                station_count if item_type == "delay" else section_count,
             )
         )
 
     return {
         "time_span_seconds": total_time,
-        "space_span_units": total_space,
         "rows": rows,
     }
 
 
-def coverage_row(
+def time_coverage_row(
     item_type: str,
     label: str,
     disturbances: List[Dict[str, object]],
-    station_index: Dict[str, int],
     time_min: int,
     time_max: int,
     total_time: int,
-    total_space: int,
 ) -> Dict[str, object]:
     time_seconds = merged_interval_length(
         disturbance_time_interval(item, time_min, time_max)
         for item in disturbances
-    )
-    space_units = len(
-        {
-            unit
-            for item in disturbances
-            for unit in disturbance_space_units(item, station_index)
-        }
     )
     return {
         "type": item_type,
         "label": label,
         "time_seconds": time_seconds,
         "time_ratio": round(min(time_seconds / total_time, 1.0), 6),
-        "space_units": space_units,
-        "space_ratio": round(min(space_units / max(total_space, 1), 1.0), 6),
     }
 
 
@@ -566,19 +545,6 @@ def merged_interval_length(intervals: Iterable[Tuple[int, int] | None]) -> int:
         else:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
     return sum(end - start for start, end in merged)
-
-
-def disturbance_space_units(item: Dict[str, object], station_index: Dict[str, int]) -> List[Tuple[str, int]]:
-    if item.get("type") == "delay":
-        index = station_index.get(str(item.get("station", "")))
-        return [("station", index)] if index is not None else []
-    start = station_index.get(str(item.get("start_station", "")))
-    end = station_index.get(str(item.get("end_station", "")))
-    if start is None or end is None:
-        return []
-    lower = min(start, end)
-    upper = max(start, end)
-    return [("section", index) for index in range(lower, upper)] or [("section", lower)]
 
 
 def parse_hms(value: object) -> int | None:

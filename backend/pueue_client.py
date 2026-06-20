@@ -384,14 +384,10 @@ def task_display_name(action: str, params: Dict[str, object], *, fallback: str) 
         return titled(params, ("scenario_set_id", "scenario_id"), "新增场景")
     if action == "scenario_delete":
         return titled(params, ("scenario_set_id", "scenario_id"), "删除场景")
-    if action == "dataset_create":
-        return titled(params, "dataset_id", "创建 MILP 实例集")
     if action == "build":
-        return titled(params, ("dataset_id", "scenario_id"), "构建 MILP")
+        return titled(params, ("scenario_set_id", "plan_id", "scenario_id"), "构建调整计划")
     if action == "solve":
-        return titled(params, ("dataset_id", "case_id"), "求解")
-    if action == "export_timetable":
-        return titled(params, ("dataset_id", "case_id"), "导出时刻表")
+        return titled(params, ("scenario_set_id", "plan_id", "case_id"), "求解调整计划")
     if action == "train":
         return titled(params, "model_id", "训练模型")
     if action == "generation":

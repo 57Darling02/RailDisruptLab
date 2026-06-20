@@ -4,12 +4,16 @@ import json
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Sequence
+from typing import Any, Dict, Iterable, Mapping
 
 from core.project_layout import sanitize_id
 
 
 RUNNING_TASK_STATUSES = {"Queued", "Running", "Paused", "Stashed", "Locked"}
+
+
+class TaskResourceConflict(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -41,7 +45,7 @@ def ensure_no_active_conflict(
             f"#{task.get('id')}({', '.join(sorted(resources))})"
             for task, resources in blockers[:5]
         )
-        raise ValueError(f"任务资源冲突：{details}。请等待或中断相关任务。")
+        raise TaskResourceConflict(f"任务资源冲突：{details}。请等待或中断相关任务。")
 
 
 def resources_conflict(left: TaskResources, right: TaskResources) -> bool:
@@ -79,8 +83,8 @@ def resource_overlaps_one(left: str, right: str) -> bool:
 
 def resources_for_task(task: Dict[str, object]) -> TaskResources:
     payload = task_input_payload(task)
-    action = str(payload.get("action") or task.get("label") or "")
-    raw_params = payload.get("params", {})
+    action = str(payload.get("action") or task.get("action") or task.get("label") or "")
+    raw_params = payload.get("params") if payload else task.get("params", {})
     params = raw_params if isinstance(raw_params, Mapping) else {}
     return task_resources(action, params)
 
@@ -101,28 +105,34 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
     elif action == "scenario_set_delete":
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
+    elif action == "scenario_set_read":
+        reads.add(scenario_collection_resource(params))
+    elif action == "scenario_case_read":
+        reads.add(scenario_case_resource(params))
+    elif action == "adjustment_plan_delete":
+        writes.add(adjustment_plan_resource(params))
+    elif action == "adjustment_plan_read":
+        reads.add(adjustment_plan_resource(params))
+    elif action == "adjustment_plan_case_read":
+        reads.add(adjustment_plan_case_or_plan(params))
     elif action in {"scenario_add", "scenario_delete", "scenario_activate", "normal_generate"}:
         if action == "normal_generate":
-            writes.add(resource("scenario_set", params.get("scenario_set_id")))
+            writes.add(scenario_collection_resource(params))
         else:
             writes.add(scenario_case_resource(params))
-    elif action == "dataset_create":
-        writes.add(resource("dataset", params.get("dataset_id")))
     elif action == "build":
         reads.update(
             {
-                resource("scenario_set", params.get("scenario_set_id")),
+                scenario_build_source_resource(params),
             }
         )
-        writes.add(resource("dataset", params.get("dataset_id")))
+        writes.add(adjustment_plan_resource(params))
     elif action == "solve":
-        writes.add(dataset_case_or_dataset(params))
-    elif action == "export_timetable":
-        writes.add(dataset_case_or_dataset(params))
+        writes.add(adjustment_plan_case_or_plan(params))
     elif action == "train":
         reads.update(
             {
-                resource("scenario_set", params.get("scenario_set_id")),
+                scenario_collection_resource(params),
             }
         )
         writes.add(resource("model", params.get("model_id")))
@@ -130,8 +140,8 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         source_set_id = str(params.get("source_scenario_set_id") or "").strip()
         reads.add(resource("model", params.get("model_id")))
         if source_set_id:
-            reads.add(resource("scenario_set", source_set_id))
-        writes.add(resource("scenario_set", params.get("scenario_set_id")))
+            reads.add(scenario_collection_key(source_set_id))
+        writes.add(scenario_collection_resource(params))
 
     return TaskResources(
         reads=frozenset(item for item in reads if item),
@@ -144,22 +154,42 @@ def resource(kind: str, value: object) -> str:
     return f"{kind}:{sanitize_id(text)}" if text else ""
 
 
-def dataset_case_or_dataset(params: Mapping[str, Any]) -> str:
-    dataset_id = str(params.get("dataset_id") or "").strip()
-    case_id = str(params.get("case_id") or "").strip()
-    if not dataset_id:
+def adjustment_plan_resource(params: Mapping[str, Any]) -> str:
+    scenario_set_id = str(params.get("scenario_set_id") or "").strip()
+    plan_id = str(params.get("plan_id") or "").strip()
+    if not scenario_set_id or not plan_id:
         return ""
-    dataset_resource = resource("dataset", dataset_id)
-    return f"{dataset_resource}:case:{sanitize_id(case_id)}" if case_id else dataset_resource
+    return f"{resource('scenario_set', scenario_set_id)}:adjustment_plan:{sanitize_id(plan_id)}"
+
+
+def adjustment_plan_case_or_plan(params: Mapping[str, Any]) -> str:
+    case_id = str(params.get("case_id") or "").strip()
+    plan_resource = adjustment_plan_resource(params)
+    if not plan_resource:
+        return ""
+    return f"{plan_resource}:case:{sanitize_id(case_id)}" if case_id else plan_resource
+
+
+def scenario_collection_resource(params: Mapping[str, Any]) -> str:
+    scenario_set_id = str(params.get("scenario_set_id") or "").strip()
+    return scenario_collection_key(scenario_set_id)
+
+
+def scenario_collection_key(scenario_set_id: str) -> str:
+    return f"{resource('scenario_set', scenario_set_id)}:scenarios" if scenario_set_id else ""
+
+
+def scenario_build_source_resource(params: Mapping[str, Any]) -> str:
+    scenario_id = str(params.get("scenario_id") or "").strip()
+    return scenario_case_resource(params) if scenario_id else scenario_collection_resource(params)
 
 
 def scenario_case_resource(params: Mapping[str, Any]) -> str:
-    scenario_set_id = str(params.get("scenario_set_id") or "").strip()
     scenario_id = str(params.get("scenario_id") or "").strip()
-    if not scenario_set_id:
+    collection = scenario_collection_resource(params)
+    if not collection:
         return ""
-    scenario_set_resource = resource("scenario_set", scenario_set_id)
-    return f"{scenario_set_resource}:scenario:{sanitize_id(scenario_id)}" if scenario_id else scenario_set_resource
+    return f"{collection}:{sanitize_id(scenario_id)}" if scenario_id else collection
 
 
 def task_references_value(task: Dict[str, object], *, field: str, value: str) -> bool:

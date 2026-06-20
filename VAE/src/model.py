@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from src.data import MathGraphSample, TaskRule
 
 
-ARCHITECTURE_VERSION = 2
+ARCHITECTURE_VERSION = 3
 DISTURBANCE_POOL_ID = -1
 RELATION_EDGE_KEY = "target_relation"
 
@@ -49,8 +49,9 @@ class RailDisturbanceVAE(nn.Module):
     """Conditional graph VAE over mathematical rail-disturbance samples.
 
     The prior sees only the fixed context graph C. The posterior sees the
-    joint graph C + G_D + R. The decoder uses z as a global condition over
-    context anchor embeddings instead of pretending z is a graph node.
+    joint graph C + G_D, optionally augmented by R. The decoder uses z as a
+    global condition over context anchor embeddings instead of pretending z is
+    a graph node.
     """
 
     def __init__(
@@ -81,9 +82,11 @@ class RailDisturbanceVAE(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.latent_dim = int(latent_dim)
         self.message_passing_steps = int(message_passing_steps)
+        self.use_relation_graph = self.relation_feature_dim > 0
 
         self.context_edge_keys = [_context_edge_key(edge_type_id) for edge_type_id in self.edge_feature_dims]
         self.anchor_edge_keys = [_anchor_edge_key(task_id) for task_id in self.task_defs]
+        self.relation_edge_keys = [RELATION_EDGE_KEY] if self.use_relation_graph else []
 
         self.pool_encoders = nn.ModuleDict(
             {
@@ -105,7 +108,7 @@ class RailDisturbanceVAE(nn.Module):
         )
         self.joint_gnn = _TypedMessagePassing(
             pool_ids=[*self.pool_feature_dims.keys(), DISTURBANCE_POOL_ID],
-            edge_keys=[*self.context_edge_keys, *self.anchor_edge_keys, RELATION_EDGE_KEY],
+            edge_keys=[*self.context_edge_keys, *self.anchor_edge_keys, *self.relation_edge_keys],
             hidden_dim=hidden_dim,
             message_passing_steps=message_passing_steps,
         )
@@ -121,18 +124,21 @@ class RailDisturbanceVAE(nn.Module):
                 for task_id, defn in self.task_defs.items()
             }
         )
-        self.relation_encoder = _mlp(_param_input_dim(self.relation_feature_dim), hidden_dim)
+        self.relation_encoder = (
+            _mlp(_param_input_dim(self.relation_feature_dim), hidden_dim)
+            if self.use_relation_graph
+            else None
+        )
         self.relation_predictor = (
             nn.Sequential(
                 _mlp(hidden_dim * 3, hidden_dim),
                 nn.Linear(hidden_dim, self.relation_feature_dim),
             )
-            if self.relation_feature_dim > 0
+            if self.use_relation_graph
             else None
         )
-
         context_dim = hidden_dim * (len(self.pool_feature_dims) + len(self.edge_feature_dims))
-        joint_dim = context_dim + hidden_dim * 3
+        joint_dim = context_dim + hidden_dim * (3 if self.use_relation_graph else 2)
         self.context_dim = context_dim
         self.joint_dim = joint_dim
 
@@ -190,6 +196,7 @@ class RailDisturbanceVAE(nn.Module):
             "pool_feature_dims": {str(k): v for k, v in self.pool_feature_dims.items()},
             "edge_feature_dims": {str(k): v for k, v in self.edge_feature_dims.items()},
             "task_defs": {str(k): v for k, v in self.task_defs.items()},
+            "use_relation_graph": self.use_relation_graph,
             "relation_feature_dim": self.relation_feature_dim,
             "hidden_dim": self.hidden_dim,
             "latent_dim": self.latent_dim,
@@ -204,11 +211,15 @@ class RailDisturbanceVAE(nn.Module):
                 f"Unsupported VAE architecture_version={version}; "
                 f"retrain with architecture_version={ARCHITECTURE_VERSION}."
             )
+        relation_feature_dim = int(config["relation_feature_dim"])
+        use_relation_graph = bool(config["use_relation_graph"])
+        if use_relation_graph != (relation_feature_dim > 0):
+            raise ValueError("model_config.use_relation_graph does not match relation_feature_dim.")
         return cls(
             pool_feature_dims={int(k): int(v) for k, v in dict(config["pool_feature_dims"]).items()},
             edge_feature_dims={int(k): int(v) for k, v in dict(config["edge_feature_dims"]).items()},
             task_defs={int(k): dict(v) for k, v in dict(config["task_defs"]).items()},
-            relation_feature_dim=int(config["relation_feature_dim"]),
+            relation_feature_dim=relation_feature_dim,
             hidden_dim=int(config["hidden_dim"]),
             latent_dim=int(config["latent_dim"]),
             message_passing_steps=int(config.get("message_passing_steps", 2)),
@@ -257,12 +268,13 @@ class RailDisturbanceVAE(nn.Module):
         context_edges: List[_HiddenEdge],
     ) -> _JointEncoding:
         device = next(self.parameters()).device
-        disturbance_h, anchor_edges, relation_rows = self._disturbance_graph(
+        disturbance_h, anchor_edges, node_lookup = self._disturbance_graph(
             sample,
             context_pool_embeddings,
             device,
         )
-        relation_edges = [relation_rows.edge]
+        relation_rows = self._relation_edges(sample, node_lookup, device) if self.use_relation_graph else None
+        relation_edges = [relation_rows.edge] if relation_rows is not None else []
         node_h = {pool_id: embeddings for pool_id, embeddings in context_pool_embeddings.items()}
         node_h[DISTURBANCE_POOL_ID] = disturbance_h
 
@@ -271,9 +283,15 @@ class RailDisturbanceVAE(nn.Module):
         context_summary = self._context_summary(joint_h, context_edges, device)
         disturbance_summary = _mean_or_zero(joint_h[DISTURBANCE_POOL_ID], self.hidden_dim, device)
         anchor_summary = _mean_edge_or_zero(anchor_edges, self.hidden_dim, device)
-        relation_summary = _mean_edge_or_zero(relation_edges, self.hidden_dim, device)
-        posterior_input = torch.cat([context_summary, disturbance_summary, anchor_summary, relation_summary], dim=0)
-        relation_pred = self._predict_relations(joint_h[DISTURBANCE_POOL_ID], relation_rows)
+        posterior_parts = [context_summary, disturbance_summary, anchor_summary]
+        if relation_edges:
+            posterior_parts.append(_mean_edge_or_zero(relation_edges, self.hidden_dim, device))
+        posterior_input = torch.cat(posterior_parts, dim=0)
+        relation_pred = (
+            self._predict_relations(joint_h[DISTURBANCE_POOL_ID], relation_rows)
+            if relation_rows is not None
+            else None
+        )
         return _JointEncoding(posterior_input=posterior_input, relation_pred=relation_pred)
 
     def prior(self, context: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -348,7 +366,7 @@ class RailDisturbanceVAE(nn.Module):
         sample: MathGraphSample,
         context_pool_embeddings: Dict[int, torch.Tensor],
         device: torch.device,
-    ) -> Tuple[torch.Tensor, List[_HiddenEdge], _RelationRows]:
+    ) -> Tuple[torch.Tensor, List[_HiddenEdge], Dict[Tuple[int, int], int]]:
         node_rows: List[torch.Tensor] = []
         node_lookup: Dict[Tuple[int, int], int] = {}
         anchor_sources: Dict[int, List[int]] = {task_id: [] for task_id in self.task_defs}
@@ -377,8 +395,7 @@ class RailDisturbanceVAE(nn.Module):
             else torch.empty((0, self.hidden_dim), dtype=torch.float32, device=device)
         )
         anchor_edges = self._anchor_edges(anchor_sources, anchor_targets, anchor_inputs, device)
-        relation_rows = self._relation_edges(sample, node_lookup, device)
-        return disturbance_h, anchor_edges, relation_rows
+        return disturbance_h, anchor_edges, node_lookup
 
     def _anchor_edges(
         self,
@@ -437,6 +454,8 @@ class RailDisturbanceVAE(nn.Module):
             relation_inputs.append(_param_input(relation_x[row_id], self.relation_feature_dim, device))
 
         if source_rows:
+            if self.relation_encoder is None:
+                raise RuntimeError("Relation graph is disabled for this model.")
             relation_input = torch.stack(relation_inputs, dim=0)
             edge_h = self.relation_encoder(relation_input)
             edge_index = torch.tensor([source_rows, target_rows], dtype=torch.long, device=device)

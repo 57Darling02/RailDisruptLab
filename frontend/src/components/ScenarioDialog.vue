@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-import { api, ApiError } from '@/api/client'
+import { api, formatApiError } from '@/api/client'
 import { Refresh } from '@/icons'
 import type { JsonObject, ScenarioOptions } from '@/types'
 
@@ -111,7 +111,7 @@ async function loadOptions() {
   } catch (error) {
     if (seq !== requestSeq || projectId !== props.projectId) return
     options.value = null
-    errorMessage.value = formatError(error)
+    errorMessage.value = formatApiError(error)
   } finally {
     if (seq === requestSeq && projectId === props.projectId) {
       loading.value = false
@@ -244,24 +244,27 @@ function formatStartTime(value: unknown) {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`
 }
 
-function formatError(error: unknown) {
-  if (error instanceof ApiError) return `${error.status}: ${error.message}`
-  if (error instanceof Error) return error.message
-  return String(error)
-}
 </script>
 
 <template>
   <el-dialog
     :model-value="modelValue"
     :title="title"
-    width="920px"
+    width="min(1080px, calc(100vw - 32px))"
+    class="scenario-dialog"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div v-loading="loading" class="scenario-dialog-body" element-loading-text="正在加载场景锚点...">
       <el-result v-if="errorMessage" icon="error" title="场景锚点加载失败" :sub-title="errorMessage">
         <template #extra>
-          <el-button type="primary" :icon="Refresh" :loading="loading" :disabled="busy" @click="loadOptions">
+          <el-button
+            type="primary"
+            :icon="Refresh"
+            :loading-icon="Refresh"
+            :loading="loading"
+            :disabled="busy"
+            @click="loadOptions"
+          >
             重试
           </el-button>
         </template>
@@ -294,7 +297,7 @@ function formatError(error: unknown) {
           </el-table-column>
           <el-table-column label="晚点秒数" width="180">
             <template #default="{ row }">
-              <el-input-number v-model="row.seconds" :min="1" :disabled="busy" />
+              <el-input-number v-model="row.seconds" :min="1" controls-position="right" :disabled="busy" />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="90">
@@ -322,19 +325,25 @@ function formatError(error: unknown) {
               />
             </template>
           </el-table-column>
-          <el-table-column label="开始时间" width="150">
+          <el-table-column label="开始时间" width="170">
             <template #default="{ row }">
-              <el-input v-model="row.start_time" placeholder="HH:MM:SS" :disabled="busy" />
+              <el-time-picker
+                v-model="row.start_time"
+                format="HH:mm:ss"
+                value-format="HH:mm:ss"
+                placeholder="开始时间"
+                :disabled="busy"
+              />
             </template>
           </el-table-column>
           <el-table-column label="持续秒数" width="150">
             <template #default="{ row }">
-              <el-input-number v-model="row.duration" :min="1" :disabled="busy" />
+              <el-input-number v-model="row.duration" :min="1" controls-position="right" :disabled="busy" />
             </template>
           </el-table-column>
           <el-table-column label="限速" width="150">
             <template #default="{ row }">
-              <el-input-number v-model="row.limit_speed" :min="0" :disabled="busy" />
+              <el-input-number v-model="row.limit_speed" :min="0" controls-position="right" :disabled="busy" />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="90">
@@ -372,6 +381,11 @@ function formatError(error: unknown) {
 }
 
 .full-width {
+  width: 100%;
+}
+
+:deep(.el-input-number),
+:deep(.el-date-editor.el-input) {
   width: 100%;
 }
 </style>

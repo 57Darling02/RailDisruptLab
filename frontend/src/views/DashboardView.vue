@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { DatasetSummary, ModelSummary, Task } from '@/types'
+import type { ModelSummary, Task } from '@/types'
 
 defineProps<{
   selectedProjectId: string
   scenarioSetCount: number
-  datasets: DatasetSummary[]
+  adjustmentPlanCount: number
   models: ModelSummary[]
   tasks: Task[]
   runningTaskCount: number
@@ -15,7 +15,7 @@ defineProps<{
 
 defineEmits<{
   createScenarioSet: []
-  createDataset: []
+  createPlan: []
   train: []
   refreshTasks: []
 }>()
@@ -30,7 +30,7 @@ defineEmits<{
             <span>项目资源</span>
           </div>
         </template>
-        <div v-if="!scenarioSetCount && !datasets.length && !models.length" class="primary-empty-panel dashboard-empty-panel">
+        <div v-if="!scenarioSetCount && !adjustmentPlanCount && !models.length" class="primary-empty-panel dashboard-empty-panel">
           <el-empty :image-size="120">
             <template #description>
               <div class="primary-empty-title">暂无项目资源</div>
@@ -39,8 +39,8 @@ defineEmits<{
               <el-button type="primary" size="large" :disabled="busy" @click="$emit('createScenarioSet')">
                 新增场景分类
               </el-button>
-              <el-button size="large" :disabled="busy" @click="$emit('createDataset')">
-                构建 MILP 实例集
+              <el-button size="large" :disabled="busy" @click="$emit('createPlan')">
+                构建调整计划
               </el-button>
               <el-button size="large" :disabled="busy" @click="$emit('train')">
                 训练新模型
@@ -53,7 +53,7 @@ defineEmits<{
             <el-statistic title="扰动场景类别" :value="scenarioSetCount" />
           </el-col>
           <el-col :span="8">
-            <el-statistic title="MILP实例类别" :value="datasets.length" />
+            <el-statistic title="调整计划数量" :value="adjustmentPlanCount" />
           </el-col>
           <el-col :span="8">
             <el-statistic title="扰动生成模型数量" :value="models.length" />
