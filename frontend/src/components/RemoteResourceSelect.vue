@@ -62,5 +62,7 @@ function handleChange(value: string | string[]) {
       :label="item.label"
       :value="item.value"
     />
+    <template #loading>加载中</template>
+    <template #empty>暂无数据</template>
   </el-select>
 </template>

@@ -63,7 +63,7 @@ const isExpanded = computed(
   () => !isDesktop.value || pinnedExpanded.value || hoveringMenu.value || introExpanded.value,
 )
 const isCollapsed = computed(() => isDesktop.value && !isExpanded.value)
-const pinButtonLabel = computed(() => (pinnedExpanded.value ? '折叠' : '展开'))
+const pinButtonTooltip = computed(() => (pinnedExpanded.value ? '折叠侧边栏' : '展开侧边栏'))
 const pinButtonIcon = computed(() => (pinnedExpanded.value ? PanelLeftClose : PanelLeftOpen))
 
 function togglePinnedExpanded() {
@@ -165,10 +165,16 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="isDesktop" class="navigation-footer">
-      <button class="navigation-pin-button" type="button" @click="togglePinnedExpanded">
-        <el-icon><component :is="pinButtonIcon" /></el-icon>
-        <span>{{ pinButtonLabel }}</span>
-      </button>
+      <el-tooltip :content="pinButtonTooltip" placement="right">
+        <button
+          class="navigation-pin-button"
+          type="button"
+          :aria-label="pinButtonTooltip"
+          @click="togglePinnedExpanded"
+        >
+          <el-icon><component :is="pinButtonIcon" /></el-icon>
+        </button>
+      </el-tooltip>
     </div>
   </div>
 </template>
@@ -204,8 +210,7 @@ onBeforeUnmount(() => {
 .app-navigation.is-desktop-navigation :deep(.el-menu-item span),
 .app-navigation.is-desktop-navigation :deep(.el-sub-menu__title span),
 .app-navigation.is-desktop-navigation :deep(.el-sub-menu__icon-arrow),
-.app-navigation.is-desktop-navigation .brand-full,
-.app-navigation.is-desktop-navigation .navigation-pin-button span {
+.app-navigation.is-desktop-navigation .brand-full {
   overflow: hidden;
   max-width: 160px;
   transform: translateX(0);
@@ -219,8 +224,7 @@ onBeforeUnmount(() => {
 .app-navigation.is-desktop-navigation.is-collapsed :deep(.el-menu-item span),
 .app-navigation.is-desktop-navigation.is-collapsed :deep(.el-sub-menu__title span),
 .app-navigation.is-desktop-navigation.is-collapsed :deep(.el-sub-menu__icon-arrow),
-.app-navigation.is-desktop-navigation.is-collapsed .brand-full,
-.app-navigation.is-desktop-navigation.is-collapsed .navigation-pin-button span {
+.app-navigation.is-desktop-navigation.is-collapsed .brand-full {
   max-width: 0;
   transform: translateX(-6px);
   opacity: 0;
@@ -279,8 +283,8 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 40px;
   align-items: center;
-  gap: 12px;
-  padding: 0 12px;
+  justify-content: center;
+  padding: 0;
   border: 0;
   border-radius: 8px;
   color: var(--el-text-color-regular);
@@ -296,16 +300,5 @@ onBeforeUnmount(() => {
 
 .navigation-pin-button .el-icon {
   flex: 0 0 auto;
-}
-
-.navigation-pin-button span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.app-navigation.is-desktop-navigation.is-collapsed .navigation-pin-button {
-  justify-content: center;
-  padding: 0;
 }
 </style>

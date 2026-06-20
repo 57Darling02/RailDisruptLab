@@ -76,6 +76,8 @@ function handleDelete(projectId: string) {
           </el-button>
         </el-space>
       </el-option>
+      <template #loading>加载中</template>
+      <template #empty>暂无数据</template>
       <template #footer>
         <el-button
           class="project-create-button"

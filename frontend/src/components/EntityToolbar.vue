@@ -91,6 +91,8 @@ function handleVisibleChange(visible: boolean) {
               </el-button>
             </el-space>
           </el-option>
+          <template #loading>加载中</template>
+          <template #empty>暂无数据</template>
           <template v-if="addInDropdown" #footer>
             <el-button
               class="entity-create-button"
