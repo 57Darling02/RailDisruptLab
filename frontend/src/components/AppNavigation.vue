@@ -36,7 +36,7 @@ const primaryItems: NavigationItem[] = [
 ]
 
 const scenarioItems: NavigationItem[] = [
-  { index: 'scenario-overview', label: '场景总览', icon: ChartPie },
+  { index: 'scenario-overview', label: '场景总览', icon: Blocks },
   { index: 'scenario-resources', label: '场景资源', icon: Database },
   { index: 'adjustment-plans', label: 'MILP 调整计划', icon: ChartNoAxesCombined },
 ]
@@ -152,7 +152,7 @@ onBeforeUnmount(() => {
           </el-menu-item>
           <el-sub-menu index="ablation">
             <template #title>
-              <el-icon><Blocks /></el-icon>
+              <el-icon><ChartPie /></el-icon>
               <span>消融分析</span>
             </template>
             <el-menu-item v-for="item in ablationItems" :key="item.index" :index="item.index">

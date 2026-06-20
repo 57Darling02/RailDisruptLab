@@ -14,7 +14,14 @@ import type {
 
 export const DEFAULT_ABLATION_SCENARIO_LIMIT = 4
 
-const SOLVE_METRIC_ORDER = ['objective', 'mip_gap', 'num_nodes', 'duration_sec']
+const SOLVE_METRIC_ORDER = [
+  'objective',
+  'mip_gap',
+  'num_nodes',
+  'duration_sec',
+  'constraints',
+  'build_duration_sec',
+]
 const SCENARIO_SERIES = [
   { key: 'total', label: '总数', color: '#303133' },
   { key: 'delay', label: '晚点', color: '#f59e0b' },
@@ -81,6 +88,11 @@ export interface ComparisonSummaryRow {
   signed_delta_mean: number | null
   absolute_error_mean: number | null
   relative_error_mean: number | null
+}
+
+export interface SolveMetricColumn {
+  key: string
+  label: string
 }
 
 export function scenarioSetOptions(scenarioSets: ScenarioSet[]): ResourceOption[] {
@@ -384,48 +396,70 @@ export function buildComparisonSummaryRows(
     )
 }
 
+export function solveMetricColumns(analysis: AdjustmentPlanSolveAnalysis | null): SolveMetricColumn[] {
+  return orderedMetricKeys(analysis).map((metric) => ({
+    key: metric,
+    label: solveMetricLabel(analysis, metric),
+  }))
+}
+
 export function buildMetricMeanChartOption(
   analysis: AdjustmentPlanSolveAnalysis | null,
 ): EChartsCoreOption {
   const plans = analysis?.adjustment_plans ?? []
   const metrics = orderedMetricKeys(analysis)
+  const metricByLabel = new Map(metrics.map((metric) => [solveMetricLabel(analysis, metric), metric]))
   return {
     animationDuration: 300,
-    tooltip: { trigger: 'axis' },
-    legend: { type: 'scroll', top: 0 },
-    grid: { top: 36, right: 20, bottom: 32, left: 58 },
-    xAxis: {
-      type: 'category',
-      data: metrics.map((metric) => solveMetricLabel(analysis, metric)),
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: unknown) => formatMetricMeanTooltip(params, metricByLabel),
     },
+    legend: { type: 'scroll', top: 0, data: metrics.map((metric) => solveMetricLabel(analysis, metric)) },
+    grid: { top: 42, right: 20, bottom: 44, left: 64 },
+    xAxis: { type: 'category', data: plans.map(adjustmentPlanLabel) },
     yAxis: { type: 'value', scale: true },
-    series: plans.map((plan) => ({
-      name: adjustmentPlanLabel(plan),
+    series: metrics.map((metric) => ({
+      name: solveMetricLabel(analysis, metric),
       type: 'bar',
-      data: metrics.map((metric) => summaryMetricMean(plan, metric)),
-      label: barValueLabel(),
+      data: plans.map((plan) => summaryMetricMean(plan, metric)),
     })),
   }
 }
 
-export function buildComparisonDeltaChartOption(rows: ComparisonSummaryRow[]): EChartsCoreOption {
-  const plans = uniqueBy(
-    rows.map((row) => ({ key: row.plan_key, label: row.plan_label })),
-    (plan) => plan.key,
-  )
-  const metrics = [...new Set(rows.map((row) => row.metric))].sort(
-    (left, right) => metricOrder(left) - metricOrder(right),
-  )
-  const labelByMetric = new Map(rows.map((row) => [row.metric, row.metric_label]))
+function formatMetricMeanTooltip(params: unknown, metricByLabel: Map<string, string>) {
+  const items = Array.isArray(params) ? params : []
+  const first = items[0] as { axisValue?: string } | undefined
+  return [
+    first?.axisValue ?? '',
+    ...items.map((item) => {
+      const payload = item as { marker?: string; seriesName?: string; value?: unknown }
+      const metric = metricByLabel.get(payload.seriesName ?? '') ?? ''
+      return `${payload.marker ?? ''}${payload.seriesName ?? ''}: ${formatMetricValue(numberValue(payload.value), metric)}`
+    }),
+  ].filter(Boolean).join('<br/>')
+}
+
+export function buildComparisonDeltaChartOption(
+  analysis: AdjustmentPlanSolveAnalysis | null,
+): EChartsCoreOption {
+  const plans = analysis?.adjustment_plans ?? []
+  const metrics = orderedMetricKeys(analysis)
+  const baseline = baselineSolvePlan(analysis)
   return {
     animationDuration: 300,
     tooltip: {
       trigger: 'axis',
       valueFormatter: (value: unknown) => formatPercent(numberValue(value)),
     },
-    legend: { type: 'scroll', top: 0 },
-    grid: { top: 36, right: 20, bottom: 32, left: 58 },
-    xAxis: { type: 'category', data: plans.map((plan) => plan.label) },
+    legend: {
+      type: 'scroll',
+      top: 0,
+      data: metrics.map((metric) => solveMetricLabel(analysis, metric)),
+      selected: defaultSelectedMetricLabels(analysis, metrics, 4),
+    },
+    grid: { top: 42, right: 20, bottom: 44, left: 64 },
+    xAxis: { type: 'category', data: plans.map(adjustmentPlanLabel) },
     yAxis: {
       type: 'value',
       axisLabel: {
@@ -433,18 +467,42 @@ export function buildComparisonDeltaChartOption(rows: ComparisonSummaryRow[]): E
       },
     },
     series: metrics.map((metric) => ({
-      name: labelByMetric.get(metric) ?? metric,
+      name: solveMetricLabel(analysis, metric),
       type: 'bar',
-      data: plans.map((plan) => {
-        const row = rows.find((item) => item.plan_key === plan.key && item.metric === metric)
-        return row?.relative_error_mean ?? null
-      }),
+      data: plans.map((plan) => relativeMetricError(baseline, plan, metric)),
       label: {
         ...barValueLabel(),
         formatter: ({ value }: { value: unknown }) => formatPercent(numberValue(value)),
       },
     })),
   }
+}
+
+function baselineSolvePlan(analysis: AdjustmentPlanSolveAnalysis | null) {
+  const baselineKey = analysis?.comparison.baseline_plan_key || analysis?.comparison.baseline_plan_id || ''
+  return analysis?.adjustment_plans.find((plan) => adjustmentPlanKey(plan) === baselineKey) ?? null
+}
+
+function relativeMetricError(
+  baseline: AdjustmentPlanSolveState | null,
+  plan: AdjustmentPlanSolveState,
+  metric: string,
+) {
+  if (!baseline) return null
+  const baselineValue = summaryMetricMean(baseline, metric)
+  const value = summaryMetricMean(plan, metric)
+  if (baselineValue === null || value === null || Math.abs(baselineValue) <= 1e-12) return null
+  return Math.abs(value - baselineValue) / Math.abs(baselineValue)
+}
+
+function defaultSelectedMetricLabels(
+  analysis: AdjustmentPlanSolveAnalysis | null,
+  metrics: string[],
+  limit: number,
+) {
+  return Object.fromEntries(
+    metrics.map((metric, index) => [solveMetricLabel(analysis, metric), index < limit]),
+  )
 }
 
 export function solveMetricLabel(
@@ -592,16 +650,4 @@ function formatNumber(value: number) {
 
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)]
-}
-
-function uniqueBy<T>(items: T[], keyOf: (item: T) => string): T[] {
-  const result: T[] = []
-  const seen = new Set<string>()
-  for (const item of items) {
-    const key = keyOf(item)
-    if (seen.has(key)) continue
-    result.push(item)
-    seen.add(key)
-  }
-  return result
 }

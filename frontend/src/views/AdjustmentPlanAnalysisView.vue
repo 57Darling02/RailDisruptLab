@@ -22,6 +22,7 @@ import {
   formatPercent,
   formatSignedMetricValue,
   roleLabel,
+  solveMetricColumns,
   solveMetricLabel,
 } from '@/views/ablation-analysis'
 
@@ -40,6 +41,7 @@ const candidatePlans = ref<AdjustmentPlanRef[]>([])
 const discoveredPlans = ref<AdjustmentPlanSummary[]>([])
 const analysis = ref<AdjustmentPlanSolveAnalysis | null>(null)
 const analysisLoading = ref(false)
+const metricComparisonMode = ref<'relative_error' | 'value'>('relative_error')
 const errorMessage = ref('')
 const conflictMessage = ref('')
 let analysisRequestSeq = 0
@@ -60,9 +62,20 @@ const canLoadAnalysis = computed(() =>
 const loading = computed(() => analysisLoading.value)
 const metricCards = computed(() => buildAblationMetricCards(analysis.value, selectedPlanCount.value))
 const solvePlanRows = computed(() => buildSolvePlanRows(analysis.value))
+const metricColumns = computed(() => solveMetricColumns(analysis.value))
 const comparisonRows = computed(() => buildComparisonSummaryRows(analysis.value))
 const metricMeanChartOption = computed(() => buildMetricMeanChartOption(analysis.value))
-const comparisonDeltaChartOption = computed(() => buildComparisonDeltaChartOption(comparisonRows.value))
+const comparisonDeltaChartOption = computed(() => buildComparisonDeltaChartOption(analysis.value))
+const metricComparisonChartOption = computed(() =>
+  metricComparisonMode.value === 'relative_error'
+    ? comparisonDeltaChartOption.value
+    : metricMeanChartOption.value,
+)
+const metricComparisonFilename = computed(() =>
+  metricComparisonMode.value === 'relative_error'
+    ? 'adjustment-plan-relative-error'
+    : 'adjustment-plan-metric-values',
+)
 
 watch(
   () => props.selectedProjectId,
@@ -320,14 +333,13 @@ function planKey(plan: Pick<AdjustmentPlanRef, 'scenario_set_id' | 'plan_id'>) {
                       {{ row.solved_count }}/{{ row.case_count }} ({{ formatPercent(row.solved_ratio) }})
                     </template>
                   </el-table-column>
-                  <el-table-column label="目标均值" width="120">
-                    <template #default="{ row }">{{ formatMetricValue(row.metrics.objective, 'objective') }}</template>
-                  </el-table-column>
-                  <el-table-column label="MIP Gap" width="110">
-                    <template #default="{ row }">{{ formatMetricValue(row.metrics.mip_gap, 'mip_gap') }}</template>
-                  </el-table-column>
-                  <el-table-column label="求解耗时" width="120">
-                    <template #default="{ row }">{{ formatMetricValue(row.metrics.duration_sec, 'duration_sec') }}</template>
+                  <el-table-column
+                    v-for="metric in metricColumns"
+                    :key="metric.key"
+                    :label="metric.label"
+                    width="120"
+                  >
+                    <template #default="{ row }">{{ formatMetricValue(row.metrics[metric.key], metric.key) }}</template>
                   </el-table-column>
                   <el-table-column prop="config_status" label="求解器配置" width="120" />
                   <el-table-column prop="solver_config_text" label="参数" min-width="220" show-overflow-tooltip />
@@ -337,18 +349,17 @@ function planKey(plan: Pick<AdjustmentPlanRef, 'scenario_set_id' | 'plan_id'>) {
             </el-tab-pane>
 
             <el-tab-pane label="指标对比">
-              <div class="analysis-chart-grid">
-                <ChartPanel
-                  :option="metricMeanChartOption"
-                  filename="adjustment-plan-metric-means"
-                  height="300px"
-                />
-                <ChartPanel
-                  :option="comparisonDeltaChartOption"
-                  filename="adjustment-plan-relative-delta"
-                  height="300px"
-                />
+              <div class="analysis-chart-toolbar">
+                <el-radio-group v-model="metricComparisonMode" size="small">
+                  <el-radio-button label="relative_error">误差百分比</el-radio-button>
+                  <el-radio-button label="value">数值对比</el-radio-button>
+                </el-radio-group>
               </div>
+              <ChartPanel
+                :option="metricComparisonChartOption"
+                :filename="metricComparisonFilename"
+                height="340px"
+              />
             </el-tab-pane>
 
             <el-tab-pane label="差异明细">
@@ -390,6 +401,12 @@ function planKey(plan: Pick<AdjustmentPlanRef, 'scenario_set_id' | 'plan_id'>) {
   min-width: 0;
   flex-direction: column;
   gap: 14px;
+}
+
+.analysis-chart-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
 }
 
 </style>

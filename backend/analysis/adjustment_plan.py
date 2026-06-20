@@ -14,6 +14,8 @@ METRIC_LABELS = {
     "mip_gap": "MIP Gap",
     "num_nodes": "分支节点数",
     "duration_sec": "求解耗时",
+    "constraints": "约束数",
+    "build_duration_sec": "构建耗时",
 }
 
 SOLVER_CONFIG_KEYS = ("time_limit", "mip_gap", "threads")
