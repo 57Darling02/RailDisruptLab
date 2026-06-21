@@ -211,6 +211,7 @@ function configValue(key: string) {
           placeholder="选择调整计划"
           add-label="构建调整计划"
           delete-label="删除调整计划"
+          add-in-dropdown
           :busy="busy"
           @update:model-value="$emit('update:selectedPlanId', $event)"
           @visible-change="$emit('reloadPlans', $event)"
@@ -336,46 +337,49 @@ function configValue(key: string) {
                 title="该调整计划内存在多组构建参数，请检查是否混合了不同构建批次。"
               />
 
-              <el-scrollbar class="table-scroll" max-height="420px">
-                <el-table :data="artifactGroups" empty-text="暂无实例资源">
-                  <el-table-column prop="case_id" label="场景 ID" width="180" />
-                  <el-table-column label="总大小" width="120">
-                    <template #default="{ row }">{{ formatBytes(row.size_bytes) }}</template>
-                  </el-table-column>
-                  <el-table-column label="求解" min-width="260">
-                    <template #default="{ row }">
-                      <el-space wrap>
-                        <el-tag :type="row.has_lp ? 'success' : 'info'">
-                          {{ row.has_lp ? 'LP 已构建' : 'LP 缺失' }}
-                        </el-tag>
-                        <el-tag :type="row.has_solution && row.has_solution_csv ? 'success' : 'info'">
-                          {{ row.has_solution && row.has_solution_csv ? '解数据完整' : '未求解' }}
-                        </el-tag>
-                      </el-space>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="160">
-                    <template #default="{ row }">
-                      <el-button
-                        link
-                        type="primary"
-                        :disabled="!row.has_lp || busy"
-                        @click="$emit('solveCase', row.case_id)"
-                      >
-                        求解
-                      </el-button>
-                      <el-button
-                        link
-                        type="primary"
-                        :disabled="!row.has_solution || busy"
-                        @click="$emit('openTimetable', row.case_id)"
-                      >
-                        查看
-                      </el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-              </el-scrollbar>
+              <el-table
+                :data="artifactGroups"
+                max-height="420"
+                table-layout="fixed"
+                empty-text="暂无实例资源"
+              >
+                <el-table-column prop="case_id" label="场景 ID" show-overflow-tooltip />
+                <el-table-column label="总大小" width="120">
+                  <template #default="{ row }">{{ formatBytes(row.size_bytes) }}</template>
+                </el-table-column>
+                <el-table-column label="求解" width="260">
+                  <template #default="{ row }">
+                    <el-space wrap>
+                      <el-tag :type="row.has_lp ? 'success' : 'info'">
+                        {{ row.has_lp ? 'LP 已构建' : 'LP 缺失' }}
+                      </el-tag>
+                      <el-tag :type="row.has_solution && row.has_solution_csv ? 'success' : 'info'">
+                        {{ row.has_solution && row.has_solution_csv ? '解数据完整' : '未求解' }}
+                      </el-tag>
+                    </el-space>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="128" align="right">
+                  <template #default="{ row }">
+                    <el-button
+                      link
+                      type="primary"
+                      :disabled="!row.has_lp || busy"
+                      @click="$emit('solveCase', row.case_id)"
+                    >
+                      求解
+                    </el-button>
+                    <el-button
+                      link
+                      type="primary"
+                      :disabled="!row.has_solution || busy"
+                      @click="$emit('openTimetable', row.case_id)"
+                    >
+                      查看
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
             </template>
           </el-card>
         </div>

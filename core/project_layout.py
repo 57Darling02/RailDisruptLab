@@ -57,7 +57,7 @@ class ScenarioSetLayout:
         return self.root / "adjustment_plans"
 
     def scenario(self, scenario_id: str) -> "ScenarioCaseLayout":
-        return ScenarioCaseLayout(self.scenarios_dir / require_id(scenario_id, "scenario_id"))
+        return ScenarioCaseLayout(self.scenarios_dir / f"{require_id(scenario_id, 'scenario_id')}.yml")
 
     def adjustment_plan(self, plan_id: str) -> "AdjustmentPlanLayout":
         return AdjustmentPlanLayout(self.adjustment_plans_dir / require_id(plan_id, "plan_id"))
@@ -65,6 +65,31 @@ class ScenarioSetLayout:
 
 @dataclass(frozen=True)
 class ScenarioCaseLayout:
+    path: Path
+
+    @property
+    def scenario_yml(self) -> Path:
+        return self.path
+
+    @property
+    def root(self) -> Path:
+        return self.path.parent
+
+
+@dataclass(frozen=True)
+class RunGraphSetLayout:
+    root: Path
+
+    @property
+    def run_graphs_dir(self) -> Path:
+        return self.root / "run_graphs"
+
+    def run_graph(self, run_graph_id: str) -> "RunGraphLayout":
+        return RunGraphLayout(self.run_graphs_dir / require_id(run_graph_id, "run_graph_id"))
+
+
+@dataclass(frozen=True)
+class RunGraphLayout:
     root: Path
 
     @property
@@ -84,8 +109,8 @@ class ScenarioCaseLayout:
         return self.root / "context.json"
 
     @property
-    def scenario_yml(self) -> Path:
-        return self.root / "scenario.yml"
+    def metadata_json(self) -> Path:
+        return self.root / "metadata.json"
 
 
 @dataclass(frozen=True)
@@ -133,12 +158,12 @@ class ProjectLayout:
         return cls(name=project_id, root=PROJECTS_ROOT / project_id)
 
     @property
-    def source_dir(self) -> Path:
-        return self.root / "source"
-
-    @property
     def scenario_sets_dir(self) -> Path:
         return self.root / "scenario_sets"
+
+    @property
+    def run_graph_sets_dir(self) -> Path:
+        return self.root / "run_graph_sets"
 
     @property
     def model_dir(self) -> Path:
@@ -146,6 +171,9 @@ class ProjectLayout:
 
     def scenario_set(self, scenario_set_id: str) -> ScenarioSetLayout:
         return ScenarioSetLayout(self.scenario_sets_dir / require_id(scenario_set_id, "scenario_set_id"))
+
+    def run_graph_set(self, run_graph_set_id: str) -> RunGraphSetLayout:
+        return RunGraphSetLayout(self.run_graph_sets_dir / require_id(run_graph_set_id, "run_graph_set_id"))
 
     def model(self, model_id: str) -> ModelLayout:
         return ModelLayout(self.model_dir / require_id(model_id, "model_id"))

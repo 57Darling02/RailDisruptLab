@@ -9,6 +9,8 @@ body {
   --rdl-radius: 12px;
   --app-nav-collapsed-width: 64px;
   --app-nav-expanded-width: 220px;
+  --app-z-page-loading: 2000;
+  --app-z-navigation: 2100;
   --el-border-radius-base: var(--rdl-radius);
   --el-card-border-radius: var(--rdl-radius);
   --el-dialog-border-radius: var(--rdl-radius);
@@ -98,14 +100,18 @@ body {
   height: 100vh;
   overflow: visible;
   transition: width 180ms ease;
-  z-index: 20;
+  z-index: var(--app-z-navigation);
 }
 
 .app-aside > .app-navigation {
   height: 100%;
   position: absolute;
   inset: 0 auto 0 0;
-  z-index: 1;
+  z-index: var(--app-z-navigation);
+}
+
+.app-main .el-loading-mask {
+  z-index: var(--app-z-page-loading);
 }
 
 .brand {
@@ -189,12 +195,14 @@ body {
   height: 100%;
 }
 
-.main-scroll .el-scrollbar__wrap {
-  padding-right: 8px;
+.main-scroll > .el-scrollbar__wrap {
+  overflow-x: hidden;
 }
 
-.main-scroll .el-scrollbar__view {
+.main-scroll > .el-scrollbar__wrap > .el-scrollbar__view {
+  box-sizing: border-box;
   min-height: 100%;
+  padding-right: 8px;
 }
 
 .page-layout {

@@ -40,8 +40,43 @@ export interface FileState {
   size_bytes: number
 }
 
-export type ScenarioActivationStatus = 'inactive' | 'active' | 'invalid'
 export type ScenarioYamlStatus = 'valid' | 'invalid'
+
+export interface RunGraphReference {
+  set_id: string
+  graph_id: string
+  context_sha256: string
+}
+
+export interface RunGraphSet {
+  run_graph_set_id: string
+  root: string
+  run_graph_count: number
+}
+
+export interface RunGraphSummary {
+  project_id: string
+  run_graph_set_id: string
+  run_graph_id: string
+  root: string
+  context_path: string
+  context_sha256: string
+  timetable_sha256: string
+  mileage_sha256: string
+  station_count: number
+  train_count: number
+  total_mileage: number
+  event_node_count: number
+  section_node_count: number
+  created_at: string
+}
+
+export interface RunGraphOption {
+  label: string
+  value: string
+  run_graph: RunGraphReference
+  summary: RunGraphSummary
+}
 
 export interface ScenarioSet {
   scenario_set_id: string
@@ -57,9 +92,7 @@ export interface ScenarioSummary {
   root?: string
   yaml_status?: ScenarioYamlStatus
   yaml_reason?: string
-  has_context?: boolean
-  has_timetable?: boolean
-  has_mileage?: boolean
+  run_graph?: RunGraphReference | null
   counts?: {
     delay: number
     speed_limit: number
@@ -84,12 +117,9 @@ export interface ScenarioDetail {
   scenario_id: string
   name: string
   root: string
-  activated: boolean
-  activation_status: ScenarioActivationStatus
-  activation_reason: string
-  has_context: boolean
-  has_timetable: boolean
-  has_mileage: boolean
+  yaml_status: ScenarioYamlStatus
+  yaml_reason: string
+  run_graph: RunGraphReference | null
   counts: {
     delay: number
     speed_limit: number
@@ -99,8 +129,8 @@ export interface ScenarioDetail {
   delay_count: number
   speed_limit_count: number
   interruption_count: number
-  source_files: FileState[]
   context_stats: ScenarioContextStats | null
+  run_graph_detail: RunGraphSummary | null
   scenario: JsonObject | null
 }
 
@@ -271,6 +301,7 @@ export interface ScenarioVisualizationItem {
   path: string
   yaml_status: ScenarioYamlStatus
   yaml_reason: string
+  run_graph: RunGraphReference | null
   disturbances: TimetableDisturbance[]
   counts: {
     delay: number
@@ -397,6 +428,10 @@ export interface PlanTimetableState {
   disturbances: TimetableDisturbance[]
 }
 
+export interface RunGraphTimetableState extends PlanTimetableState {
+  run_graph: RunGraphReference
+}
+
 export interface CaseTimetableState {
   project_id: string
   scenario_set_id: string
@@ -503,6 +538,7 @@ export interface ProjectState {
   project_id: string
   root: string
   exists: boolean
+  run_graph_sets: RunGraphSet[]
   scenario_sets: ScenarioSet[]
   models: ModelSummary[]
 }

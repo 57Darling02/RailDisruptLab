@@ -3,6 +3,7 @@ import type { ModelSummary, Task } from '@/types'
 
 defineProps<{
   selectedProjectId: string
+  runGraphSetCount: number
   scenarioSetCount: number
   adjustmentPlanCount: number
   models: ModelSummary[]
@@ -15,6 +16,7 @@ defineProps<{
 
 defineEmits<{
   createScenarioSet: []
+  createRunGraphSet: []
   createPlan: []
   train: []
   refreshTasks: []
@@ -30,12 +32,18 @@ defineEmits<{
             <span>项目资源</span>
           </div>
         </template>
-        <div v-if="!scenarioSetCount && !adjustmentPlanCount && !models.length" class="primary-empty-panel dashboard-empty-panel">
+        <div
+          v-if="!runGraphSetCount && !scenarioSetCount && !adjustmentPlanCount && !models.length"
+          class="primary-empty-panel dashboard-empty-panel"
+        >
           <el-empty :image-size="120">
             <template #description>
               <div class="primary-empty-title">暂无项目资源</div>
             </template>
             <div class="dashboard-empty-actions">
+              <el-button type="primary" size="large" :disabled="busy" @click="$emit('createRunGraphSet')">
+                新增运行图分类
+              </el-button>
               <el-button type="primary" size="large" :disabled="busy" @click="$emit('createScenarioSet')">
                 新增场景分类
               </el-button>
@@ -49,13 +57,16 @@ defineEmits<{
           </el-empty>
         </div>
         <el-row v-else :gutter="16">
-          <el-col :span="8">
+          <el-col :span="6">
+            <el-statistic title="线路运行图分类" :value="runGraphSetCount" />
+          </el-col>
+          <el-col :span="6">
             <el-statistic title="扰动场景类别" :value="scenarioSetCount" />
           </el-col>
-          <el-col :span="8">
+          <el-col :span="6">
             <el-statistic title="调整计划数量" :value="adjustmentPlanCount" />
           </el-col>
-          <el-col :span="8">
+          <el-col :span="6">
             <el-statistic title="扰动生成模型数量" :value="models.length" />
           </el-col>
         </el-row>

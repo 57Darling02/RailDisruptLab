@@ -105,6 +105,10 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
     elif action == "scenario_set_delete":
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
+    elif action == "run_graph_set_delete":
+        writes.add(run_graph_set_resource(params.get("run_graph_set_id")))
+    elif action in {"run_graph_write", "run_graph_build"}:
+        writes.add(run_graph_resource(params.get("run_graph")))
     elif action == "scenario_set_read":
         reads.add(scenario_collection_resource(params))
     elif action == "scenario_case_read":
@@ -115,15 +119,19 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         reads.add(adjustment_plan_resource(params))
     elif action == "adjustment_plan_case_read":
         reads.add(adjustment_plan_case_or_plan(params))
-    elif action in {"scenario_add", "scenario_delete", "scenario_activate", "normal_generate"}:
+    elif action in {"scenario_add", "scenario_delete", "normal_generate"}:
         if action == "normal_generate":
             writes.add(scenario_collection_resource(params))
+            reads.add(run_graph_resource(params.get("run_graph")))
         else:
             writes.add(scenario_case_resource(params))
+            if action == "scenario_add":
+                reads.add(run_graph_resource(params.get("run_graph")))
     elif action == "build":
         reads.update(
             {
                 scenario_build_source_resource(params),
+                "run_graph",
             }
         )
         writes.add(adjustment_plan_resource(params))
@@ -133,6 +141,7 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         reads.update(
             {
                 scenario_collection_resource(params),
+                "run_graph",
             }
         )
         writes.add(resource("model", params.get("model_id")))
@@ -141,6 +150,9 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         reads.add(resource("model", params.get("model_id")))
         if source_set_id:
             reads.add(scenario_collection_key(source_set_id))
+            reads.add("run_graph")
+        else:
+            reads.add(run_graph_resource(params.get("run_graph")))
         writes.add(scenario_collection_resource(params))
 
     return TaskResources(
@@ -190,6 +202,22 @@ def scenario_case_resource(params: Mapping[str, Any]) -> str:
     if not collection:
         return ""
     return f"{collection}:{sanitize_id(scenario_id)}" if scenario_id else collection
+
+
+def run_graph_resource(value: object) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    set_id = str(value.get("set_id") or "").strip()
+    graph_id = str(value.get("graph_id") or "").strip()
+    if not set_id:
+        return ""
+    key = run_graph_set_resource(set_id)
+    return f"{key}:run_graph:{sanitize_id(graph_id)}" if graph_id else key
+
+
+def run_graph_set_resource(value: object) -> str:
+    text = str(value or "").strip()
+    return f"run_graph:{sanitize_id(text)}" if text else "run_graph"
 
 
 def task_references_value(task: Dict[str, object], *, field: str, value: str) -> bool:

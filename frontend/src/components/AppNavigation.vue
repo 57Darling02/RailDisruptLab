@@ -33,6 +33,7 @@ type NavigationItem = {
 
 const primaryItems: NavigationItem[] = [
   { index: 'dashboard', label: '仪表盘', icon: LayoutDashboard },
+  { index: 'run-graphs', label: '线路运行图', icon: Database },
 ]
 
 const scenarioItems: NavigationItem[] = [

@@ -114,7 +114,11 @@ function compareTasks(left: Task, right: Task) {
 }
 
 function taskDurationText(task: Task) {
-  return task.started_at || task.finished_at ? formatTaskDuration(task, props.now) : ''
+  return task.created_at ? formatTaskDuration(task, props.now) : ''
+}
+
+function taskStatusText(task: Task) {
+  return taskDurationText(task) || taskDisplayStatus(task)
 }
 
 function taskStatusVisual(task: Task): TaskStatusVisual {
@@ -185,8 +189,8 @@ function taskStatusTooltip(task: Task) {
                 >
                   <component :is="taskStatusVisual(task).icon" />
                 </el-icon>
-                <span v-if="taskDurationText(task)" class="task-status-duration">
-                  {{ taskDurationText(task) }}
+                <span class="task-status-duration">
+                  {{ taskStatusText(task) }}
                 </span>
               </div>
             </el-tooltip>

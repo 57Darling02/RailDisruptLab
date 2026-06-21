@@ -18,11 +18,11 @@ export function formatTaskTime(value: string | null | undefined) {
 }
 
 export function formatTaskDuration(task: Task, now = Date.now()) {
-  const startedAt = parseTaskTime(task.started_at) || parseTaskTime(task.created_at)
+  const createdAt = parseTaskTime(task.created_at)
   const finishedAt = parseTaskTime(task.finished_at) || now
-  if (!startedAt || !finishedAt || finishedAt < startedAt) return '-'
+  if (!createdAt || !finishedAt || finishedAt < createdAt) return ''
 
-  const totalSeconds = Math.round((finishedAt - startedAt) / 1000)
+  const totalSeconds = Math.round((finishedAt - createdAt) / 1000)
   const hours = Math.floor(totalSeconds / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   const seconds = totalSeconds % 60

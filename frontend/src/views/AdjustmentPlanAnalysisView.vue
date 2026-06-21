@@ -318,34 +318,37 @@ function planKey(plan: Pick<AdjustmentPlanRef, 'scenario_set_id' | 'plan_id'>) {
 
           <el-tabs class="analysis-tabs">
             <el-tab-pane label="计划矩阵">
-              <el-scrollbar class="table-scroll" max-height="360px">
-                <el-table :data="solvePlanRows" empty-text="暂无求解分析数据">
-                  <el-table-column prop="plan_label" label="调整计划" min-width="220" show-overflow-tooltip />
-                  <el-table-column label="角色" width="86">
-                    <template #default="{ row }">
-                      <el-tag :type="row.role === 'baseline' ? 'success' : 'primary'" size="small">
-                        {{ roleLabel(row.role) }}
-                      </el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="求解进度" width="130">
-                    <template #default="{ row }">
-                      {{ row.solved_count }}/{{ row.case_count }} ({{ formatPercent(row.solved_ratio) }})
-                    </template>
-                  </el-table-column>
-                  <el-table-column
-                    v-for="metric in metricColumns"
-                    :key="metric.key"
-                    :label="metric.label"
-                    width="120"
-                  >
-                    <template #default="{ row }">{{ formatMetricValue(row.metrics[metric.key], metric.key) }}</template>
-                  </el-table-column>
-                  <el-table-column prop="config_status" label="求解器配置" width="120" />
-                  <el-table-column prop="solver_config_text" label="参数" min-width="220" show-overflow-tooltip />
-                  <el-table-column prop="status_text" label="状态分布" min-width="160" show-overflow-tooltip />
-                </el-table>
-              </el-scrollbar>
+              <el-table
+                :data="solvePlanRows"
+                max-height="360"
+                table-layout="fixed"
+                empty-text="暂无求解分析数据"
+              >
+                <el-table-column prop="plan_label" label="调整计划" show-overflow-tooltip />
+                <el-table-column label="角色" width="86">
+                  <template #default="{ row }">
+                    <el-tag :type="row.role === 'baseline' ? 'success' : 'primary'" size="small">
+                      {{ roleLabel(row.role) }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="求解进度" width="130">
+                  <template #default="{ row }">
+                    {{ row.solved_count }}/{{ row.case_count }} ({{ formatPercent(row.solved_ratio) }})
+                  </template>
+                </el-table-column>
+                <el-table-column
+                  v-for="metric in metricColumns"
+                  :key="metric.key"
+                  :label="metric.label"
+                  width="120"
+                >
+                  <template #default="{ row }">{{ formatMetricValue(row.metrics[metric.key], metric.key) }}</template>
+                </el-table-column>
+                <el-table-column prop="config_status" label="求解器配置" width="120" show-overflow-tooltip />
+                <el-table-column prop="solver_config_text" label="参数" width="180" show-overflow-tooltip />
+                <el-table-column prop="status_text" label="状态分布" width="150" show-overflow-tooltip />
+              </el-table>
             </el-tab-pane>
 
             <el-tab-pane label="指标对比">
@@ -363,30 +366,33 @@ function planKey(plan: Pick<AdjustmentPlanRef, 'scenario_set_id' | 'plan_id'>) {
             </el-tab-pane>
 
             <el-tab-pane label="差异明细">
-              <el-scrollbar class="table-scroll" max-height="420px">
-                <el-table :data="comparisonRows" empty-text="至少选择一个候选计划后显示差异">
-                  <el-table-column prop="plan_label" label="候选计划" min-width="220" show-overflow-tooltip />
-                  <el-table-column prop="metric_label" label="指标" width="120">
-                    <template #default="{ row }">{{ solveMetricLabel(analysis, row.metric) }}</template>
-                  </el-table-column>
-                  <el-table-column prop="case_count" label="对齐场景" width="96" />
-                  <el-table-column label="基准均值" width="120">
-                    <template #default="{ row }">{{ formatMetricValue(row.baseline_mean, row.metric) }}</template>
-                  </el-table-column>
-                  <el-table-column label="候选均值" width="120">
-                    <template #default="{ row }">{{ formatMetricValue(row.value_mean, row.metric) }}</template>
-                  </el-table-column>
-                  <el-table-column label="平均差值" width="120">
-                    <template #default="{ row }">{{ formatSignedMetricValue(row.signed_delta_mean, row.metric) }}</template>
-                  </el-table-column>
-                  <el-table-column label="平均绝对误差" width="140">
-                    <template #default="{ row }">{{ formatMetricValue(row.absolute_error_mean, row.metric) }}</template>
-                  </el-table-column>
-                  <el-table-column label="平均相对误差" width="140">
-                    <template #default="{ row }">{{ formatPercent(row.relative_error_mean) }}</template>
-                  </el-table-column>
-                </el-table>
-              </el-scrollbar>
+              <el-table
+                :data="comparisonRows"
+                max-height="420"
+                table-layout="fixed"
+                empty-text="至少选择一个候选计划后显示差异"
+              >
+                <el-table-column prop="plan_label" label="候选计划" show-overflow-tooltip />
+                <el-table-column prop="metric_label" label="指标" width="120">
+                  <template #default="{ row }">{{ solveMetricLabel(analysis, row.metric) }}</template>
+                </el-table-column>
+                <el-table-column prop="case_count" label="对齐场景" width="96" />
+                <el-table-column label="基准均值" width="120">
+                  <template #default="{ row }">{{ formatMetricValue(row.baseline_mean, row.metric) }}</template>
+                </el-table-column>
+                <el-table-column label="候选均值" width="120">
+                  <template #default="{ row }">{{ formatMetricValue(row.value_mean, row.metric) }}</template>
+                </el-table-column>
+                <el-table-column label="平均差值" width="120">
+                  <template #default="{ row }">{{ formatSignedMetricValue(row.signed_delta_mean, row.metric) }}</template>
+                </el-table-column>
+                <el-table-column label="平均绝对误差" width="140">
+                  <template #default="{ row }">{{ formatMetricValue(row.absolute_error_mean, row.metric) }}</template>
+                </el-table-column>
+                <el-table-column label="平均相对误差" width="140">
+                  <template #default="{ row }">{{ formatPercent(row.relative_error_mean) }}</template>
+                </el-table-column>
+              </el-table>
             </el-tab-pane>
           </el-tabs>
         </template>

@@ -9,21 +9,19 @@ from core.scenario_config import load_scenario_document
 def read_scenario_disturbances(path: Path, context: Any) -> List[Dict[str, object]]:
     doc = load_scenario_document(path, require_yaml())
     disturbances: List[Dict[str, object]] = []
-    event_anchors = getattr(context, "event_anchors", {})
-    section_anchors = getattr(context, "section_anchors", {})
 
     for index, item in enumerate(doc.scenarios.get("delays", []) or [], start=1):
-        anchor = event_anchors.get(str(item.get("event_anchor_id", "")))
-        train_id = str(item.get("train_id", "") or getattr(anchor, "train_id", ""))
-        station = str(item.get("station", "") or getattr(anchor, "station", ""))
-        event_type = str(item.get("event_type", "") or getattr(anchor, "event_type", ""))
-        if anchor is None and train_id and station and event_type:
-            anchor = event_anchor_by_semantic(context).get((train_id, station, event_type))
+        train_id = str(item.get("train_id", "") or "")
+        station = str(item.get("station", "") or "")
+        event_type = str(item.get("event_type", "") or "")
+        anchor = event_anchor_by_semantic(context).get((train_id, station, event_type))
+        if anchor is None:
+            raise ValueError(f"Delay event not found in run graph context: {(train_id, station, event_type)}")
         disturbances.append(
             {
                 "id": f"delay_{index}",
                 "type": "delay",
-                "event_anchor_id": str(getattr(anchor, "anchor_id", "") or item.get("event_anchor_id", "")),
+                "event_anchor_id": str(getattr(anchor, "anchor_id", "") or ""),
                 "train_id": train_id,
                 "station": station,
                 "event_type": event_type,
@@ -35,11 +33,11 @@ def read_scenario_disturbances(path: Path, context: Any) -> List[Dict[str, objec
         )
 
     for index, item in enumerate(doc.scenarios.get("speed_limits", []) or [], start=1):
-        anchor = section_anchors.get(str(item.get("section_anchor_id", "")))
-        start_station = str(item.get("start_station", "") or getattr(anchor, "start_station", ""))
-        end_station = str(item.get("end_station", "") or getattr(anchor, "end_station", ""))
-        if anchor is None and start_station and end_station:
-            anchor = section_anchor_by_semantic(context).get((start_station, end_station))
+        start_station = str(item.get("start_station", "") or "")
+        end_station = str(item.get("end_station", "") or "")
+        anchor = section_anchor_by_semantic(context).get((start_station, end_station))
+        if anchor is None:
+            raise ValueError(f"Speed limit section not found in run graph context: {(start_station, end_station)}")
         start_time = parse_seconds_of_day(item.get("start_time", 0))
         duration = int(float(item.get("duration", 0) or 0))
         limit_speed = float(item.get("limit_speed", 0) or 0)
@@ -47,7 +45,7 @@ def read_scenario_disturbances(path: Path, context: Any) -> List[Dict[str, objec
             {
                 "id": f"speed_{index}",
                 "type": "interruption" if limit_speed <= 20 else "speed_limit",
-                "section_anchor_id": str(getattr(anchor, "anchor_id", "") or item.get("section_anchor_id", "")),
+                "section_anchor_id": str(getattr(anchor, "anchor_id", "") or ""),
                 "start_station": start_station,
                 "end_station": end_station,
                 "start_time": start_time,

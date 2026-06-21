@@ -12,7 +12,6 @@ from core.project_layout import PROJECTS_ROOT, ProjectLayout, require_id, saniti
 from backend.scenario_cases import (
     list_scenario_cases,
     read_scenario_case,
-    scenario_source_file,
 )
 from backend.state import (
     get_project_state,
@@ -51,15 +50,6 @@ class ProjectRepository:
 
     def read_scenario(self, project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
         return read_scenario_case(self.layout(project_id), scenario_set_id, scenario_id)
-
-    def scenario_source_file_path(
-        self,
-        project_id: str,
-        scenario_set_id: str,
-        scenario_id: str,
-        filename: str,
-    ) -> Path:
-        return scenario_source_file(self.layout(project_id), scenario_set_id, scenario_id, filename)
 
     def read_training_summary(self, project_id: str, model_id: str) -> Dict[str, object]:
         return read_training_summary_payload(self.layout(project_id), model_id)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 import sys
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -12,26 +13,36 @@ from backend.analysis.adjustment_plan import (
     read_project_adjustment_plan_solve_analysis,
 )
 from backend.scenario_cases import (
-    activate_scenario_case,
     create_scenario_case,
     list_scenario_case_options,
     read_scenario_set_analysis,
     read_scenario_timetable,
-    update_scenario_case_sources,
     update_scenario_disturbances,
 )
 from backend.analysis.timetable import read_case_timetable
 from backend.lifecycle import delete_adjustment_plan, delete_model, delete_scenario_set, ensure_no_active_reference
 from backend.pueue_client import PueueClient
 from backend.repository import ProjectRepository
+from backend.run_graphs import (
+    create_run_graph_set,
+    delete_run_graph,
+    delete_run_graph_set,
+    list_run_graphs,
+    list_run_graph_sets,
+    read_run_graph,
+    read_run_graph_options,
+    read_run_graph_timetable,
+)
 from backend.scenarios import create_scenario_set as create_scenario_set_dir, read_scenario_options
 from backend.task_contracts import TASK_DEFAULTS, normalize_project_id, normalize_task_params
 from backend.task_resources import RUNNING_TASK_STATUSES, ensure_no_active_conflict
 from backend.workflow import create_adjustment_plan as create_adjustment_plan_dir, new_project
 from core.project_layout import PROJECTS_ROOT, REPO_ROOT, require_id, sanitize_id, to_posix
+from core.scenario_config import RunGraphReference
 
 RESOURCE_OPTION_LABELS = {
     "scenario_sets": ("scenario_set_id", "case_count"),
+    "run_graph_sets": ("run_graph_set_id", "run_graph_count"),
     "models": ("model_id", "sample_count"),
 }
 
@@ -40,6 +51,15 @@ def resource_option_label(value: str, count: object) -> str:
     if isinstance(count, int):
         return "{} ({})".format(value, count)
     return value
+
+
+def write_upload_source(source: Any, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(source, bytes):
+        target.write_bytes(source)
+        return
+    with target.open("wb") as output:
+        shutil.copyfileobj(source, output)
 
 
 class RailGraphBackend:
@@ -84,6 +104,77 @@ class RailGraphBackend:
     def list_scenario_sets(self, project_id: str) -> List[Dict[str, object]]:
         return self.repository.list_scenario_sets(project_id)
 
+    def list_run_graph_sets(self, project_id: str) -> List[Dict[str, object]]:
+        return list_run_graph_sets(self.repository.layout(project_id))
+
+    def create_run_graph_set(self, project_id: str, run_graph_set_id: str, *, exist_ok: bool = False) -> Dict[str, object]:
+        return create_run_graph_set(self.repository.layout(project_id), run_graph_set_id, exist_ok=exist_ok)
+
+    def delete_run_graph_set(self, project_id: str, run_graph_set_id: str) -> Dict[str, object]:
+        self.ensure_no_resource_conflict(
+            project_id,
+            action="run_graph_set_delete",
+            params={"run_graph_set_id": run_graph_set_id},
+        )
+        return delete_run_graph_set(self.repository.layout(project_id), run_graph_set_id)
+
+    def list_run_graphs(self, project_id: str, run_graph_set_id: str) -> List[Dict[str, object]]:
+        return list_run_graphs(self.repository.layout(project_id), run_graph_set_id)
+
+    def create_run_graph(
+        self,
+        project_id: str,
+        run_graph_set_id: str,
+        run_graph_id: str,
+        *,
+        timetable_source: Any,
+        mileage_source: Any,
+        overwrite: bool = False,
+    ) -> Dict[str, object]:
+        project_id = normalize_project_id(project_id)
+        run_graph_set_id = require_id(run_graph_set_id, "run_graph_set_id")
+        run_graph_id = require_id(run_graph_id, "run_graph_id")
+        task_root = self._new_task_root(project_id, "run_graph_build")
+        source_dir = task_root / "source"
+        source_dir.mkdir(parents=True, exist_ok=False)
+        timetable_path = source_dir / "timetable.xlsx"
+        mileage_path = source_dir / "mileage.xlsx"
+        write_upload_source(timetable_source, timetable_path)
+        write_upload_source(mileage_source, mileage_path)
+        try:
+            return self.submit_task(
+                project_id,
+                "run_graph_build",
+                {
+                    "run_graph": {"set_id": run_graph_set_id, "graph_id": run_graph_id},
+                    "timetable_path": to_posix(timetable_path),
+                    "mileage_path": to_posix(mileage_path),
+                    "overwrite": overwrite,
+                },
+                label="run_graph_build",
+                task_root=task_root,
+            )
+        except Exception:
+            shutil.rmtree(task_root, ignore_errors=True)
+            raise
+
+    def read_run_graph(self, project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
+        return read_run_graph(self.repository.layout(project_id), run_graph_set_id, run_graph_id)
+
+    def read_run_graph_timetable(self, project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
+        return read_run_graph_timetable(self.repository.layout(project_id), run_graph_set_id, run_graph_id)
+
+    def delete_run_graph(self, project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
+        self.ensure_no_resource_conflict(
+            project_id,
+            action="run_graph_write",
+            params={"run_graph": {"set_id": run_graph_set_id, "graph_id": run_graph_id}},
+        )
+        return delete_run_graph(self.repository.layout(project_id), run_graph_set_id, run_graph_id)
+
+    def read_run_graph_options(self, project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
+        return read_run_graph_options(self.repository.layout(project_id), run_graph_set_id, run_graph_id)
+
     def list_resource_options(
         self,
         project_id: str,
@@ -111,6 +202,8 @@ class RailGraphBackend:
     def _resource_items(self, project_id: str, resource: str) -> List[Dict[str, object]]:
         if resource == "scenario_sets":
             return self.repository.list_scenario_sets(project_id)
+        if resource == "run_graph_sets":
+            return self.list_run_graph_sets(project_id)
         if resource == "models":
             return self.repository.list_models(project_id)
         raise ValueError("Unsupported resource: {}".format(resource))
@@ -179,8 +272,9 @@ class RailGraphBackend:
         scenario_set_id: str,
         scenario_id: str,
         *,
-        timetable_content: bytes,
-        mileage_content: bytes,
+        run_graph: RunGraphReference,
+        delays: List[Dict[str, object]] | None = None,
+        speed_limits: List[Dict[str, object]] | None = None,
         overwrite: bool = False,
     ) -> Dict[str, object]:
         self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id)
@@ -188,45 +282,10 @@ class RailGraphBackend:
             self.repository.layout(project_id),
             scenario_set_id,
             scenario_id,
-            timetable_content=timetable_content,
-            mileage_content=mileage_content,
+            run_graph=run_graph,
+            delays=delays or [],
+            speed_limits=speed_limits or [],
             overwrite=overwrite,
-        )
-
-    def activate_scenario_case(
-        self,
-        project_id: str,
-        scenario_set_id: str,
-        scenario_id: str,
-        *,
-        timetable_content: bytes | None = None,
-        mileage_content: bytes | None = None,
-    ) -> Dict[str, object]:
-        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id, action="scenario_activate")
-        return activate_scenario_case(
-            self.repository.layout(project_id),
-            scenario_set_id,
-            scenario_id,
-            timetable_content=timetable_content,
-            mileage_content=mileage_content,
-        )
-
-    def update_scenario_case_sources(
-        self,
-        project_id: str,
-        scenario_set_id: str,
-        scenario_id: str,
-        *,
-        timetable_content: bytes | None = None,
-        mileage_content: bytes | None = None,
-    ) -> Dict[str, object]:
-        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id, action="scenario_activate")
-        return update_scenario_case_sources(
-            self.repository.layout(project_id),
-            scenario_set_id,
-            scenario_id,
-            timetable_content=timetable_content,
-            mileage_content=mileage_content,
         )
 
     def update_scenario_disturbances(
@@ -235,16 +294,20 @@ class RailGraphBackend:
         scenario_set_id: str,
         scenario_id: str,
         *,
+        run_graph: RunGraphReference | None = None,
         delays: List[Dict[str, object]],
         speed_limits: List[Dict[str, object]],
+        overwrite: bool = False,
     ) -> Dict[str, object]:
         self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id)
         return update_scenario_disturbances(
             self.repository.layout(project_id),
             scenario_set_id,
             scenario_id,
+            run_graph=run_graph,
             delays=delays,
             speed_limits=speed_limits,
+            overwrite=overwrite,
         )
 
     def ensure_no_scenario_case_conflict(
@@ -322,13 +385,6 @@ class RailGraphBackend:
             action=action,
             params=params,
         )
-
-    def save_task_upload_file(self, project_id: str, task_id: str, filename: str, content: bytes) -> str:
-        task_id = require_id(task_id, "task_upload_id")
-        target = self.repository.layout(project_id).root / ".tmp" / "uploads" / task_id / Path(filename).name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-        return to_posix(target)
 
     def read_case_timetable(self, project_id: str, scenario_set_id: str, plan_id: str, case_id: str) -> Dict[str, object]:
         self.ensure_no_adjustment_plan_case_read_conflict(project_id, scenario_set_id, plan_id, case_id)
@@ -422,15 +478,6 @@ class RailGraphBackend:
     def delete_project(self, project_id: str) -> Dict[str, object]:
         return self.submit_task(project_id, "deleteproject", {}, label="deleteproject")
 
-    def scenario_source_file_path(
-        self,
-        project_id: str,
-        scenario_set_id: str,
-        scenario_id: str,
-        filename: str,
-    ) -> Path:
-        return self.repository.scenario_source_file_path(project_id, scenario_set_id, scenario_id, filename)
-
     def create_scenario_set(self, project_id: str, scenario_set_id: str, *, exist_ok: bool = False) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
         scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
@@ -458,6 +505,7 @@ class RailGraphBackend:
         *,
         delays: List[Dict[str, object]],
         speed_limits: List[Dict[str, object]],
+        run_graph: RunGraphReference,
         overwrite: bool = False,
     ) -> Dict[str, object]:
         return self.submit_task(
@@ -466,6 +514,7 @@ class RailGraphBackend:
             {
                 "scenario_set_id": scenario_set_id,
                 "scenario_id": scenario_id,
+                "run_graph": run_graph.to_payload(),
                 "delays": delays,
                 "speed_limits": speed_limits,
                 "overwrite": overwrite,
@@ -488,8 +537,7 @@ class RailGraphBackend:
         scenario_set_id: str,
         scenario_id_prefix: str = "",
         simulation_count: int = 1,
-        source_timetable_path: str = "",
-        source_mileage_path: str = "",
+        run_graph: RunGraphReference,
         seed: int = TASK_DEFAULTS["normal_generate"]["seed"],
         delay_count: int = TASK_DEFAULTS["normal_generate"]["delay_count"],
         speed_count: int = TASK_DEFAULTS["normal_generate"]["speed_count"],
@@ -504,8 +552,7 @@ class RailGraphBackend:
                 "scenario_set_id": scenario_set_id,
                 "scenario_id_prefix": scenario_id_prefix,
                 "simulation_count": simulation_count,
-                "source_timetable_path": source_timetable_path,
-                "source_mileage_path": source_mileage_path,
+                "run_graph": run_graph.to_payload(),
                 "seed": seed,
                 "delay_count": delay_count,
                 "speed_count": speed_count,
@@ -675,8 +722,7 @@ class RailGraphBackend:
         scenario_set_id: str,
         *,
         source_scenario_set_id: str = TASK_DEFAULTS["generation"]["source_scenario_set_id"],
-        source_timetable_path: str = TASK_DEFAULTS["generation"]["source_timetable_path"],
-        source_mileage_path: str = TASK_DEFAULTS["generation"]["source_mileage_path"],
+        run_graph: RunGraphReference | None = None,
         output_prefix: str = TASK_DEFAULTS["generation"]["output_prefix"],
         num_samples: int = TASK_DEFAULTS["generation"]["num_samples"],
         seed: int = TASK_DEFAULTS["generation"]["seed"],
@@ -692,8 +738,7 @@ class RailGraphBackend:
                 "checkpoint": checkpoint,
                 "scenario_set_id": scenario_set_id,
                 "source_scenario_set_id": source_scenario_set_id,
-                "source_timetable_path": source_timetable_path,
-                "source_mileage_path": source_mileage_path,
+                "run_graph": run_graph.to_payload() if run_graph else {},
                 "output_prefix": output_prefix,
                 "num_samples": num_samples,
                 "seed": seed,
@@ -711,6 +756,7 @@ class RailGraphBackend:
         params: Dict[str, Any],
         *,
         label: str,
+        task_root: Path | None = None,
     ) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
         params = normalize_task_params(action, params)
@@ -719,13 +765,23 @@ class RailGraphBackend:
             action=action,
             params=params,
         )
-        task_input = self._write_task_input(project_id, action, params)
+        task_input = self._write_task_input(project_id, action, params, task_root=task_root)
         return self.tasks.submit_runner(project_id, task_input, label=label)
 
-    def _write_task_input(self, project_id: str, action: str, params: Dict[str, Any]) -> Path:
+    def _new_task_root(self, project_id: str, action: str) -> Path:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        root = self.tasks.repo_root / "var" / "tasks" / project_id / f"{stamp}_{sanitize_id(action)}"
-        root.mkdir(parents=True, exist_ok=False)
+        return self.tasks.repo_root / "var" / "tasks" / project_id / f"{stamp}_{sanitize_id(action)}"
+
+    def _write_task_input(
+        self,
+        project_id: str,
+        action: str,
+        params: Dict[str, Any],
+        *,
+        task_root: Path | None = None,
+    ) -> Path:
+        root = task_root or self._new_task_root(project_id, action)
+        root.mkdir(parents=True, exist_ok=task_root is not None)
         path = root / "input.json"
         payload = {
             "action": action,

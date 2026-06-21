@@ -11,14 +11,32 @@ from core.types import ScenarioConfig
 
 SCENARIO_EXTENSIONS = {".yaml", ".yml"}
 SCENARIO_CASES_DIRNAME = "scenarios"
-SCENARIO_FILENAME = "scenario.yml"
+SCENARIO_ALLOWED_KEYS = {"run_graph", "delays", "speed_limits"}
+SCENARIO_EVENTS_KEYS = {"delays", "speed_limits"}
+DELAY_ALLOWED_KEYS = {"train_id", "station", "event_type", "seconds"}
+SPEED_LIMIT_ALLOWED_KEYS = {"start_station", "end_station", "start_time", "duration", "limit_speed"}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECTS_ROOT = REPO_ROOT / "projects"
 
 
 @dataclass(frozen=True)
+class RunGraphReference:
+    set_id: str
+    graph_id: str
+    context_sha256: str
+
+    def to_payload(self) -> Dict[str, object]:
+        return {
+            "set_id": self.set_id,
+            "graph_id": self.graph_id,
+            "context_sha256": self.context_sha256,
+        }
+
+
+@dataclass(frozen=True)
 class ScenarioDocument:
     name: str
+    run_graph: RunGraphReference
     scenarios: Dict[str, object]
     path: Optional[Path] = None
 
@@ -29,7 +47,7 @@ def load_scenarios_for_config(value: object, owner_path: Path, yaml: Any) -> Dic
         if ref_path.is_dir():
             return {"delays": [], "speed_limits": []}
         return load_scenario_document(ref_path, yaml).scenarios
-    return scenario_document_from_payload(value or {}, owner_path.stem).scenarios
+    return scenario_events_from_payload(value or {}, owner_path)
 
 
 def expand_config_scenarios(payload: Dict[str, object], owner_path: Path, yaml: Any) -> List[ScenarioDocument]:
@@ -52,17 +70,16 @@ def scenario_files(root: Path) -> List[Path]:
     scenarios_root = root / SCENARIO_CASES_DIRNAME
     if not scenarios_root.is_dir():
         return []
-    result = []
-    for case_dir in sorted(path for path in scenarios_root.iterdir() if path.is_dir()):
-        path = case_dir / SCENARIO_FILENAME
-        if path.is_file():
-            result.append(path)
-    return result
+    return sorted(
+        path
+        for path in scenarios_root.iterdir()
+        if path.is_file() and path.suffix.lower() in SCENARIO_EXTENSIONS
+    )
 
 
 def scenario_file_by_id(root: Path, scenario_id: str) -> Optional[Path]:
     clean_id = sanitize_id(scenario_id)
-    path = root / SCENARIO_CASES_DIRNAME / clean_id / SCENARIO_FILENAME
+    path = root / SCENARIO_CASES_DIRNAME / f"{clean_id}.yml"
     return path if path.is_file() else None
 
 
@@ -84,31 +101,29 @@ def scenario_document_from_payload(
     if not isinstance(payload, dict):
         raise ValueError(f"Scenario payload must be a YAML object: {path or fallback_name}")
 
-    scenario_node = payload.get("scenario")
-    scenario_meta = scenario_node if isinstance(scenario_node, dict) else {}
-    scenarios = _extract_scenarios(payload)
-    if "interruptions" in scenarios:
+    unknown_keys = sorted(str(key) for key in payload.keys() if str(key) not in SCENARIO_ALLOWED_KEYS)
+    if unknown_keys:
+        raise ValueError(
+            "Unsupported scenario YAML field(s): "
+            f"{', '.join(unknown_keys)}. Use only run_graph, delays, and speed_limits."
+        )
+    if "interruptions" in payload:
         raise ValueError("Legacy interruptions are not supported; use speed_limits with limit_speed=0.")
 
     return ScenarioDocument(
-        name=_clean_name(
-            payload.get("name")
-            or payload.get("case_id")
-            or scenario_meta.get("name")
-            or _project_name(payload)
-            or fallback_name
-        ),
+        name=sanitize_id(fallback_name),
+        run_graph=run_graph_reference_from_payload(payload.get("run_graph"), path or Path(fallback_name)),
         scenarios={
-            "delays": copy.deepcopy(scenarios.get("delays", []) or []),
-            "speed_limits": copy.deepcopy(scenarios.get("speed_limits", []) or []),
+            "delays": scenario_event_list(payload.get("delays"), "delays", path or Path(fallback_name)),
+            "speed_limits": scenario_event_list(payload.get("speed_limits"), "speed_limits", path or Path(fallback_name)),
         },
         path=path,
     )
 
 
-def scenario_config_to_yaml(name: str, scenarios: ScenarioConfig) -> Dict[str, object]:
+def scenario_config_to_yaml(scenarios: ScenarioConfig, run_graph: RunGraphReference) -> Dict[str, object]:
     return {
-        "name": sanitize_id(name),
+        "run_graph": run_graph.to_payload(),
         "delays": [
             {
                 "train_id": item.train_id,
@@ -131,12 +146,92 @@ def scenario_config_to_yaml(name: str, scenarios: ScenarioConfig) -> Dict[str, o
     }
 
 
-def scenario_document_to_yaml(name: str, doc: ScenarioDocument) -> Dict[str, object]:
+def scenario_document_to_yaml(doc: ScenarioDocument) -> Dict[str, object]:
     return {
-        "name": sanitize_id(name),
+        "run_graph": doc.run_graph.to_payload(),
         "delays": copy.deepcopy(doc.scenarios.get("delays", []) or []),
         "speed_limits": copy.deepcopy(doc.scenarios.get("speed_limits", []) or []),
     }
+
+
+def scenario_events_from_payload(payload: object, owner: Path) -> Dict[str, object]:
+    if payload is None:
+        payload = {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Scenario events payload must be a YAML object: {owner}")
+    unknown_keys = sorted(str(key) for key in payload.keys() if str(key) not in SCENARIO_EVENTS_KEYS)
+    if unknown_keys:
+        raise ValueError(
+            "Unsupported scenario events field(s): "
+            f"{', '.join(unknown_keys)}. Use only delays and speed_limits."
+        )
+    return {
+        "delays": scenario_event_list(payload.get("delays"), "delays", owner),
+        "speed_limits": scenario_event_list(payload.get("speed_limits"), "speed_limits", owner),
+    }
+
+
+def scenario_event_list(value: object, field_name: str, owner: Path) -> List[object]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"Scenario {field_name} must be a list: {owner}")
+    allowed_keys = event_allowed_keys(field_name)
+    return [
+        validate_semantic_event(item, field_name, index, allowed_keys, owner)
+        for index, item in enumerate(value, start=1)
+    ]
+
+
+def event_allowed_keys(field_name: str) -> set[str]:
+    if field_name == "delays":
+        return DELAY_ALLOWED_KEYS
+    if field_name == "speed_limits":
+        return SPEED_LIMIT_ALLOWED_KEYS
+    raise ValueError(f"Unsupported scenario event list: {field_name}")
+
+
+def validate_semantic_event(
+    value: object,
+    field_name: str,
+    index: int,
+    allowed_keys: set[str],
+    owner: Path,
+) -> Dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"Scenario {field_name}[{index}] must be a YAML object: {owner}")
+    unknown_keys = sorted(str(key) for key in value.keys() if str(key) not in allowed_keys)
+    if unknown_keys:
+        allowed = ", ".join(sorted(allowed_keys))
+        raise ValueError(
+            f"Unsupported scenario {field_name}[{index}] field(s): {', '.join(unknown_keys)}. "
+            f"Scenario YAML must use semantic fields only: {allowed}."
+        )
+    missing = [key for key in sorted(allowed_keys) if not has_text(value, key)]
+    if missing:
+        raise ValueError(
+            f"Missing scenario {field_name}[{index}] field(s): {', '.join(missing)}: {owner}"
+        )
+    return copy.deepcopy(value)
+
+
+def has_text(payload: Dict[str, object], key: str) -> bool:
+    return key in payload and str(payload.get(key, "")).strip() != ""
+
+
+def run_graph_reference_from_payload(value: object, owner: Path) -> RunGraphReference:
+    if not isinstance(value, dict):
+        raise ValueError(f"Scenario run_graph must be a YAML object: {owner}")
+    set_id = sanitize_id(str(value.get("set_id") or ""))
+    graph_id = sanitize_id(str(value.get("graph_id") or ""))
+    context_sha256 = str(value.get("context_sha256") or "").strip()
+    if not set_id:
+        raise ValueError(f"Scenario run_graph.set_id is required: {owner}")
+    if not graph_id:
+        raise ValueError(f"Scenario run_graph.graph_id is required: {owner}")
+    if not context_sha256:
+        raise ValueError(f"Scenario run_graph.context_sha256 is required: {owner}")
+    return RunGraphReference(set_id=set_id, graph_id=graph_id, context_sha256=context_sha256)
 
 
 def scenario_reference_path(value: object, owner_path: Path) -> Optional[Path]:
@@ -173,21 +268,6 @@ def resolve_config_reference(path: Path, owner_path: Path) -> Path:
     if path.parts and path.parts[0] in {"config", "docs", "inputs", "outputs", "projects"}:
         return (REPO_ROOT / path).resolve()
     return (config_reference_base(owner_path) / path).resolve()
-
-
-def _extract_scenarios(payload: Dict[str, object]) -> Dict[str, object]:
-    build = payload.get("build")
-    if isinstance(build, dict) and "scenarios" in build:
-        scenarios = build.get("scenarios") or {}
-    elif isinstance(payload.get("scenarios"), dict):
-        scenarios = payload.get("scenarios") or {}
-    elif isinstance(payload.get("scenario"), dict):
-        scenarios = payload.get("scenario") or {}
-    else:
-        scenarios = payload
-    if not isinstance(scenarios, dict):
-        raise ValueError("scenarios must be a YAML object.")
-    return scenarios
 
 
 def _project_or_file_name(payload: Dict[str, object], path: Path) -> str:

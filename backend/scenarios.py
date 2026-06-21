@@ -1,21 +1,18 @@
 from __future__ import annotations
 
 import random
-import shutil
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
+from backend.run_graphs import load_scenario_context, resolve_run_graph_context
 from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
-from core.file_ops import copy_or_link_file
-from core.project_layout import ProjectLayout, require_id, reset_dir, sanitize_id
-from core.scenario_config import ScenarioDocument
+from core.project_layout import ProjectLayout, require_id, sanitize_id
+from core.scenario_config import RunGraphReference, ScenarioDocument, load_scenario_document
 from core.types import BaseContext, SectionAnchor
 from backend.scenario_cases import (
     delete_scenario_case,
     scenario_case_layout,
     update_scenario_disturbances,
-    write_case_context,
     write_scenario_document as write_case_scenario_document,
 )
 
@@ -58,9 +55,9 @@ class ScenarioGenerationBase:
 
 def read_scenario_options(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
     case = scenario_case_layout(layout, scenario_set_id, scenario_id)
-    if not case.context_json.is_file():
-        raise FileNotFoundError(f"Scenario is not activated: {case.context_json}")
-    context = load_base_context(case.context_json)
+    if not case.scenario_yml.is_file():
+        raise FileNotFoundError(f"Scenario not found: {case.scenario_yml}")
+    context = load_scenario_context(layout, load_scenario_document(case.scenario_yml, require_yaml()))
     return {
         "project_id": layout.name,
         "scenario_set_id": require_id(scenario_set_id, "scenario_set_id"),
@@ -115,6 +112,7 @@ def add_scenario(
     scenario_set_id: str,
     scenario_id: str,
     *,
+    run_graph: RunGraphReference,
     delays: Sequence[Mapping[str, object]] | None = None,
     speed_limits: Sequence[Mapping[str, object]] | None = None,
     overwrite: bool = False,
@@ -123,8 +121,10 @@ def add_scenario(
         layout,
         scenario_set_id,
         scenario_id,
+        run_graph=run_graph,
         delays=list(delays or []),
         speed_limits=list(speed_limits or []),
+        overwrite=overwrite,
     )
 
 
@@ -139,8 +139,7 @@ def normal_generate(
     scenario_set_id: str,
     scenario_id_prefix: str = "sim",
     simulation_count: int = 1,
-    source_timetable_path: str = "",
-    source_mileage_path: str = "",
+    run_graph: RunGraphReference,
     seed: int = 20260320,
     delay_count: int = 10,
     speed_count: int = 10,
@@ -157,12 +156,7 @@ def normal_generate(
     )
     simulation_count = max(1, int(simulation_count))
     scenario_id_prefix = sanitize_required_id(scenario_id_prefix or "sim", "scenario_id_prefix")
-    timetable_path = task_upload_path(layout, source_timetable_path, "source_timetable_path")
-    mileage_path = task_upload_path(layout, source_mileage_path, "source_mileage_path")
-    if not timetable_path.is_file():
-        raise FileNotFoundError(f"Timetable not found in project source: {timetable_path}")
-    if not mileage_path.is_file():
-        raise FileNotFoundError(f"Mileage table not found in project source: {mileage_path}")
+    context_path = resolve_run_graph_context(layout, run_graph)
 
     root = layout.scenario_set(scenario_set_id).root
     root.mkdir(parents=True, exist_ok=True)
@@ -170,46 +164,28 @@ def normal_generate(
         layout.scenario_set(scenario_set_id).scenario(f"{scenario_id_prefix}_{index:04d}")
         for index in range(1, simulation_count + 1)
     ]
-    existing = [target.root for target in targets if target.root.exists()]
+    existing = [target.scenario_yml for target in targets if target.scenario_yml.exists()]
     if existing and not overwrite:
         raise FileExistsError(f"Scenario already exists, enable overwrite to replace: {existing[0]}")
 
     rng = random.Random(seed)
-    tmp_case = layout.scenario_set(scenario_set_id).scenario(f".tmp_{scenario_id_prefix}")
-    if tmp_case.root.exists():
-        reset_dir(tmp_case.root)
-    tmp_case.source_dir.mkdir(parents=True, exist_ok=False)
-    shutil.copy2(timetable_path, tmp_case.timetable_xlsx)
-    shutil.copy2(mileage_path, tmp_case.mileage_xlsx)
-    write_case_context(tmp_case, scenario_id=tmp_case.root.name)
-    context = load_base_context(tmp_case.context_json)
+    context = load_base_context(context_path)
     base = load_generation_base(context)
 
-    try:
-        for target in targets:
-            if target.root.exists():
-                reset_dir(target.root)
-            target.source_dir.mkdir(parents=True, exist_ok=False)
-            shutil.copy2(timetable_path, target.timetable_xlsx)
-            shutil.copy2(mileage_path, target.mileage_xlsx)
-            copy_or_link_file(tmp_case.context_json, target.context_json)
-            payload = generate_simulated_payload(
-                rng,
-                base,
-                delay_count=delay_count,
-                speed_count=speed_count,
-                interruption_count=interruption_count,
-                combo_per_type=combo_per_type,
-            )
-            write_case_scenario_document(
-                target,
-                ScenarioDocument(name=target.root.name, scenarios=payload),
-            )
-            print(f"Generated simulated scenario: {target.root}")
-    finally:
-        if tmp_case.root.exists():
-            reset_dir(tmp_case.root)
-        cleanup_task_uploads(timetable_path, mileage_path, project_root=layout.root)
+    for target in targets:
+        payload = generate_simulated_payload(
+            rng,
+            base,
+            delay_count=delay_count,
+            speed_count=speed_count,
+            interruption_count=interruption_count,
+            combo_per_type=combo_per_type,
+        )
+        write_case_scenario_document(
+            target,
+            ScenarioDocument(name=target.scenario_yml.stem, run_graph=run_graph, scenarios=payload),
+        )
+        print(f"Generated simulated scenario: {target.scenario_yml}")
 
     print(f"Generated {simulation_count} simulated scenario(s): {root}")
 
@@ -562,25 +538,6 @@ def combo_relation_plan(rng: random.Random, count: int) -> List[Tuple[str, str]]
 def require_project(layout: ProjectLayout) -> None:
     if not layout.root.is_dir():
         raise FileNotFoundError(f"Project not found: {layout.root}")
-
-
-def task_upload_path(layout: ProjectLayout, path_text: str, key: str) -> Path:
-    path = Path(path_text)
-    if not path.is_absolute():
-        raise ValueError(f"{key} must be an absolute task upload path.")
-    root = (layout.root / ".tmp" / "uploads").resolve()
-    resolved = path.resolve()
-    if root != resolved and root not in resolved.parents:
-        raise ValueError(f"{key} must be under project .tmp/uploads/: {path}")
-    return resolved
-
-
-def cleanup_task_uploads(*paths: Path, project_root: Path) -> None:
-    upload_root = (project_root / ".tmp" / "uploads").resolve()
-    parents = {path.resolve().parent for path in paths if upload_root in path.resolve().parents}
-    for parent in parents:
-        if parent.exists():
-            reset_dir(parent)
 
 
 def list_payload(value: object) -> List[Mapping[str, object]]:

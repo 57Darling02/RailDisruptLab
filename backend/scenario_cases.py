@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -14,23 +12,24 @@ from backend.analysis.scenario_set import (
     scenario_category,
 )
 from backend.analysis.timetable import plan_rows
-from core.base_context import build_base_context, load_base_context, write_base_context
-from core.file_ops import file_digest
-from core.loader import load_mileage_table, load_timetable, parse_scenario_config
-from core.project_layout import ProjectLayout, ScenarioCaseLayout, require_id, reset_dir, sanitize_id, to_posix
+from backend.run_graphs import (
+    context_stats,
+    load_scenario_context,
+    resolve_run_graph_context,
+    read_run_graph,
+    validate_scenario_document,
+)
+from core.loader import parse_scenario_config
+from core.project_layout import ProjectLayout, ScenarioCaseLayout, require_id, sanitize_id, to_posix
 from core.scenario_config import (
+    RunGraphReference,
     ScenarioDocument,
     load_scenario_document,
     scenario_config_to_yaml,
+    scenario_document_to_yaml,
     scenario_files,
 )
 
-TIMETABLE_FILENAME = "timetable.xlsx"
-MILEAGE_FILENAME = "mileage.xlsx"
-TIMETABLE_SHEET = "Sheet1"
-MILEAGE_SHEET = "Sheet1"
-ACTIVE_STATUS = "active"
-INACTIVE_STATUS = "inactive"
 VALID_STATUS = "valid"
 INVALID_STATUS = "invalid"
 
@@ -40,135 +39,60 @@ def create_scenario_case(
     scenario_set_id: str,
     scenario_id: str,
     *,
-    timetable_content: bytes,
-    mileage_content: bytes,
+    run_graph: RunGraphReference,
+    delays: Sequence[Mapping[str, object]] | None = None,
+    speed_limits: Sequence[Mapping[str, object]] | None = None,
     overwrite: bool = False,
 ) -> Dict[str, object]:
     require_project(layout)
+    scenario_set = layout.scenario_set(scenario_set_id)
+    scenario_set.root.mkdir(parents=True, exist_ok=True)
     case = scenario_case_layout(layout, scenario_set_id, scenario_id)
-    if case.root.exists():
-        if not overwrite:
-            raise FileExistsError(f"Scenario already exists: {case.root}")
-        reset_dir(case.root)
-    case.source_dir.mkdir(parents=True, exist_ok=False)
-    case.timetable_xlsx.write_bytes(timetable_content)
-    case.mileage_xlsx.write_bytes(mileage_content)
-    write_scenario_document(case, ScenarioDocument(name=scenario_id, scenarios={"delays": [], "speed_limits": []}))
+    if case.scenario_yml.exists() and not overwrite:
+        raise FileExistsError(f"Scenario already exists: {case.scenario_yml}")
+    doc = ScenarioDocument(
+        name=require_id(scenario_id, "scenario_id"),
+        run_graph=run_graph,
+        scenarios={"delays": list(delays or []), "speed_limits": list(speed_limits or [])},
+        path=case.scenario_yml,
+    )
+    normalized = normalize_scenario_document(layout, doc) if has_disturbances(doc) else validate_empty_scenario(layout, doc)
+    write_scenario_document(case, normalized)
     return scenario_case_light_summary(layout, scenario_set_id, scenario_id)
-
-
-def activate_scenario_case(
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    scenario_id: str,
-    *,
-    timetable_content: bytes | None = None,
-    mileage_content: bytes | None = None,
-    timetable_sheet_name: str = TIMETABLE_SHEET,
-    mileage_sheet_name: str = MILEAGE_SHEET,
-) -> Dict[str, object]:
-    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
-    if timetable_content is not None:
-        case.source_dir.mkdir(parents=True, exist_ok=True)
-        case.timetable_xlsx.write_bytes(timetable_content)
-        case.context_json.unlink(missing_ok=True)
-    if mileage_content is not None:
-        case.source_dir.mkdir(parents=True, exist_ok=True)
-        case.mileage_xlsx.write_bytes(mileage_content)
-        case.context_json.unlink(missing_ok=True)
-    write_case_context(
-        case,
-        scenario_id=scenario_id,
-        timetable_sheet_name=timetable_sheet_name,
-        mileage_sheet_name=mileage_sheet_name,
-    )
-    return read_scenario_case(layout, scenario_set_id, scenario_id)
-
-
-def update_scenario_case_sources(
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    scenario_id: str,
-    *,
-    timetable_content: bytes | None = None,
-    mileage_content: bytes | None = None,
-) -> Dict[str, object]:
-    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
-    if timetable_content is None and mileage_content is None:
-        raise ValueError("At least one source file is required.")
-    case.source_dir.mkdir(parents=True, exist_ok=True)
-    if timetable_content is not None:
-        case.timetable_xlsx.write_bytes(timetable_content)
-    if mileage_content is not None:
-        case.mileage_xlsx.write_bytes(mileage_content)
-    case.context_json.unlink(missing_ok=True)
-    return read_scenario_case(layout, scenario_set_id, scenario_id)
-
-
-def write_case_context(
-    case: ScenarioCaseLayout,
-    *,
-    scenario_id: str,
-    timetable_sheet_name: str = TIMETABLE_SHEET,
-    mileage_sheet_name: str = MILEAGE_SHEET,
-) -> None:
-    if not case.timetable_xlsx.is_file():
-        raise FileNotFoundError(f"Missing timetable source: {case.timetable_xlsx}")
-    if not case.mileage_xlsx.is_file():
-        raise FileNotFoundError(f"Missing mileage source: {case.mileage_xlsx}")
-    context = build_base_context(
-        timetable_path=case.timetable_xlsx,
-        mileage_path=case.mileage_xlsx,
-        timetable_sheet_name=timetable_sheet_name,
-        mileage_sheet_name=mileage_sheet_name,
-        timetable_table=load_timetable(case.timetable_xlsx, timetable_sheet_name),
-        mileage_table=load_mileage_table(case.mileage_xlsx, mileage_sheet_name),
-    )
-    doc = load_case_scenario_document(case, scenario_id)
-    validate_scenario_document_shape(doc)
-    parse_scenario_config(
-        {
-            "delays": list_payload(doc.scenarios.get("delays")),
-            "speed_limits": list_payload(doc.scenarios.get("speed_limits")),
-        },
-        context,
-    )
-    write_base_context(
-        context,
-        case.context_json,
-        metadata={
-            "id": sanitize_id(scenario_id),
-            "timetable_filename": TIMETABLE_FILENAME,
-            "mileage_filename": MILEAGE_FILENAME,
-            "timetable_sheet_name": timetable_sheet_name,
-            "mileage_sheet_name": mileage_sheet_name,
-            "timetable_sha256": file_digest(case.timetable_xlsx),
-            "mileage_sha256": file_digest(case.mileage_xlsx),
-        },
-    )
 
 
 def read_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
     case = existing_scenario_case(layout, scenario_set_id, scenario_id)
     summary = scenario_case_summary(layout, scenario_set_id, scenario_id)
-    active = summary["activation_status"] == ACTIVE_STATUS
+    doc = load_case_scenario_document(case, scenario_id) if summary["run_graph"] else None
+    run_graph_detail = None
+    scenario_payload = None
+    if doc is not None:
+        scenario_payload = scenario_document_to_yaml(doc)
+    if doc is not None:
+        run_graph_detail = read_run_graph(layout, doc.run_graph.set_id, doc.run_graph.graph_id)
     return {
         **summary,
-        "context_stats": context_stats(case.context_json) if active else None,
-        "source_files": source_file_summaries(case),
-        "scenario": read_yaml_if_exists_safe(case.scenario_yml),
+        "context_stats": context_stats_from_run_graph_detail(run_graph_detail),
+        "run_graph_detail": run_graph_detail,
+        "scenario": scenario_payload,
     }
 
 
 def read_scenario_timetable(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
     case = existing_scenario_case(layout, scenario_set_id, scenario_id)
-    check = check_scenario_activation(case, scenario_id)
-    if check["activation_status"] != ACTIVE_STATUS:
-        reason = str(check.get("activation_reason") or activation_status_label(str(check["activation_status"])))
-        raise ValueError(f"Scenario is not active: {reason}")
+    doc = load_case_scenario_document(case, scenario_id)
+    validate_scenario_document(layout, doc)
+    context = load_scenario_context(layout, doc)
     return {
         "project_id": layout.name,
-        **scenario_timetable(case),
+        "scenario_set_id": require_id(scenario_set_id, "scenario_set_id"),
+        "scenario_id": require_id(scenario_id, "scenario_id"),
+        "station_order": list(context.station_order),
+        "mileage_by_station": dict(context.mileage_by_station),
+        "train_routes": dict(context.translated.train_routes),
+        "plan": {"rows": plan_rows(context)},
+        "disturbances": read_scenario_disturbances(case.scenario_yml, context),
     }
 
 
@@ -178,33 +102,10 @@ def read_scenario_set_analysis(layout: ProjectLayout, scenario_set_id: str) -> D
     if not root.is_dir():
         raise FileNotFoundError(f"Scenario category not found: {root}")
 
-    scenarios = []
-    for path in scenario_files(root):
-        scenario_id = path.parent.name
-        item = scenario_case_visualization_item(layout, scenario_set_id, path)
-        scenarios.append(item)
-    return scenario_set_analysis_payload(
-        layout,
-        scenario_set_id,
-        scenarios,
-    )
-
-
-def cached_base_context(path: Path, cache: Dict[str, object]) -> object:
-    stat = path.stat()
-    key = f"inode:{stat.st_dev}:{stat.st_ino}"
-    context = cache.get(key)
-    if context is None:
-        context = load_base_context(path)
-        cache[key] = context
-    return context
-
-
-def scenario_set_analysis_payload(
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    scenarios: List[Dict[str, object]],
-) -> Dict[str, object]:
+    scenarios = [
+        scenario_case_visualization_item(layout, scenario_set_id, path)
+        for path in scenario_files(root)
+    ]
     all_disturbances = [
         dict(item, scenario_id=scenario["scenario_id"])
         for scenario in scenarios
@@ -222,6 +123,271 @@ def scenario_set_analysis_payload(
         "summary": lightweight_scenario_set_summary(scenarios),
         "time_distribution": time_distribution(all_disturbances),
         "space_distribution": space_distribution(all_disturbances),
+    }
+
+
+def scenario_case_visualization_item(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    scenario_path: Path,
+) -> Dict[str, object]:
+    scenario_id = sanitize_id(scenario_path.stem)
+    try:
+        doc = load_scenario_document(scenario_path, require_yaml())
+        disturbances = yaml_disturbances(doc)
+        status = VALID_STATUS
+        reason = ""
+    except Exception as exc:
+        doc = None
+        disturbances = []
+        status = INVALID_STATUS
+        reason = str(exc)
+    counts = disturbance_counts(disturbances)
+    return {
+        "scenario_id": scenario_id,
+        "name": scenario_id,
+        "path": to_posix(scenario_path),
+        "yaml_status": status,
+        "yaml_reason": reason,
+        "run_graph": doc.run_graph.to_payload() if doc is not None else None,
+        "disturbances": disturbances,
+        "counts": counts,
+        "category": scenario_category(disturbances),
+    }
+
+
+def scenario_case_summary(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    scenario_id: str,
+    *,
+    validate_context: bool = False,
+) -> Dict[str, object]:
+    scenario_id = require_id(scenario_id, "scenario_id")
+    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
+    check = check_scenario_yaml(
+        case,
+        scenario_id,
+        validate_context=validate_context,
+        layout=layout if validate_context else None,
+    )
+    doc = check.get("_document") if isinstance(check.get("_document"), ScenarioDocument) else None
+    scenarios = doc.scenarios if doc is not None else {"delays": [], "speed_limits": []}
+    speed_limit_count, interruption_count = speed_limit_counts(scenarios.get("speed_limits", []) or [])
+    counts = {
+        "delay": len(scenarios.get("delays", []) or []),
+        "speed_limit": speed_limit_count,
+        "interruption": interruption_count,
+    }
+    counts["total"] = counts["delay"] + counts["speed_limit"] + counts["interruption"]
+    return {
+        "scenario_set_id": require_id(scenario_set_id, "scenario_set_id"),
+        "scenario_id": scenario_id,
+        "name": scenario_id,
+        "root": to_posix(case.scenario_yml),
+        "yaml_status": check["yaml_status"],
+        "yaml_reason": check["yaml_reason"],
+        "run_graph": doc.run_graph.to_payload() if doc is not None else None,
+        "counts": counts,
+        "delay_count": counts["delay"],
+        "speed_limit_count": counts["speed_limit"],
+        "interruption_count": counts["interruption"],
+    }
+
+
+def scenario_case_light_summary(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
+    return scenario_case_summary(layout, scenario_set_id, scenario_id)
+
+
+def list_scenario_cases(layout: ProjectLayout, scenario_set_id: str) -> List[Dict[str, object]]:
+    return [
+        scenario_case_light_summary(layout, scenario_set_id, path.stem)
+        for path in scenario_files(layout.scenario_set(scenario_set_id).root)
+    ]
+
+
+def list_scenario_case_options(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    *,
+    query: str = "",
+    limit: int = 50,
+) -> List[Dict[str, object]]:
+    query_text = query.strip().lower()
+    result: List[Dict[str, object]] = []
+    for path in scenario_files(layout.scenario_set(scenario_set_id).root):
+        scenario_id = sanitize_id(path.stem)
+        if query_text and query_text not in scenario_id.lower():
+            continue
+        result.append({"label": scenario_id, "value": scenario_id})
+        if len(result) >= max(1, limit):
+            break
+    return result
+
+
+def update_scenario_disturbances(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    scenario_id: str,
+    *,
+    delays: Sequence[Mapping[str, object]],
+    speed_limits: Sequence[Mapping[str, object]],
+    run_graph: RunGraphReference | None = None,
+    overwrite: bool = False,
+) -> Dict[str, object]:
+    scenario_id = require_id(scenario_id, "scenario_id")
+    case = scenario_case_layout(layout, scenario_set_id, scenario_id)
+    if not case.scenario_yml.is_file():
+        if run_graph is None:
+            raise FileNotFoundError(f"Scenario not found: {case.scenario_yml}")
+        return create_scenario_case(
+            layout,
+            scenario_set_id,
+            scenario_id,
+            run_graph=run_graph,
+            delays=delays,
+            speed_limits=speed_limits,
+            overwrite=overwrite,
+        )
+    existing = load_case_scenario_document(case, scenario_id)
+    doc = ScenarioDocument(
+        name=scenario_id,
+        run_graph=run_graph or existing.run_graph,
+        scenarios={"delays": list(delays), "speed_limits": list(speed_limits)},
+        path=case.scenario_yml,
+    )
+    normalized = normalize_scenario_document(layout, doc)
+    write_scenario_document(case, normalized)
+    return read_scenario_case(layout, scenario_set_id, scenario_id)
+
+
+def delete_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> None:
+    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
+    case.scenario_yml.unlink()
+
+
+def scenario_case_layout(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> ScenarioCaseLayout:
+    return layout.scenario_set(require_id(scenario_set_id, "scenario_set_id")).scenario(scenario_id)
+
+
+def existing_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> ScenarioCaseLayout:
+    case = scenario_case_layout(layout, scenario_set_id, scenario_id)
+    if not case.scenario_yml.is_file():
+        raise FileNotFoundError(f"Scenario not found: {case.scenario_yml}")
+    return case
+
+
+def load_case_scenario_document(case: ScenarioCaseLayout, scenario_id: str) -> ScenarioDocument:
+    if not case.scenario_yml.is_file():
+        raise FileNotFoundError(f"Scenario not found: {case.scenario_yml}")
+    doc = load_scenario_document(case.scenario_yml, require_yaml())
+    return ScenarioDocument(
+        name=require_id(scenario_id, "scenario_id"),
+        run_graph=doc.run_graph,
+        scenarios=doc.scenarios,
+        path=case.scenario_yml,
+    )
+
+
+def normalize_scenario_document(layout: ProjectLayout, doc: ScenarioDocument) -> ScenarioDocument:
+    context = load_scenario_context(layout, doc)
+    scenarios = parse_scenario_config(
+        {
+            "delays": list_payload(doc.scenarios.get("delays")),
+            "speed_limits": list_payload(doc.scenarios.get("speed_limits")),
+        },
+        context,
+    )
+    canonical = scenario_config_to_yaml(scenarios, doc.run_graph)
+    return ScenarioDocument(
+        name=doc.name,
+        run_graph=doc.run_graph,
+        scenarios={
+            "delays": list(canonical.get("delays", []) or []),
+            "speed_limits": list(canonical.get("speed_limits", []) or []),
+        },
+        path=doc.path,
+    )
+
+
+def validate_empty_scenario(layout: ProjectLayout, doc: ScenarioDocument) -> ScenarioDocument:
+    resolve_run_graph_context(layout, doc.run_graph)
+    return doc
+
+
+def has_disturbances(doc: ScenarioDocument) -> bool:
+    return bool(doc.scenarios.get("delays") or doc.scenarios.get("speed_limits"))
+
+
+def write_scenario_document(case: ScenarioCaseLayout, doc: ScenarioDocument) -> None:
+    write_yaml(case.scenario_yml, scenario_document_to_yaml(doc))
+
+
+def write_yaml(path: Path, payload: Dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+def check_scenario_yaml(
+    case: ScenarioCaseLayout,
+    scenario_id: str,
+    *,
+    validate_context: bool,
+    layout: ProjectLayout | None = None,
+) -> Dict[str, object]:
+    try:
+        doc = load_case_scenario_document(case, scenario_id)
+    except Exception as exc:
+        return yaml_check(INVALID_STATUS, str(exc))
+    if not validate_context:
+        return yaml_check(VALID_STATUS, "", document=doc)
+    if layout is None:
+        raise ValueError("layout is required when validate_context is true.")
+    try:
+        validate_scenario_document(layout, doc)
+    except Exception as exc:
+        return yaml_check(INVALID_STATUS, str(exc), document=doc)
+    return yaml_check(VALID_STATUS, "", document=doc)
+
+
+def yaml_check(status: str, reason: str, *, document: ScenarioDocument | None = None) -> Dict[str, object]:
+    result: Dict[str, object] = {
+        "yaml_status": status,
+        "yaml_reason": reason,
+    }
+    if document is not None:
+        result["_document"] = document
+    return result
+
+
+def iter_scenario_cases(layout: ProjectLayout) -> List[Dict[str, str]]:
+    if not layout.scenario_sets_dir.is_dir():
+        return []
+    result: List[Dict[str, str]] = []
+    for scenario_set_dir in sorted(path for path in layout.scenario_sets_dir.iterdir() if path.is_dir()):
+        for scenario_path in scenario_files(scenario_set_dir):
+            result.append({"scenario_set_id": scenario_set_dir.name, "scenario_id": scenario_path.stem})
+    return result
+
+
+def require_project(layout: ProjectLayout) -> None:
+    if not layout.root.is_dir():
+        raise FileNotFoundError(f"Project not found: {layout.root}")
+
+
+def context_stats_payload(layout: ProjectLayout, doc: ScenarioDocument) -> Dict[str, object]:
+    return context_stats(load_scenario_context(layout, doc))
+
+
+def context_stats_from_run_graph_detail(detail: Mapping[str, object] | None) -> Dict[str, object] | None:
+    if not detail:
+        return None
+    return {
+        "station_count": int(detail.get("station_count") or 0),
+        "train_count": int(detail.get("train_count") or 0),
+        "total_mileage": float(detail.get("total_mileage") or 0),
+        "event_node_count": int(detail.get("event_node_count") or 0),
+        "section_node_count": int(detail.get("section_node_count") or 0),
     }
 
 
@@ -286,106 +452,6 @@ def lightweight_scenario_set_summary(scenarios: List[Dict[str, object]]) -> Dict
     }
 
 
-def scenario_case_visualization_item(
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    scenario_path: Path,
-    check: Dict[str, object] | None = None,
-) -> Dict[str, object]:
-    scenario_id = sanitize_id(scenario_path.parent.name)
-    case = layout.scenario_set(scenario_set_id).scenario(scenario_id)
-    check = check or check_scenario_yaml(case, scenario_id)
-    doc = check.get("_document") if isinstance(check.get("_document"), ScenarioDocument) else None
-    disturbances = scenario_document_disturbances(doc) if doc is not None else []
-    counts = disturbance_counts(disturbances)
-    return {
-        "scenario_id": scenario_id,
-        "name": doc.name if doc is not None else scenario_id,
-        "path": to_posix(case.root),
-        "yaml_status": VALID_STATUS if doc is not None else INVALID_STATUS,
-        "yaml_reason": str(check.get("yaml_reason", "") or ""),
-        "disturbances": disturbances,
-        "counts": counts,
-        "category": scenario_category(disturbances),
-    }
-
-
-def scenario_document_disturbances(
-    doc: ScenarioDocument,
-    context: Any | None = None,
-) -> List[Dict[str, object]]:
-    event_anchors = getattr(context, "event_anchors", {}) if context is not None else {}
-    section_anchors = getattr(context, "section_anchors", {}) if context is not None else {}
-    disturbances: List[Dict[str, object]] = []
-
-    for index, item in enumerate(list_payload(doc.scenarios.get("delays")), start=1):
-        anchor_id = str(item.get("event_anchor_id", "") or "")
-        anchor = event_anchors.get(anchor_id)
-        train_id = str(item.get("train_id", "") or getattr(anchor, "train_id", "") or "")
-        station = str(item.get("station", "") or getattr(anchor, "station", "") or "")
-        event_type = str(item.get("event_type", "") or getattr(anchor, "event_type", "") or "")
-        if anchor is None and context is not None and train_id and station and event_type:
-            anchor = event_anchor_by_semantic(context).get((train_id, station, event_type))
-        start_time = getattr(anchor, "planned_time", None)
-        if start_time is None and context is not None:
-            start_time = context.translated.event_time.get((train_id, station, event_type))
-        disturbances.append(
-            {
-                "id": f"delay_{index}",
-                "type": "delay",
-                "event_anchor_id": str(getattr(anchor, "anchor_id", "") or anchor_id),
-                "train_id": train_id,
-                "station": station,
-                "event_type": event_type,
-                "seconds": int(float(item.get("seconds", 0) or 0)),
-                **({"start_time": int(start_time)} if start_time is not None else {}),
-                "station_order": getattr(anchor, "station_order", None),
-            }
-        )
-
-    for index, item in enumerate(list_payload(doc.scenarios.get("speed_limits")), start=1):
-        anchor_id = str(item.get("section_anchor_id", "") or "")
-        anchor = section_anchors.get(anchor_id)
-        start_station = str(item.get("start_station", "") or getattr(anchor, "start_station", "") or "")
-        end_station = str(item.get("end_station", "") or getattr(anchor, "end_station", "") or "")
-        if anchor is None and context is not None and start_station and end_station:
-            anchor = section_anchor_by_semantic(context).get((start_station, end_station))
-        start_time = parse_seconds_of_day(item.get("start_time", 0))
-        duration = int(float(item.get("duration", 0) or 0))
-        limit_speed = float(item.get("limit_speed", 0) or 0)
-        disturbances.append(
-            {
-                "id": f"speed_{index}",
-                "type": "interruption" if limit_speed <= 20 else "speed_limit",
-                "section_anchor_id": str(getattr(anchor, "anchor_id", "") or anchor_id),
-                "start_station": start_station,
-                "end_station": end_station,
-                "start_time": start_time,
-                "end_time": start_time + duration,
-                "duration": duration,
-                "limit_speed": limit_speed,
-                "section_order": getattr(anchor, "section_order", None),
-                "mileage": getattr(anchor, "mileage", None),
-            }
-        )
-
-    return disturbances
-
-
-def event_anchor_by_semantic(context: Any) -> Dict[tuple[str, str, str], Any]:
-    return {
-        (str(anchor.train_id), str(anchor.station), str(anchor.event_type)): anchor
-        for anchor in getattr(context, "event_anchors", {}).values()
-    }
-
-
-def section_anchor_by_semantic(context: Any) -> Dict[tuple[str, str], Any]:
-    return {
-        (str(anchor.start_station), str(anchor.end_station)): anchor
-        for anchor in getattr(context, "section_anchors", {}).values()
-    }
-
-
 def scenario_category_label(category: str) -> str:
     labels = {
         "empty": "空场景",
@@ -408,6 +474,34 @@ def disturbance_type_label(item_type: str) -> str:
 
 def safe_ratio_value(numerator: float | int, denominator: float | int) -> float:
     return float(numerator) / float(denominator) if denominator else 0.0
+
+
+def time_distribution(disturbances: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
+    buckets = {hour: 0 for hour in range(24)}
+    unknown_count = 0
+    for item in disturbances:
+        if "start_time" not in item or item.get("start_time") in {None, ""}:
+            unknown_count += 1
+            continue
+        start = int(float(item.get("start_time") or 0))
+        hour = max(0, min(23, start // 3600))
+        buckets[hour] += 1
+    rows = [{"label": f"{hour:02d}:00", "count": count} for hour, count in buckets.items()]
+    if unknown_count:
+        rows.append({"label": "未知", "count": unknown_count})
+    return rows
+
+
+def space_distribution(disturbances: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
+    counts: Dict[str, int] = {}
+    for item in disturbances:
+        label = str(item.get("station") or "")
+        if not label:
+            start = str(item.get("start_station") or "")
+            end = str(item.get("end_station") or "")
+            label = f"{start}-{end}" if start or end else "未知"
+        counts[label] = counts.get(label, 0) + 1
+    return [{"label": key, "count": value} for key, value in sorted(counts.items())]
 
 
 def type_time_rows(disturbances: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
@@ -469,421 +563,6 @@ def time_bin_label(value: object) -> str:
     return f"{start:02d}-{start + 2:02d}时"
 
 
-def scenario_case_summary(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
-    scenario_id = require_id(scenario_id, "scenario_id")
-    case = layout.scenario_set(scenario_set_id).scenario(scenario_id)
-    if not case.root.is_dir():
-        raise FileNotFoundError(f"Scenario not found: {case.root}")
-    check = check_scenario_activation(case, scenario_id)
-    doc = check.get("_document") if isinstance(check.get("_document"), ScenarioDocument) else ScenarioDocument(
-        name=scenario_id,
-        scenarios={"delays": [], "speed_limits": []},
-        path=case.scenario_yml,
-    )
-    speed_limit_count, interruption_count = speed_limit_counts(doc.scenarios.get("speed_limits", []) or [])
-    counts = {
-        "delay": len(doc.scenarios.get("delays", []) or []),
-        "speed_limit": speed_limit_count,
-        "interruption": interruption_count,
-    }
-    counts["total"] = counts["delay"] + counts["speed_limit"] + counts["interruption"]
-    return {
-        "scenario_set_id": require_id(scenario_set_id, "scenario_set_id"),
-        "scenario_id": scenario_id,
-        "name": doc.name,
-        "root": to_posix(case.root),
-        "activated": check["activation_status"] == ACTIVE_STATUS,
-        "activation_status": check["activation_status"],
-        "activation_reason": check["activation_reason"],
-        "has_context": check["has_context"],
-        "has_timetable": case.timetable_xlsx.is_file(),
-        "has_mileage": case.mileage_xlsx.is_file(),
-        "counts": counts,
-        "delay_count": counts["delay"],
-        "speed_limit_count": counts["speed_limit"],
-        "interruption_count": counts["interruption"],
-    }
-
-
-def scenario_case_light_summary(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
-    scenario_id = require_id(scenario_id, "scenario_id")
-    case = layout.scenario_set(scenario_set_id).scenario(scenario_id)
-    if not case.root.is_dir():
-        raise FileNotFoundError(f"Scenario not found: {case.root}")
-    check = check_scenario_yaml(case, scenario_id)
-    doc = check.get("_document") if isinstance(check.get("_document"), ScenarioDocument) else ScenarioDocument(
-        name=scenario_id,
-        scenarios={"delays": [], "speed_limits": []},
-        path=case.scenario_yml,
-    )
-    speed_limit_count, interruption_count = speed_limit_counts(doc.scenarios.get("speed_limits", []) or [])
-    counts = {
-        "delay": len(doc.scenarios.get("delays", []) or []),
-        "speed_limit": speed_limit_count,
-        "interruption": interruption_count,
-    }
-    counts["total"] = counts["delay"] + counts["speed_limit"] + counts["interruption"]
-    return {
-        "scenario_set_id": require_id(scenario_set_id, "scenario_set_id"),
-        "scenario_id": scenario_id,
-        "name": doc.name,
-        "root": to_posix(case.root),
-        "yaml_status": check["yaml_status"],
-        "yaml_reason": check["yaml_reason"],
-        "has_context": case.context_json.is_file(),
-        "has_timetable": case.timetable_xlsx.is_file(),
-        "has_mileage": case.mileage_xlsx.is_file(),
-        "counts": counts,
-        "delay_count": counts["delay"],
-        "speed_limit_count": counts["speed_limit"],
-        "interruption_count": counts["interruption"],
-    }
-
-
-def list_scenario_cases(layout: ProjectLayout, scenario_set_id: str) -> List[Dict[str, object]]:
-    return [
-        scenario_case_light_summary(layout, scenario_set_id, path.parent.name)
-        for path in scenario_files(layout.scenario_set(scenario_set_id).root)
-    ]
-
-
-def list_scenario_case_options(
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    *,
-    query: str = "",
-    limit: int = 50,
-) -> List[Dict[str, object]]:
-    query_text = query.strip().lower()
-    result: List[Dict[str, object]] = []
-    for path in scenario_files(layout.scenario_set(scenario_set_id).root):
-        scenario_id = sanitize_id(path.parent.name)
-        if query_text and query_text not in scenario_id.lower():
-            continue
-        case = layout.scenario_set(scenario_set_id).scenario(scenario_id)
-        suffix = "已激活" if case.context_json.is_file() else "未激活"
-        result.append({"label": f"{scenario_id} ({suffix})", "value": scenario_id})
-        if len(result) >= max(1, limit):
-            break
-    return result
-
-
-def delete_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> None:
-    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
-    reset_dir(case.root)
-
-
-def scenario_source_file(layout: ProjectLayout, scenario_set_id: str, scenario_id: str, filename: str) -> Path:
-    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
-    clean = Path(filename).name
-    if clean not in {TIMETABLE_FILENAME, MILEAGE_FILENAME}:
-        raise FileNotFoundError(f"Unsupported scenario source file: {filename}")
-    path = case.source_dir / clean
-    if not path.is_file():
-        raise FileNotFoundError(f"Scenario source file not found: {path}")
-    return path
-
-
-def write_scenario_document(case: ScenarioCaseLayout, doc: ScenarioDocument) -> None:
-    write_yaml(case.scenario_yml, scenario_document_to_yaml(case.root.name, doc))
-
-
-def write_yaml(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
-
-
-def scenario_document_to_yaml(scenario_id: str, doc: ScenarioDocument) -> Dict[str, object]:
-    return {
-        "name": sanitize_id(scenario_id),
-        "delays": list(doc.scenarios.get("delays", []) or []),
-        "speed_limits": list(doc.scenarios.get("speed_limits", []) or []),
-    }
-
-
-def normalize_scenario_for_case(case: ScenarioCaseLayout, scenario_id: str, payload: Mapping[str, object]) -> Dict[str, object]:
-    activation = check_scenario_activation(case, scenario_id)
-    if activation["activation_status"] != ACTIVE_STATUS:
-        reason = str(activation["activation_reason"] or activation_status_label(str(activation["activation_status"])))
-        raise FileNotFoundError(f"Scenario is not active: {reason}")
-    context = load_base_context(case.context_json)
-    scenarios = parse_scenario_config(
-        {
-            "delays": list_payload(payload.get("delays")),
-            "speed_limits": list_payload(payload.get("speed_limits")),
-        },
-        context,
-    )
-    canonical = scenario_config_to_yaml(scenario_id, scenarios)
-    return {
-        "delays": list(canonical.get("delays", []) or []),
-        "speed_limits": list(canonical.get("speed_limits", []) or []),
-    }
-
-
-def update_scenario_disturbances(
-    layout: ProjectLayout,
-    scenario_set_id: str,
-    scenario_id: str,
-    *,
-    delays: Sequence[Mapping[str, object]],
-    speed_limits: Sequence[Mapping[str, object]],
-) -> Dict[str, object]:
-    scenario_id = require_id(scenario_id, "scenario_id")
-    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
-    normalized = normalize_scenario_for_case(
-        case,
-        scenario_id,
-        {"delays": list(delays), "speed_limits": list(speed_limits)},
-    )
-    write_scenario_document(case, ScenarioDocument(name=scenario_id, scenarios=normalized))
-    return read_scenario_case(layout, scenario_set_id, scenario_id)
-
-
-def copy_case_sources(source_case: ScenarioCaseLayout, target_case: ScenarioCaseLayout) -> None:
-    target_case.source_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_case.timetable_xlsx, target_case.timetable_xlsx)
-    shutil.copy2(source_case.mileage_xlsx, target_case.mileage_xlsx)
-
-
-def scenario_case_layout(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> ScenarioCaseLayout:
-    return layout.scenario_set(require_id(scenario_set_id, "scenario_set_id")).scenario(scenario_id)
-
-
-def existing_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> ScenarioCaseLayout:
-    case = scenario_case_layout(layout, scenario_set_id, scenario_id)
-    if not case.root.is_dir():
-        raise FileNotFoundError(f"Scenario not found: {case.root}")
-    return case
-
-
-def require_project(layout: ProjectLayout) -> None:
-    if not layout.root.is_dir():
-        raise FileNotFoundError(f"Project not found: {layout.root}")
-
-
-def iter_scenario_cases(layout: ProjectLayout) -> List[Dict[str, str]]:
-    if not layout.scenario_sets_dir.is_dir():
-        return []
-    result: List[Dict[str, str]] = []
-    for scenario_set_dir in sorted(path for path in layout.scenario_sets_dir.iterdir() if path.is_dir()):
-        for scenario_path in scenario_files(scenario_set_dir):
-            result.append({"scenario_set_id": scenario_set_dir.name, "scenario_id": scenario_path.parent.name})
-    return result
-
-
-def context_stats(path: Path) -> Dict[str, object]:
-    context = load_base_context(path)
-    mileage_values = list(context.mileage_by_station.values())
-    total_mileage = max(mileage_values) - min(mileage_values) if mileage_values else 0
-    return {
-        "station_count": len(context.station_order),
-        "train_count": len(context.translated.train_ids),
-        "total_mileage": total_mileage,
-        "event_node_count": len(context.event_anchors),
-        "section_node_count": len(context.section_anchors),
-    }
-
-
-def source_file_summaries(case: ScenarioCaseLayout) -> List[Dict[str, object]]:
-    result = []
-    for path in (case.timetable_xlsx, case.mileage_xlsx):
-        result.append(
-            {
-                "name": path.name,
-                "path": to_posix(path),
-                "exists": path.is_file(),
-                "size_bytes": path.stat().st_size if path.is_file() else 0,
-            }
-        )
-    return result
-
-
-def scenario_timetable(case: ScenarioCaseLayout) -> Dict[str, object]:
-    context = load_base_context(case.context_json)
-    doc = load_case_scenario_document(case, case.root.name)
-    validate_scenario_document_shape(doc)
-    parse_scenario_config(
-        {
-            "delays": list_payload(doc.scenarios.get("delays")),
-            "speed_limits": list_payload(doc.scenarios.get("speed_limits")),
-        },
-        context,
-    )
-    disturbances = read_scenario_disturbances(case.scenario_yml, context) if case.scenario_yml.is_file() else []
-    return {
-        "station_order": list(context.station_order),
-        "mileage_by_station": dict(context.mileage_by_station),
-        "train_routes": dict(context.translated.train_routes),
-        "plan": {"rows": plan_rows(context)},
-        "disturbances": disturbances,
-    }
-
-
-def first_context(layout: ProjectLayout, scenario_set_id: str) -> Any | None:
-    context_cache: Dict[str, object] = {}
-    for path in scenario_files(layout.scenario_set(scenario_set_id).root):
-        context_path = path.parent / "context.json"
-        case = layout.scenario_set(scenario_set_id).scenario(path.parent.name)
-        check = check_scenario_activation(case, path.parent.name, context_cache=context_cache)
-        if check["activation_status"] == ACTIVE_STATUS:
-            return check.get("_context") or cached_base_context(context_path, context_cache)
-    return None
-
-
-def check_scenario_activation(
-    case: ScenarioCaseLayout,
-    scenario_id: str,
-    *,
-    context_cache: Dict[str, object] | None = None,
-) -> Dict[str, object]:
-    has_context = case.context_json.is_file()
-    try:
-        doc = load_case_scenario_document(case, scenario_id)
-        validate_scenario_document_shape(doc)
-    except Exception as exc:
-        return activation_check(INVALID_STATUS, str(exc), has_context=has_context)
-
-    if not has_context:
-        return activation_check(INACTIVE_STATUS, "", has_context=False, document=doc)
-
-    try:
-        metadata = read_context_metadata(case.context_json)
-        validate_context_source_metadata(case, metadata)
-        context = (
-            cached_base_context(case.context_json, context_cache)
-            if context_cache is not None
-            else load_base_context(case.context_json)
-        )
-        parse_scenario_config(
-            {
-                "delays": list_payload(doc.scenarios.get("delays")),
-                "speed_limits": list_payload(doc.scenarios.get("speed_limits")),
-            },
-            context,
-        )
-    except Exception as exc:
-        return activation_check(INVALID_STATUS, str(exc), has_context=True, document=doc)
-
-    return activation_check(ACTIVE_STATUS, "", has_context=True, document=doc, context=context)
-
-
-def check_scenario_yaml(case: ScenarioCaseLayout, scenario_id: str) -> Dict[str, object]:
-    try:
-        doc = load_case_scenario_document(case, scenario_id)
-        validate_scenario_document_shape(doc)
-    except Exception as exc:
-        return yaml_check(INVALID_STATUS, str(exc))
-    return yaml_check(VALID_STATUS, "", document=doc)
-
-
-def activation_check(
-    status: str,
-    reason: str,
-    *,
-    has_context: bool,
-    document: ScenarioDocument | None = None,
-    context: Any | None = None,
-) -> Dict[str, object]:
-    result: Dict[str, object] = {
-        "activation_status": status,
-        "activation_reason": reason,
-        "has_context": has_context,
-    }
-    if document is not None:
-        result["_document"] = document
-    if context is not None:
-        result["_context"] = context
-    return result
-
-
-def yaml_check(status: str, reason: str, *, document: ScenarioDocument | None = None) -> Dict[str, object]:
-    result: Dict[str, object] = {
-        "yaml_status": status,
-        "yaml_reason": reason,
-    }
-    if document is not None:
-        result["_document"] = document
-    return result
-
-
-def load_case_scenario_document(case: ScenarioCaseLayout, scenario_id: str) -> ScenarioDocument:
-    if case.scenario_yml.is_file():
-        return load_scenario_document(case.scenario_yml, require_yaml())
-    return ScenarioDocument(
-        name=scenario_id,
-        scenarios={"delays": [], "speed_limits": []},
-        path=case.scenario_yml,
-    )
-
-
-def validate_scenario_document_shape(doc: ScenarioDocument) -> None:
-    list_payload(doc.scenarios.get("delays"))
-    list_payload(doc.scenarios.get("speed_limits"))
-
-
-def read_context_metadata(path: Path) -> Dict[str, object]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"Context JSON must be an object: {path}")
-    project = payload.get("project") or {}
-    return project if isinstance(project, dict) else {}
-
-
-def validate_context_source_metadata(case: ScenarioCaseLayout, metadata: Mapping[str, object]) -> None:
-    expected = {
-        "timetable_sha256": case.timetable_xlsx,
-        "mileage_sha256": case.mileage_xlsx,
-    }
-    for key, path in expected.items():
-        if not path.is_file():
-            raise FileNotFoundError(f"Missing source file referenced by context: {path}")
-        recorded = str(metadata.get(key, "") or "").strip()
-        if not recorded:
-            continue
-        actual = file_digest(path)
-        if recorded != actual:
-            label = TIMETABLE_FILENAME if key == "timetable_sha256" else MILEAGE_FILENAME
-            raise ValueError(f"{label} has changed since activation; please reactivate the scenario.")
-
-
-def activation_status_label(status: str) -> str:
-    labels = {
-        ACTIVE_STATUS: "已激活",
-        INACTIVE_STATUS: "未激活",
-        INVALID_STATUS: "激活无效",
-    }
-    return labels.get(status, status)
-
-
-def time_distribution(disturbances: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
-    buckets = {hour: 0 for hour in range(24)}
-    unknown_count = 0
-    for item in disturbances:
-        if "start_time" not in item or item.get("start_time") in {None, ""}:
-            unknown_count += 1
-            continue
-        start = int(float(item.get("start_time") or 0))
-        hour = max(0, min(23, start // 3600))
-        buckets[hour] += 1
-    rows = [{"label": f"{hour:02d}:00", "count": count} for hour, count in buckets.items()]
-    if unknown_count:
-        rows.append({"label": "未知", "count": unknown_count})
-    return rows
-
-
-def space_distribution(disturbances: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:
-    counts: Dict[str, int] = {}
-    for item in disturbances:
-        label = str(item.get("station") or "")
-        if not label:
-            start = str(item.get("start_station") or "")
-            end = str(item.get("end_station") or "")
-            label = f"{start}-{end}" if start or end else "未知"
-        counts[label] = counts.get(label, 0) + 1
-    return [{"label": key, "count": value} for key, value in sorted(counts.items())]
-
-
 def speed_limit_counts(items: Sequence[object]) -> tuple[int, int]:
     speed_limit_count = 0
     interruption_count = 0
@@ -898,38 +577,62 @@ def speed_limit_counts(items: Sequence[object]) -> tuple[int, int]:
     return speed_limit_count, interruption_count
 
 
+def yaml_disturbances(doc: ScenarioDocument) -> List[Dict[str, object]]:
+    disturbances: List[Dict[str, object]] = []
+    for index, item in enumerate(list_payload(doc.scenarios.get("delays")), start=1):
+        train_id = str(item.get("train_id", "") or "")
+        station = str(item.get("station", "") or "")
+        event_type = str(item.get("event_type", "") or "")
+        disturbances.append(
+            {
+                "id": f"delay_{index}",
+                "type": "delay",
+                "train_id": train_id,
+                "station": station,
+                "event_type": event_type,
+                "seconds": int(float(item.get("seconds", 0) or 0)),
+                "start_time": None,
+                "station_order": None,
+            }
+        )
+
+    for index, item in enumerate(list_payload(doc.scenarios.get("speed_limits")), start=1):
+        start_time = parse_seconds_of_day(item.get("start_time", 0))
+        duration = int(float(item.get("duration", 0) or 0))
+        limit_speed = float(item.get("limit_speed", 0) or 0)
+        disturbances.append(
+            {
+                "id": f"speed_{index}",
+                "type": "interruption" if limit_speed <= 20 else "speed_limit",
+                "start_station": str(item.get("start_station", "") or ""),
+                "end_station": str(item.get("end_station", "") or ""),
+                "start_time": start_time,
+                "end_time": start_time + duration,
+                "duration": duration,
+                "limit_speed": limit_speed,
+                "section_order": None,
+                "mileage": None,
+            }
+        )
+    return disturbances
+
+
 def list_payload(value: object) -> List[Mapping[str, object]]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise ValueError("Scenario delays and speed_limits must be arrays.")
+        raise ValueError("Scenario delays/speed_limits must be lists.")
     result: List[Mapping[str, object]] = []
     for item in value:
         if not isinstance(item, Mapping):
-            raise ValueError("Scenario disturbance entries must be objects.")
+            raise ValueError("Scenario event must be a YAML object.")
         result.append(item)
     return result
 
 
-def read_yaml_if_exists(path: Path) -> Dict[str, object] | None:
-    if not path.is_file():
-        return None
-    payload = require_yaml().safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(payload, dict):
-        raise ValueError(f"YAML file must be an object: {path}")
-    return payload
-
-
-def read_yaml_if_exists_safe(path: Path) -> Dict[str, object] | None:
-    try:
-        return read_yaml_if_exists(path)
-    except Exception:
-        return None
-
-
-def require_yaml() -> Any:
+def require_yaml():
     try:
         import yaml
     except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("Missing dependency: PyYAML") from exc
+        raise RuntimeError("Missing dependency: pyyaml") from exc
     return yaml

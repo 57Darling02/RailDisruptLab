@@ -5,8 +5,10 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
+from backend.run_graphs import create_run_graph_from_files
 from backend.scenarios import add_scenario, create_scenario_set, delete_scenario, normal_generate
 from core.project_layout import ProjectLayout, require_id, sanitize_id
+from core.scenario_config import RunGraphReference
 from core.vae_learning_graph import (
     DEFAULT_EVENT_TIME_WINDOW,
     DEFAULT_EVENT_TOP_K,
@@ -22,13 +24,18 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "newproject": {},
     "deleteproject": {},
     "scenario_set_create": {"exist_ok": False},
-    "scenario_add": {"delays": [], "speed_limits": [], "overwrite": False},
+    "run_graph_build": {
+        "run_graph": {},
+        "timetable_path": "",
+        "mileage_path": "",
+        "overwrite": False,
+    },
+    "scenario_add": {"run_graph": {}, "delays": [], "speed_limits": [], "overwrite": False},
     "scenario_delete": {},
     "normal_generate": {
         "scenario_id_prefix": "sim",
         "simulation_count": 1,
-        "source_timetable_path": "",
-        "source_mileage_path": "",
+        "run_graph": {},
         "seed": 20260320,
         "delay_count": 10,
         "speed_count": 10,
@@ -80,8 +87,7 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
     "generation": {
         "source_scenario_set_id": "",
-        "source_timetable_path": "",
-        "source_mileage_path": "",
+        "run_graph": {},
         "output_prefix": "generated",
         "num_samples": 100,
         "seed": 1,
@@ -95,7 +101,8 @@ TASK_REQUIRED: Dict[str, tuple[str, ...]] = {
     "newproject": (),
     "deleteproject": (),
     "scenario_set_create": ("scenario_set_id",),
-    "scenario_add": ("scenario_set_id", "scenario_id"),
+    "run_graph_build": ("run_graph", "timetable_path", "mileage_path"),
+    "scenario_add": ("scenario_set_id", "scenario_id", "run_graph"),
     "scenario_delete": ("scenario_set_id", "scenario_id"),
     "normal_generate": ("scenario_set_id",),
     "build": ("scenario_set_id", "plan_id"),
@@ -124,7 +131,12 @@ def normalize_task_params(action: str, params: Mapping[str, Any] | None) -> Dict
         normalized[key] = value
 
     for key in TASK_REQUIRED[action]:
-        if not str(normalized.get(key, "") or "").strip():
+        value = normalized.get(key)
+        if isinstance(value, Mapping):
+            if not value:
+                raise ValueError(f"Missing required task field: {key}")
+            continue
+        if not str(value or "").strip():
             raise ValueError(f"Missing required task field: {key}")
 
     for key, value in list(normalized.items()):
@@ -137,26 +149,19 @@ def normalize_task_params(action: str, params: Mapping[str, Any] | None) -> Dict
 
 
 def validate_task_params(action: str, params: Mapping[str, Any]) -> None:
+    if action == "run_graph_build":
+        run_graph_target_param(params, "run_graph")
+        return
     if action == "normal_generate":
-        has_path_pair = bool(str(params.get("source_timetable_path") or "").strip()) and bool(
-            str(params.get("source_mileage_path") or "").strip()
-        )
-        if not has_path_pair:
-            raise ValueError("normal_generate requires uploaded timetable and mileage source paths")
+        run_graph_param(params, "run_graph")
         return
     if action == "generation":
         has_category_source = bool(str(params.get("source_scenario_set_id") or "").strip())
-        has_upload_source = bool(str(params.get("source_timetable_path") or "").strip()) or bool(
-            str(params.get("source_mileage_path") or "").strip()
-        )
-        if has_category_source == has_upload_source:
-            raise ValueError("generation requires exactly one context source: source_scenario_set_id or uploaded source files")
-        if has_upload_source:
-            has_path_pair = bool(str(params.get("source_timetable_path") or "").strip()) and bool(
-                str(params.get("source_mileage_path") or "").strip()
-            )
-            if not has_path_pair:
-                raise ValueError("generation uploaded context source requires timetable and mileage source paths")
+        has_run_graph_source = bool(dict_param(params, "run_graph"))
+        if has_category_source == has_run_graph_source:
+            raise ValueError("generation requires exactly one context source: source_scenario_set_id or run_graph")
+        if has_run_graph_source:
+            run_graph_param(params, "run_graph")
         return
     if action != "build":
         return
@@ -224,11 +229,22 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             text_param(params, "scenario_set_id"),
             exist_ok=bool_param(params, "exist_ok"),
         )
+    elif action == "run_graph_build":
+        run_graph = run_graph_target_param(params, "run_graph")
+        create_run_graph_from_files(
+            layout,
+            run_graph["set_id"],
+            run_graph["graph_id"],
+            timetable_source=Path(text_param(params, "timetable_path")),
+            mileage_source=Path(text_param(params, "mileage_path")),
+            overwrite=bool_param(params, "overwrite"),
+        )
     elif action == "scenario_add":
         add_scenario(
             layout,
             text_param(params, "scenario_set_id"),
             text_param(params, "scenario_id"),
+            run_graph=run_graph_param(params, "run_graph"),
             delays=list_param(params, "delays"),
             speed_limits=list_param(params, "speed_limits"),
             overwrite=bool_param(params, "overwrite"),
@@ -245,8 +261,7 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             scenario_set_id=text_param(params, "scenario_set_id"),
             scenario_id_prefix=text_param(params, "scenario_id_prefix"),
             simulation_count=int_param(params, "simulation_count"),
-            source_timetable_path=text_param(params, "source_timetable_path"),
-            source_mileage_path=text_param(params, "source_mileage_path"),
+            run_graph=run_graph_param(params, "run_graph"),
             seed=int_param(params, "seed"),
             delay_count=int_param(params, "delay_count"),
             speed_count=int_param(params, "speed_count"),
@@ -315,8 +330,7 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             checkpoint=text_param(params, "checkpoint"),
             scenario_set_id=text_param(params, "scenario_set_id"),
             source_scenario_set_id=text_param(params, "source_scenario_set_id"),
-            source_timetable_path=text_param(params, "source_timetable_path"),
-            source_mileage_path=text_param(params, "source_mileage_path"),
+            run_graph=run_graph_param(params, "run_graph") if dict_param(params, "run_graph") else None,
             output_prefix=text_param(params, "output_prefix"),
             num_samples=int_param(params, "num_samples"),
             seed=int_param(params, "seed"),
@@ -368,6 +382,33 @@ def list_param(params: Mapping[str, Any], key: str) -> list[Any]:
     if not isinstance(value, list):
         raise ValueError(f"Task field must be a list: {key}")
     return value
+
+
+def dict_param(params: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = params.get(key, {})
+    if value is None or value == "":
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Task field must be an object: {key}")
+    return value
+
+
+def run_graph_param(params: Mapping[str, Any], key: str) -> RunGraphReference:
+    value = dict_param(params, key)
+    set_id = require_id(value.get("set_id"), f"{key}.set_id")
+    graph_id = require_id(value.get("graph_id"), f"{key}.graph_id")
+    context_sha256 = str(value.get("context_sha256") or "").strip()
+    if not context_sha256:
+        raise ValueError(f"Missing required task field: {key}.context_sha256")
+    return RunGraphReference(set_id=set_id, graph_id=graph_id, context_sha256=context_sha256)
+
+
+def run_graph_target_param(params: Mapping[str, Any], key: str) -> Dict[str, str]:
+    value = dict_param(params, key)
+    return {
+        "set_id": require_id(value.get("set_id"), f"{key}.set_id"),
+        "graph_id": require_id(value.get("graph_id"), f"{key}.graph_id"),
+    }
 
 
 def read_task_input(path: Path) -> Dict[str, Any]:

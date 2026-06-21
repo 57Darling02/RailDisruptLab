@@ -1,5 +1,5 @@
 import { use } from 'echarts/core'
-import { BarChart, CustomChart, LineChart, PieChart } from 'echarts/charts'
+import { BarChart, CustomChart, LineChart, PieChart, ScatterChart } from 'echarts/charts'
 import {
   DataZoomComponent,
   GridComponent,
@@ -13,6 +13,7 @@ use([
   BarChart,
   LineChart,
   PieChart,
+  ScatterChart,
   GridComponent,
   LegendComponent,
   TooltipComponent,

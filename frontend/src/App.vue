@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { ScrollbarInstance, UploadFile, UploadUserFile } from 'element-plus'
+import type { ScrollbarInstance } from 'element-plus'
 
 import { api, ApiError } from '@/api/client'
 import AppNavigation from '@/components/AppNavigation.vue'
@@ -9,6 +9,7 @@ import BuildOptionsFields from '@/components/BuildOptionsFields.vue'
 import FieldLabelTip from '@/components/FieldLabelTip.vue'
 import ProjectSelector from '@/components/ProjectSelector.vue'
 import RemoteResourceSelect from '@/components/RemoteResourceSelect.vue'
+import RunGraphSelector from '@/components/RunGraphSelector.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 import TimetableDialog from '@/components/TimetableDialog.vue'
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
@@ -16,6 +17,7 @@ import AdjustmentPlanAnalysisView from '@/views/AdjustmentPlanAnalysisView.vue'
 import AdjustmentPlansView from '@/views/AdjustmentPlansView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import ModelsView from '@/views/ModelsView.vue'
+import RunGraphsView from '@/views/RunGraphsView.vue'
 import ScenarioComparisonView from '@/views/ScenarioComparisonView.vue'
 import ScenarioDetailView from '@/views/ScenarioDetailView.vue'
 import ScenarioSetsView from '@/views/ScenarioSetsView.vue'
@@ -38,14 +40,15 @@ import type {
   ProjectState,
   ProjectSummary,
   ResourceOption,
+  RunGraphReference,
   ScenarioSet,
   ScenarioSummary,
   Task,
 } from '@/types'
 
-type PageKey = 'dashboard' | 'scenario-overview' | 'scenario-resources' | 'scenario-detail' | 'adjustment-plans' | 'models' | 'ablation-scenarios' | 'ablation-plans'
+type PageKey = 'dashboard' | 'run-graphs' | 'scenario-overview' | 'scenario-resources' | 'scenario-detail' | 'adjustment-plans' | 'models' | 'ablation-scenarios' | 'ablation-plans'
 type AdjustmentPlanBuildSource = 'scenario_set' | 'scenario'
-type GenerationContextSourceMode = 'scenario_set' | 'upload'
+type GenerationContextSource = 'run_graph' | 'scenario_set'
 type ResourceKind = 'scenario_sets' | 'models'
 
 const TASK_POLL_MS = 2500
@@ -160,19 +163,12 @@ const newScenarioSetId = ref('')
 const scenarioDialogVisible = ref(false)
 const scenarioCreateScenarioSetId = ref('')
 const scenarioCreateScenarioId = ref('')
-const scenarioCreateFiles = ref({
-  timetable_file: null as File | null,
-  mileage_file: null as File | null,
-})
-const scenarioCreateTimetableFiles = ref<UploadUserFile[]>([])
-const scenarioCreateMileageFiles = ref<UploadUserFile[]>([])
+const scenarioCreateRunGraph = ref<RunGraphReference | null>(null)
 const normalGenerateDialogVisible = ref(false)
 const normalGenerateScenarioSetId = ref('')
 const normalGenerateForm = ref({
   scenario_id_prefix: 'sim',
   simulation_count: 1,
-  timetable_file: null as File | null,
-  mileage_file: null as File | null,
   seed: 20260320,
   delay_count: 10,
   speed_count: 10,
@@ -180,8 +176,7 @@ const normalGenerateForm = ref({
   combo_per_type: 10,
   overwrite: false,
 })
-const normalGenerateTimetableFiles = ref<UploadUserFile[]>([])
-const normalGenerateMileageFiles = ref<UploadUserFile[]>([])
+const normalGenerateRunGraph = ref<RunGraphReference | null>(null)
 
 const selectedPlanId = ref('')
 const loadedPlanId = ref('')
@@ -223,19 +218,16 @@ const trainModelSuffix = ref('')
 const generationForm = ref({
   checkpoint: '',
   scenario_set_id: '',
-  source_mode: 'scenario_set' as GenerationContextSourceMode,
+  context_source: 'run_graph' as GenerationContextSource,
   source_scenario_set_id: '',
+  run_graph: null as RunGraphReference | null,
   output_prefix: 'generated',
   num_samples: 100,
   seed: 1,
   device: 'auto',
   speed_interruption_threshold: DEFAULT_SPEED_INTERRUPTION_THRESHOLD,
   overwrite: false,
-  timetable_file: null as File | null,
-  mileage_file: null as File | null,
 })
-const generationTimetableFiles = ref<UploadUserFile[]>([])
-const generationMileageFiles = ref<UploadUserFile[]>([])
 
 let pollHandle = 0
 let durationTickHandle = 0
@@ -249,6 +241,7 @@ let scenarioOptionRequestSeq = 0
 let projectOptionRequestSeq = 0
 
 const hasProject = computed(() => Boolean(selectedProjectId.value && project.value?.exists))
+const runGraphSets = computed(() => project.value?.run_graph_sets ?? [])
 const trainModelPrefix = computed(() => {
   const scenarioSetId = trainForm.scenario_set_id.trim()
   return scenarioSetId ? `train_${scenarioSetId}` : ''
@@ -699,6 +692,9 @@ function refreshLoadedResourceForTask(task: Task) {
     planDetailRefreshKey.value += 1
     void loadAdjustmentPlans(false)
   }
+  if (label === 'run_graph_build') {
+    void loadSelectedProject(false)
+  }
 }
 
 function startDurationTick() {
@@ -747,7 +743,6 @@ async function removeProject(projectId: string) {
   if (!projectId) return
   await submitTask('移除项目', async () => {
     const response = await api.deleteProject(projectId)
-    trackTask(response.task)
     if (selectedProjectId.value === projectId) {
       selectedProjectId.value = ''
       project.value = null
@@ -994,18 +989,8 @@ function openScenarioDialog() {
     return
   }
   scenarioCreateScenarioId.value = ''
-  scenarioCreateFiles.value = { timetable_file: null, mileage_file: null }
-  scenarioCreateTimetableFiles.value = []
-  scenarioCreateMileageFiles.value = []
+  scenarioCreateRunGraph.value = null
   scenarioDialogVisible.value = true
-}
-
-function setScenarioCreateTimetableFile(file: UploadFile) {
-  if (file.raw) scenarioCreateFiles.value.timetable_file = file.raw
-}
-
-function setScenarioCreateMileageFile(file: UploadFile) {
-  if (file.raw) scenarioCreateFiles.value.mileage_file = file.raw
 }
 
 async function createScenarioCase() {
@@ -1015,8 +1000,9 @@ async function createScenarioCase() {
     ElMessage.warning('请填写场景 ID 并选择场景分类。')
     return
   }
-  if (!scenarioCreateFiles.value.timetable_file || !scenarioCreateFiles.value.mileage_file) {
-    ElMessage.warning('请上传时刻表和里程表。')
+  const runGraph = scenarioCreateRunGraph.value
+  if (!runGraph) {
+    ElMessage.warning('请选择运行图。')
     return
   }
   await runAction('新增场景', async () => {
@@ -1024,8 +1010,7 @@ async function createScenarioCase() {
       selectedProjectId.value,
       scenarioSetId,
       scenarioId,
-      scenarioCreateFiles.value.timetable_file as File,
-      scenarioCreateFiles.value.mileage_file as File,
+      runGraph,
     )
     selectedScenarioSetId.value = scenarioSetId
     loadedScenarioSetId.value = scenarioSetId
@@ -1034,7 +1019,7 @@ async function createScenarioCase() {
     scenarioCategoryRefreshKey.value += 1
     scenarioDialogVisible.value = false
     await loadSelectedProject(false)
-    return `场景 ${scenarioId} 已创建，待校验。`
+    return `场景 ${scenarioId} 已创建。`
   })
 }
 
@@ -1052,7 +1037,6 @@ async function deleteScenario(id: string) {
       scenarioSetId,
       id,
     )
-    trackTask(response.task)
     return response.task
   })
 }
@@ -1076,43 +1060,31 @@ function openNormalGenerateDialog() {
     return
   }
   normalGenerateScenarioSetId.value = loadedScenarioSetId.value
-  normalGenerateTimetableFiles.value = []
-  normalGenerateMileageFiles.value = []
-  normalGenerateForm.value.timetable_file = null
-  normalGenerateForm.value.mileage_file = null
+  normalGenerateRunGraph.value = null
   normalGenerateDialogVisible.value = true
-}
-
-function setNormalGenerateTimetableFile(file: UploadFile) {
-  if (file.raw) normalGenerateForm.value.timetable_file = file.raw
-}
-
-function setNormalGenerateMileageFile(file: UploadFile) {
-  if (file.raw) normalGenerateForm.value.mileage_file = file.raw
 }
 
 async function submitNormalGenerate() {
   const scenarioSetId = normalGenerateScenarioSetId.value.trim()
   if (!scenarioSetId) return
-  if (!normalGenerateForm.value.timetable_file || !normalGenerateForm.value.mileage_file) {
-    ElMessage.warning('请上传时刻表和里程表。')
+  const runGraph = normalGenerateRunGraph.value
+  if (!runGraph) {
+    ElMessage.warning('请选择运行图。')
     return
   }
   await submitTask('模拟场景', async () => {
-    const response = await api.submitNormalGenerateUpload(selectedProjectId.value, {
-      scenarioSetId,
-      scenarioIdPrefix: normalGenerateForm.value.scenario_id_prefix,
-      simulationCount: normalGenerateForm.value.simulation_count,
+    const response = await api.submitNormalGenerate(selectedProjectId.value, {
+      scenario_set_id: scenarioSetId,
+      scenario_id_prefix: normalGenerateForm.value.scenario_id_prefix,
+      simulation_count: normalGenerateForm.value.simulation_count,
+      run_graph: runGraph,
       seed: normalGenerateForm.value.seed,
-      delayCount: normalGenerateForm.value.delay_count,
-      speedCount: normalGenerateForm.value.speed_count,
-      interruptionCount: normalGenerateForm.value.interruption_count,
-      comboPerType: normalGenerateForm.value.combo_per_type,
+      delay_count: normalGenerateForm.value.delay_count,
+      speed_count: normalGenerateForm.value.speed_count,
+      interruption_count: normalGenerateForm.value.interruption_count,
+      combo_per_type: normalGenerateForm.value.combo_per_type,
       overwrite: normalGenerateForm.value.overwrite,
-      timetableFile: normalGenerateForm.value.timetable_file as File,
-      mileageFile: normalGenerateForm.value.mileage_file as File,
     })
-    trackTask(response.task)
     selectedScenarioSetId.value = scenarioSetId
     loadedScenarioSetId.value = scenarioSetId
     scenarioCategoryDetailLoading.value = false
@@ -1143,7 +1115,6 @@ async function submitBuildPlan() {
       scenarioId,
       normalizedBuildOptions(),
     )
-    trackTask(response.task)
     selectedScenarioSetId.value = scenarioSetId
     loadedScenarioSetId.value = scenarioSetId
     selectedPlanId.value = planId
@@ -1239,7 +1210,6 @@ async function createAdjustmentPlan() {
       scenarioId,
       normalizedBuildOptions(),
     )
-    trackTask(response.task)
     resetPlanCreateForm()
     planCreateDialogVisible.value = false
     await loadAdjustmentPlans(false)
@@ -1296,7 +1266,6 @@ async function submitSolve(caseId = '') {
       options.solveThreads,
       caseId ? false : options.skipSolved,
     )
-    trackTask(response.task)
     solveDialogVisible.value = false
     return response.task
   })
@@ -1503,7 +1472,6 @@ async function submitTrain() {
   await submitTask('训练模型', async () => {
     const modelId = trainForm.model_id.trim()
     const response = await api.submitTrain(selectedProjectId.value, { ...trainForm, model_id: modelId })
-    trackTask(response.task)
     pendingModelId.value = modelId
     pendingModelTaskId.value = response.task.id
     selectedModelId.value = modelId
@@ -1522,14 +1490,20 @@ function openGenerationDialog(file: ModelCheckpoint) {
   }
   generationForm.value.checkpoint = file.relative_path
   generationForm.value.scenario_set_id = ''
-  generationForm.value.source_mode = 'scenario_set'
+  generationForm.value.context_source = 'run_graph'
   generationForm.value.source_scenario_set_id = ''
-  generationForm.value.timetable_file = null
-  generationForm.value.mileage_file = null
-  generationTimetableFiles.value = []
-  generationMileageFiles.value = []
+  generationForm.value.run_graph = null
   generationForm.value.speed_interruption_threshold = DEFAULT_SPEED_INTERRUPTION_THRESHOLD
   generationDialogVisible.value = true
+}
+
+function updateGenerationContextSource(source: GenerationContextSource) {
+  generationForm.value.context_source = source
+  if (source === 'run_graph') {
+    generationForm.value.source_scenario_set_id = ''
+  } else {
+    generationForm.value.run_graph = null
+  }
 }
 
 async function submitGeneration() {
@@ -1542,57 +1516,31 @@ async function submitGeneration() {
     ElMessage.warning('请填写生成到的场景分类 ID。')
     return
   }
-  if (generationForm.value.source_mode === 'scenario_set' && !generationForm.value.source_scenario_set_id.trim()) {
-    ElMessage.warning('请选择 Context 来源分类。')
-    return
-  }
-  if (
-    generationForm.value.source_mode === 'upload' &&
-    (!generationForm.value.timetable_file || !generationForm.value.mileage_file)
-  ) {
-    ElMessage.warning('请上传时刻表和里程表。')
+  const useRunGraph = generationForm.value.context_source === 'run_graph'
+  const sourceScenarioSetId = useRunGraph ? '' : generationForm.value.source_scenario_set_id.trim()
+  const runGraph = useRunGraph ? generationForm.value.run_graph : null
+  if (!sourceScenarioSetId && !runGraph) {
+    ElMessage.warning(useRunGraph ? '请选择运行图。' : '请选择来源场景分类。')
     return
   }
   await submitTask('生成场景', async () => {
-    const response = generationForm.value.source_mode === 'upload'
-      ? await api.submitGenerationUpload(selectedProjectId.value, {
-        modelId: loadedModelId.value,
-        checkpoint: generationForm.value.checkpoint,
-        scenarioSetId: generationForm.value.scenario_set_id,
-        outputPrefix: generationForm.value.output_prefix,
-        numSamples: generationForm.value.num_samples,
-        seed: generationForm.value.seed,
-        device: generationForm.value.device,
-        speedInterruptionThreshold: generationForm.value.speed_interruption_threshold,
-        overwrite: generationForm.value.overwrite,
-        timetableFile: generationForm.value.timetable_file as File,
-        mileageFile: generationForm.value.mileage_file as File,
-      })
-      : await api.submitGeneration(
-        selectedProjectId.value,
-        loadedModelId.value,
-        generationForm.value.checkpoint,
-        generationForm.value.scenario_set_id,
-        generationForm.value.source_scenario_set_id,
-        generationForm.value.output_prefix,
-        generationForm.value.num_samples,
-        generationForm.value.seed,
-        generationForm.value.device,
-        generationForm.value.speed_interruption_threshold,
-        generationForm.value.overwrite,
-      )
-    trackTask(response.task)
+    const response = await api.submitGeneration(
+      selectedProjectId.value,
+      loadedModelId.value,
+      generationForm.value.checkpoint,
+      generationForm.value.scenario_set_id,
+      sourceScenarioSetId,
+      runGraph,
+      generationForm.value.output_prefix,
+      generationForm.value.num_samples,
+      generationForm.value.seed,
+      generationForm.value.device,
+      generationForm.value.speed_interruption_threshold,
+      generationForm.value.overwrite,
+    )
     generationDialogVisible.value = false
     return response.task
   })
-}
-
-function setGenerationTimetableFile(file: UploadFile) {
-  if (file.raw) generationForm.value.timetable_file = file.raw
-}
-
-function setGenerationMileageFile(file: UploadFile) {
-  if (file.raw) generationForm.value.mileage_file = file.raw
 }
 
 async function deleteModelById(modelId: string) {
@@ -1644,14 +1592,14 @@ async function searchModelOptions(query: string) {
   })
 }
 
-function trackTask(task: Task) {
+function trackTask(task: Task, options: { refresh?: boolean } = {}) {
   const index = tasks.value.findIndex((item) => item.id === task.id)
   if (index >= 0) {
     tasks.value[index] = task
   } else {
     tasks.value.push(task)
   }
-  void refreshTasks(false)
+  if (options.refresh ?? true) void refreshTasks(false)
 }
 
 function reconcilePendingModel() {
@@ -1717,10 +1665,6 @@ async function scrollMainToTop() {
   mainScrollbar.value?.setScrollTop(0)
 }
 
-function warnSingleFile() {
-  ElMessage.warning('每项只需要一个文件，请先移除后重新选择。')
-}
-
 async function runAction(label: string, action: () => Promise<string | void>) {
   if (operationPending.value) return
   activeOperation.value = label
@@ -1739,6 +1683,7 @@ async function submitTask(label: string, action: () => Promise<Task>) {
   activeOperation.value = label
   try {
     const task = await action()
+    trackTask(task, { refresh: false })
     ElMessage.success(`${label}已提交：任务 #${task.id}`)
     await refreshTasks(false)
   } catch (error) {
@@ -1845,6 +1790,7 @@ function notifyError(error: unknown) {
                 <DashboardView
                   v-if="activePage === 'dashboard'"
                   :selected-project-id="selectedProjectId"
+                  :run-graph-set-count="runGraphSets.length"
                   :scenario-set-count="scenarioSets.length"
                   :adjustment-plan-count="adjustmentPlanCount"
                   :models="models"
@@ -1853,10 +1799,20 @@ function notifyError(error: unknown) {
                   :done-task-count="doneTaskCount"
                   :failed-task-count="failedTaskCount"
                   :busy="operationPending"
+                  @create-run-graph-set="activePage = 'run-graphs'"
                   @create-scenario-set="scenarioSetDialogVisible = true"
                   @create-plan="openPlanCreateDialog"
                   @train="() => openTrainDialog('create')"
                   @refresh-tasks="refreshTasks"
+                />
+
+                <RunGraphsView
+                  v-else-if="activePage === 'run-graphs'"
+                  :project-id="selectedProjectId"
+                  :run-graph-sets="runGraphSets"
+                  :busy="operationPending"
+                  @refresh-project="loadSelectedProject(false)"
+                  @task-submitted="trackTask"
                 />
 
                 <ScenarioSetsView
@@ -1890,7 +1846,7 @@ function notifyError(error: unknown) {
                   :scenario-id="selectedScenarioId"
                   :busy="operationPending"
                   @back="backToScenarios"
-                  @activated="loadSelectedProject(false)"
+                  @validated="loadSelectedProject(false)"
                 />
 
                 <AdjustmentPlansView
@@ -2048,29 +2004,12 @@ function notifyError(error: unknown) {
         <el-form-item label="场景 ID">
           <el-input v-model="scenarioCreateScenarioId" :disabled="operationPending" />
         </el-form-item>
-        <el-form-item label="时刻表">
-          <el-upload
-            v-model:file-list="scenarioCreateTimetableFiles"
-            :auto-upload="false"
-            :limit="1"
-            :on-change="setScenarioCreateTimetableFile"
-            :on-exceed="warnSingleFile"
+        <el-form-item label="运行图">
+          <RunGraphSelector
+            v-model="scenarioCreateRunGraph"
+            :project-id="selectedProjectId"
             :disabled="operationPending"
-          >
-            <el-button :disabled="operationPending">上传时刻表</el-button>
-          </el-upload>
-        </el-form-item>
-        <el-form-item label="里程表">
-          <el-upload
-            v-model:file-list="scenarioCreateMileageFiles"
-            :auto-upload="false"
-            :limit="1"
-            :on-change="setScenarioCreateMileageFile"
-            :on-exceed="warnSingleFile"
-            :disabled="operationPending"
-          >
-            <el-button :disabled="operationPending">上传里程表</el-button>
-          </el-upload>
+          />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2091,29 +2030,12 @@ function notifyError(error: unknown) {
         <el-form-item label="当前场景分类">
           <el-input :model-value="normalGenerateScenarioSetId" disabled />
         </el-form-item>
-        <el-form-item label="时刻表">
-          <el-upload
-            v-model:file-list="normalGenerateTimetableFiles"
-            :auto-upload="false"
-            :limit="1"
-            :on-change="setNormalGenerateTimetableFile"
-            :on-exceed="warnSingleFile"
+        <el-form-item label="运行图">
+          <RunGraphSelector
+            v-model="normalGenerateRunGraph"
+            :project-id="selectedProjectId"
             :disabled="operationPending"
-          >
-            <el-button :disabled="operationPending">上传时刻表</el-button>
-          </el-upload>
-        </el-form-item>
-        <el-form-item label="里程表">
-          <el-upload
-            v-model:file-list="normalGenerateMileageFiles"
-            :auto-upload="false"
-            :limit="1"
-            :on-change="setNormalGenerateMileageFile"
-            :on-exceed="warnSingleFile"
-            :disabled="operationPending"
-          >
-            <el-button :disabled="operationPending">上传里程表</el-button>
-          </el-upload>
+          />
         </el-form-item>
         <el-form-item label="场景 ID 前缀">
           <el-input v-model="normalGenerateForm.scenario_id_prefix" :disabled="operationPending" />
@@ -2456,49 +2378,35 @@ function notifyError(error: unknown) {
             :disabled="operationPending"
           />
         </el-form-item>
-        <el-form-item label="Context 来源">
-          <el-radio-group v-model="generationForm.source_mode" :disabled="operationPending">
+        <el-form-item label="上下文来源">
+          <el-radio-group
+            :model-value="generationForm.context_source"
+            :disabled="operationPending"
+            @update:model-value="updateGenerationContextSource"
+          >
+            <el-radio-button value="run_graph">运行图</el-radio-button>
             <el-radio-button value="scenario_set">场景分类</el-radio-button>
-            <el-radio-button value="upload">上传文件</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="generationForm.source_mode === 'scenario_set'" label="来源场景分类">
+        <el-form-item v-if="generationForm.context_source === 'scenario_set'" label="来源场景分类">
           <RemoteResourceSelect
             v-model="generationForm.source_scenario_set_id"
             :options="scenarioSetSelectOptions"
-            placeholder="选择已校验通过场景分类"
+            placeholder="从场景分类采样上下文"
             :disabled="operationPending"
             :loading="scenarioSetOptionsLoading"
             @search="searchScenarioSetOptions"
             @visible-change="reloadScenarioSetsOnOpen"
           />
         </el-form-item>
-        <template v-else>
-          <el-form-item label="时刻表">
-            <el-upload
-              v-model:file-list="generationTimetableFiles"
-              :auto-upload="false"
-              :limit="1"
-              :on-change="setGenerationTimetableFile"
-              :on-exceed="warnSingleFile"
-              :disabled="operationPending"
-            >
-              <el-button :disabled="operationPending">上传时刻表</el-button>
-            </el-upload>
-          </el-form-item>
-          <el-form-item label="里程表">
-            <el-upload
-              v-model:file-list="generationMileageFiles"
-              :auto-upload="false"
-              :limit="1"
-              :on-change="setGenerationMileageFile"
-              :on-exceed="warnSingleFile"
-              :disabled="operationPending"
-            >
-              <el-button :disabled="operationPending">上传里程表</el-button>
-            </el-upload>
-          </el-form-item>
-        </template>
+        <el-form-item v-else label="指定运行图">
+          <RunGraphSelector
+            v-model="generationForm.run_graph"
+            :project-id="selectedProjectId"
+            placeholder="选择生成使用的运行图"
+            :disabled="operationPending"
+          />
+        </el-form-item>
         <el-form-item label="输出场景前缀">
           <el-input v-model="generationForm.output_prefix" :disabled="operationPending" />
         </el-form-item>

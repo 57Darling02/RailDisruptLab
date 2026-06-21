@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from core.project_layout import PROJECTS_ROOT, ProjectLayout, require_id, to_posix
 from core.scenario_config import scenario_files
+from backend.run_graphs import list_run_graph_sets
 
 
 def list_projects(projects_root: Path = PROJECTS_ROOT) -> List[Dict[str, object]]:
@@ -34,6 +35,7 @@ def get_project_state(project_id: str, projects_root: Path = PROJECTS_ROOT) -> D
         "project_id": layout.name,
         "root": to_posix(layout.root),
         "exists": layout.root.is_dir(),
+        "run_graph_sets": list_run_graph_sets(layout),
         "scenario_sets": list_project_scenario_sets(layout),
         "models": list_project_models(layout),
     }

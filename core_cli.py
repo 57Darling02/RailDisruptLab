@@ -9,11 +9,21 @@ from pathlib import Path
 from core.base_context import build_base_context, load_base_context, write_base_context
 from core.builder import build_model
 from core.exporter import export_lp
-from core.loader import load_config_payload, load_mileage_table, load_timetable, parse_scenario_config
+from core.loader import load_mileage_table, load_timetable, parse_scenario_config
 from core.postprocess import adjusted_timetable_rows
 from core.project_layout import to_posix
 from core.scenario_config import load_scenario_document
 from core.solver import GurobiSolveError, load_solution_values, solve_lp
+from core.types import (
+    AnalyzeConfig,
+    AppConfig,
+    BuildConfig,
+    ExportTimetableConfig,
+    InputConfig,
+    ProjectConfig,
+    SolveConfig,
+    SolverConfig,
+)
 from core.vae_learning_graph import (
     DEFAULT_EVENT_TIME_WINDOW,
     DEFAULT_EVENT_TOP_K,
@@ -119,28 +129,44 @@ def build_context(args: argparse.Namespace) -> None:
 def build_milp_case(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     case_id = output_dir.name
-    payload = {
-        "project": {
-            "name": case_id,
-            "output_dir": to_posix(output_dir),
-            "base_context_path": to_posix(Path(args.context)),
-        },
-        "build": {"scenarios": {"path": to_posix(Path(args.scenario))}},
-        "solver": {
-            "objective_delay_weight": args.objective_delay_weight,
-            "objective_mode": args.objective_mode,
-            "cancellation_enabled": bool(args.cancellation_enabled),
-            "cancellation_penalty_weight": args.cancellation_penalty_weight,
-            "arr_arr_headway_seconds": args.arr_arr_headway_seconds,
-            "dep_dep_headway_seconds": args.dep_dep_headway_seconds,
-            "dwell_seconds_at_stops": args.dwell_seconds_at_stops,
-            "big_m": args.big_m,
-            "tolerance_delay_seconds": args.tolerance_delay_seconds,
-        },
-        "solve": {},
-        "export-timetable": {},
-    }
-    config = load_config_payload(payload, output_dir / "case.yml")
+    context_path = Path(args.context)
+    context = load_base_context(context_path)
+    doc = load_scenario_document(Path(args.scenario), require_yaml())
+    scenarios = parse_scenario_config(doc.scenarios, context)
+    lp_path = output_dir / f"{case_id}.lp"
+    solution_path = output_dir / f"{case_id}.sol"
+    config = AppConfig(
+        project=ProjectConfig(name=case_id, output_dir=output_dir, base_context_path=context_path),
+        input=InputConfig(
+            timetable_path=context.source_timetable_path,
+            mileage_path=context.source_mileage_path,
+            timetable_sheet_name=context.timetable_sheet_name,
+            mileage_sheet_name=context.mileage_sheet_name,
+        ),
+        solver=SolverConfig(
+            objective_delay_weight=args.objective_delay_weight,
+            objective_mode=args.objective_mode,
+            cancellation_enabled=bool(args.cancellation_enabled),
+            cancellation_penalty_weight=args.cancellation_penalty_weight,
+            arr_arr_headway_seconds=args.arr_arr_headway_seconds,
+            dep_dep_headway_seconds=args.dep_dep_headway_seconds,
+            dwell_seconds_at_stops=args.dwell_seconds_at_stops,
+            big_m=args.big_m,
+            tolerance_delay_seconds=args.tolerance_delay_seconds,
+        ),
+        scenarios=scenarios,
+        build=BuildConfig(lp_path=lp_path),
+        solve=SolveConfig(lp_path=lp_path, solution_path=solution_path),
+        export_timetable=ExportTimetableConfig(
+            solution_path=solution_path,
+            timetable_path=output_dir / "adjusted_timetable.xlsx",
+        ),
+        analyze=AnalyzeConfig(
+            adjusted_timetable_path=output_dir / "adjusted_timetable.xlsx",
+            adjusted_timetable_sheet_name="Sheet1",
+        ),
+        base_context=context,
+    )
     model = build_model(config.base_context.translated, config)
     export_lp(model, config.build.lp_path)
     if args.summary_output:

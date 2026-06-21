@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -30,24 +28,46 @@ class ScenarioSetCreateRequest(BaseModel):
     exist_ok: bool = False
 
 
+class RunGraphSetCreateRequest(BaseModel):
+    run_graph_set_id: str
+    exist_ok: bool = False
+
+
+class RunGraphReferenceRequest(BaseModel):
+    set_id: str
+    graph_id: str
+    context_sha256: str
+
+    def to_domain(self):
+        from core.scenario_config import RunGraphReference
+
+        return RunGraphReference(
+            set_id=self.set_id,
+            graph_id=self.graph_id,
+            context_sha256=self.context_sha256,
+        )
+
+
 class ScenarioWriteRequest(BaseModel):
     scenario_id: str
+    run_graph: RunGraphReferenceRequest
     delays: List[Dict[str, object]] = []
     speed_limits: List[Dict[str, object]] = []
     overwrite: bool = False
 
 
 class ScenarioDisturbanceWriteRequest(BaseModel):
+    run_graph: Optional[RunGraphReferenceRequest] = None
     delays: List[Dict[str, object]] = []
     speed_limits: List[Dict[str, object]] = []
+    overwrite: bool = False
 
 
 class NormalGenerateRequest(BaseModel):
     scenario_set_id: str
     scenario_id_prefix: str = "sim"
     simulation_count: int = 1
-    source_timetable_path: str = ""
-    source_mileage_path: str = ""
+    run_graph: RunGraphReferenceRequest
     seed: int = TASK_DEFAULTS["normal_generate"]["seed"]
     delay_count: int = TASK_DEFAULTS["normal_generate"]["delay_count"]
     speed_count: int = TASK_DEFAULTS["normal_generate"]["speed_count"]
@@ -125,8 +145,7 @@ class GenerationRequest(BaseModel):
     checkpoint: str
     scenario_set_id: str
     source_scenario_set_id: str = TASK_DEFAULTS["generation"]["source_scenario_set_id"]
-    source_timetable_path: str = TASK_DEFAULTS["generation"]["source_timetable_path"]
-    source_mileage_path: str = TASK_DEFAULTS["generation"]["source_mileage_path"]
+    run_graph: Optional[RunGraphReferenceRequest] = None
     output_prefix: str = TASK_DEFAULTS["generation"]["output_prefix"]
     num_samples: int = TASK_DEFAULTS["generation"]["num_samples"]
     seed: int = TASK_DEFAULTS["generation"]["seed"]
@@ -188,6 +207,67 @@ def list_resource_options(
 @api.get("/projects/{project_id}/scenario-sets")
 def list_scenario_sets(project_id: str) -> List[Dict[str, object]]:
     return backend.list_scenario_sets(project_id)
+
+
+@api.get("/projects/{project_id}/run-graph-sets")
+def list_run_graph_sets(project_id: str) -> List[Dict[str, object]]:
+    return backend.list_run_graph_sets(project_id)
+
+
+@api.post("/projects/{project_id}/run-graph-sets")
+def create_run_graph_set(project_id: str, request: RunGraphSetCreateRequest) -> Dict[str, object]:
+    return backend.create_run_graph_set(project_id, request.run_graph_set_id, exist_ok=request.exist_ok)
+
+
+@api.delete("/projects/{project_id}/run-graph-sets/{run_graph_set_id}")
+def delete_run_graph_set(project_id: str, run_graph_set_id: str) -> Dict[str, object]:
+    return backend.delete_run_graph_set(project_id, run_graph_set_id)
+
+
+@api.get("/projects/{project_id}/run-graph-sets/{run_graph_set_id}/run-graphs")
+def list_run_graphs(project_id: str, run_graph_set_id: str) -> List[Dict[str, object]]:
+    return backend.list_run_graphs(project_id, run_graph_set_id)
+
+
+@api.post("/projects/{project_id}/run-graph-sets/{run_graph_set_id}/run-graphs")
+def create_run_graph(
+    project_id: str,
+    run_graph_set_id: str,
+    run_graph_id: str = Query(...),
+    overwrite: bool = Query(False),
+    timetable_file: UploadFile = File(...),
+    mileage_file: UploadFile = File(...),
+) -> Dict[str, object]:
+    return _task_response(
+        backend.create_run_graph(
+            project_id,
+            run_graph_set_id,
+            run_graph_id,
+            timetable_source=timetable_file.file,
+            mileage_source=mileage_file.file,
+            overwrite=overwrite,
+        )
+    )
+
+
+@api.get("/projects/{project_id}/run-graph-sets/{run_graph_set_id}/run-graphs/{run_graph_id}")
+def read_run_graph(project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
+    return backend.read_run_graph(project_id, run_graph_set_id, run_graph_id)
+
+
+@api.get("/projects/{project_id}/run-graph-sets/{run_graph_set_id}/run-graphs/{run_graph_id}/timetable")
+def read_run_graph_timetable(project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
+    return backend.read_run_graph_timetable(project_id, run_graph_set_id, run_graph_id)
+
+
+@api.delete("/projects/{project_id}/run-graph-sets/{run_graph_set_id}/run-graphs/{run_graph_id}")
+def delete_run_graph(project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
+    return backend.delete_run_graph(project_id, run_graph_set_id, run_graph_id)
+
+
+@api.get("/projects/{project_id}/run-graph-sets/{run_graph_set_id}/run-graphs/{run_graph_id}/options")
+def read_run_graph_options(project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
+    return backend.read_run_graph_options(project_id, run_graph_set_id, run_graph_id)
 
 
 @api.post("/projects/{project_id}/scenario-sets")
@@ -291,73 +371,16 @@ def read_scenario_options(project_id: str, scenario_set_id: str, scenario_id: st
     return backend.read_scenario_options(project_id, scenario_set_id, scenario_id)
 
 
-@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/upload")
-def create_scenario_case(
-    project_id: str,
-    scenario_set_id: str,
-    scenario_id: str = Query(...),
-    overwrite: bool = Query(False),
-    timetable_file: UploadFile = File(...),
-    mileage_file: UploadFile = File(...),
-) -> Dict[str, object]:
+@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios")
+def add_scenario(project_id: str, scenario_set_id: str, request: ScenarioWriteRequest) -> Dict[str, object]:
     return backend.create_scenario_case(
         project_id,
         scenario_set_id,
-        scenario_id,
-        timetable_content=timetable_file.file.read(),
-        mileage_content=mileage_file.file.read(),
-        overwrite=overwrite,
-    )
-
-
-@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/activate")
-def activate_scenario_case(
-    project_id: str,
-    scenario_set_id: str,
-    scenario_id: str,
-    timetable_file: Optional[UploadFile] = File(None),
-    mileage_file: Optional[UploadFile] = File(None),
-) -> Dict[str, object]:
-    return backend.activate_scenario_case(
-        project_id,
-        scenario_set_id,
-        scenario_id,
-        timetable_content=timetable_file.file.read() if timetable_file is not None else None,
-        mileage_content=mileage_file.file.read() if mileage_file is not None else None,
-    )
-
-
-@api.put("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/source")
-def update_scenario_case_sources(
-    project_id: str,
-    scenario_set_id: str,
-    scenario_id: str,
-    timetable_file: Optional[UploadFile] = File(None),
-    mileage_file: Optional[UploadFile] = File(None),
-) -> Dict[str, object]:
-    return backend.update_scenario_case_sources(
-        project_id,
-        scenario_set_id,
-        scenario_id,
-        timetable_content=timetable_file.file.read() if timetable_file is not None else None,
-        mileage_content=mileage_file.file.read() if mileage_file is not None else None,
-    )
-
-
-@api.get("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/source/{filename}")
-def download_scenario_source(project_id: str, scenario_set_id: str, scenario_id: str, filename: str) -> FileResponse:
-    path = backend.scenario_source_file_path(project_id, scenario_set_id, scenario_id, filename)
-    return FileResponse(path, filename=path.name)
-
-
-@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios")
-def add_scenario(project_id: str, scenario_set_id: str, request: ScenarioWriteRequest) -> Dict[str, object]:
-    return backend.update_scenario_disturbances(
-        project_id,
-        scenario_set_id,
         request.scenario_id,
+        run_graph=request.run_graph.to_domain(),
         delays=request.delays,
         speed_limits=request.speed_limits,
+        overwrite=request.overwrite,
     )
 
 
@@ -372,8 +395,10 @@ def update_scenario_disturbances(
         project_id,
         scenario_set_id,
         scenario_id,
+        run_graph=request.run_graph.to_domain() if request.run_graph else None,
         delays=request.delays,
         speed_limits=request.speed_limits,
+        overwrite=request.overwrite,
     )
 
 
@@ -395,60 +420,13 @@ def submit_normal_generate(project_id: str, request: NormalGenerateRequest) -> D
             scenario_set_id=request.scenario_set_id,
             scenario_id_prefix=request.scenario_id_prefix,
             simulation_count=request.simulation_count,
-            source_timetable_path=request.source_timetable_path,
-            source_mileage_path=request.source_mileage_path,
+            run_graph=request.run_graph.to_domain(),
             seed=request.seed,
             delay_count=request.delay_count,
             speed_count=request.speed_count,
             interruption_count=request.interruption_count,
             combo_per_type=request.combo_per_type,
             overwrite=request.overwrite,
-        )
-    )
-
-
-@api.post("/projects/{project_id}/tasks/normal-generate-upload")
-def submit_normal_generate_upload(
-    project_id: str,
-    scenario_set_id: str = Query(...),
-    scenario_id_prefix: str = Query("sim"),
-    simulation_count: int = Query(1),
-    seed: int = Query(TASK_DEFAULTS["normal_generate"]["seed"]),
-    delay_count: int = Query(TASK_DEFAULTS["normal_generate"]["delay_count"]),
-    speed_count: int = Query(TASK_DEFAULTS["normal_generate"]["speed_count"]),
-    interruption_count: int = Query(TASK_DEFAULTS["normal_generate"]["interruption_count"]),
-    combo_per_type: int = Query(TASK_DEFAULTS["normal_generate"]["combo_per_type"]),
-    overwrite: bool = Query(TASK_DEFAULTS["normal_generate"]["overwrite"]),
-    timetable_file: UploadFile = File(...),
-    mileage_file: UploadFile = File(...),
-) -> Dict[str, object]:
-    upload_id = f"normal_generate_{datetime.now():%Y%m%d%H%M%S%f}"
-    timetable_path = backend.save_task_upload_file(
-        project_id,
-        upload_id,
-        "timetable.xlsx",
-        timetable_file.file.read(),
-    )
-    mileage_path = backend.save_task_upload_file(
-        project_id,
-        upload_id,
-        "mileage.xlsx",
-        mileage_file.file.read(),
-    )
-    return _task_response(
-        backend.normal_generate(
-            project_id,
-            scenario_set_id=scenario_set_id,
-            scenario_id_prefix=scenario_id_prefix,
-            simulation_count=simulation_count,
-            source_timetable_path=timetable_path,
-            source_mileage_path=mileage_path,
-            seed=seed,
-            delay_count=delay_count,
-            speed_count=speed_count,
-            interruption_count=interruption_count,
-            combo_per_type=combo_per_type,
-            overwrite=overwrite,
         )
     )
 
@@ -531,60 +509,13 @@ def submit_generation(project_id: str, request: GenerationRequest) -> Dict[str, 
             request.checkpoint,
             request.scenario_set_id,
             source_scenario_set_id=request.source_scenario_set_id,
-            source_timetable_path=request.source_timetable_path,
-            source_mileage_path=request.source_mileage_path,
+            run_graph=request.run_graph.to_domain() if request.run_graph else None,
             output_prefix=request.output_prefix,
             num_samples=request.num_samples,
             seed=request.seed,
             device=request.device,
             speed_interruption_threshold=request.speed_interruption_threshold,
             overwrite=request.overwrite,
-        )
-    )
-
-
-@api.post("/projects/{project_id}/tasks/generation-upload")
-def submit_generation_upload(
-    project_id: str,
-    model_id: str = Query(...),
-    checkpoint: str = Query(...),
-    scenario_set_id: str = Query(...),
-    output_prefix: str = Query(TASK_DEFAULTS["generation"]["output_prefix"]),
-    num_samples: int = Query(TASK_DEFAULTS["generation"]["num_samples"]),
-    seed: int = Query(TASK_DEFAULTS["generation"]["seed"]),
-    device: str = Query(TASK_DEFAULTS["generation"]["device"]),
-    speed_interruption_threshold: float = Query(TASK_DEFAULTS["generation"]["speed_interruption_threshold"]),
-    overwrite: bool = Query(TASK_DEFAULTS["generation"]["overwrite"]),
-    timetable_file: UploadFile = File(...),
-    mileage_file: UploadFile = File(...),
-) -> Dict[str, object]:
-    upload_id = f"generation_{datetime.now():%Y%m%d%H%M%S%f}"
-    timetable_path = backend.save_task_upload_file(
-        project_id,
-        upload_id,
-        "timetable.xlsx",
-        timetable_file.file.read(),
-    )
-    mileage_path = backend.save_task_upload_file(
-        project_id,
-        upload_id,
-        "mileage.xlsx",
-        mileage_file.file.read(),
-    )
-    return _task_response(
-        backend.generation(
-            project_id,
-            model_id,
-            checkpoint,
-            scenario_set_id,
-            source_timetable_path=timetable_path,
-            source_mileage_path=mileage_path,
-            output_prefix=output_prefix,
-            num_samples=num_samples,
-            seed=seed,
-            device=device,
-            speed_interruption_threshold=speed_interruption_threshold,
-            overwrite=overwrite,
         )
     )
 

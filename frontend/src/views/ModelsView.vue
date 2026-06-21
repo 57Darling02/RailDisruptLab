@@ -830,34 +830,28 @@ function escapeRegExp(value: string) {
             </el-descriptions>
             <el-tabs class="dialog-section">
               <el-tab-pane label="节点池">
-                <el-scrollbar class="table-scroll" max-height="240px">
-                  <el-table :data="modelPoolRows" empty-text="暂无节点池信息">
-                    <el-table-column prop="id" label="ID" width="90" />
-                    <el-table-column prop="size" label="节点数" />
-                    <el-table-column prop="feature_dim" label="特征维度" />
-                  </el-table>
-                </el-scrollbar>
+                <el-table :data="modelPoolRows" max-height="240" table-layout="fixed" empty-text="暂无节点池信息">
+                  <el-table-column prop="id" label="ID" width="90" show-overflow-tooltip />
+                  <el-table-column prop="size" label="节点数" />
+                  <el-table-column prop="feature_dim" label="特征维度" />
+                </el-table>
               </el-tab-pane>
               <el-tab-pane label="边类型">
-                <el-scrollbar class="table-scroll" max-height="240px">
-                  <el-table :data="modelEdgeRows" empty-text="暂无边类型信息">
-                    <el-table-column prop="id" label="ID" width="90" />
-                    <el-table-column prop="source_pool_id" label="源节点池" />
-                    <el-table-column prop="target_pool_id" label="目标节点池" />
-                    <el-table-column prop="feature_dim" label="特征维度" />
-                  </el-table>
-                </el-scrollbar>
+                <el-table :data="modelEdgeRows" max-height="240" table-layout="fixed" empty-text="暂无边类型信息">
+                  <el-table-column prop="id" label="ID" width="90" show-overflow-tooltip />
+                  <el-table-column prop="source_pool_id" label="源节点池" show-overflow-tooltip />
+                  <el-table-column prop="target_pool_id" label="目标节点池" show-overflow-tooltip />
+                  <el-table-column prop="feature_dim" label="特征维度" />
+                </el-table>
               </el-tab-pane>
               <el-tab-pane label="预测任务">
-                <el-scrollbar class="table-scroll" max-height="240px">
-                  <el-table :data="modelTaskRows" empty-text="暂无任务信息">
-                    <el-table-column prop="id" label="ID" width="90" />
-                    <el-table-column prop="target_pool_id" label="目标节点池" />
-                    <el-table-column prop="max_slots" label="最大槽位" />
-                    <el-table-column prop="count_bounds" label="数量范围" />
-                    <el-table-column prop="param_dim" label="参数维度" />
-                  </el-table>
-                </el-scrollbar>
+                <el-table :data="modelTaskRows" max-height="240" table-layout="fixed" empty-text="暂无任务信息">
+                  <el-table-column prop="id" label="ID" width="90" show-overflow-tooltip />
+                  <el-table-column prop="target_pool_id" label="目标节点池" show-overflow-tooltip />
+                  <el-table-column prop="max_slots" label="最大槽位" />
+                  <el-table-column prop="count_bounds" label="数量范围" show-overflow-tooltip />
+                  <el-table-column prop="param_dim" label="参数维度" />
+                </el-table>
               </el-tab-pane>
             </el-tabs>
           </template>

@@ -408,6 +408,7 @@ export function buildMetricMeanChartOption(
 ): EChartsCoreOption {
   const plans = analysis?.adjustment_plans ?? []
   const metrics = orderedMetricKeys(analysis)
+  const metricLabels = metrics.map((metric) => solveMetricLabel(analysis, metric))
   const metricByLabel = new Map(metrics.map((metric) => [solveMetricLabel(analysis, metric), metric]))
   return {
     animationDuration: 300,
@@ -415,14 +416,29 @@ export function buildMetricMeanChartOption(
       trigger: 'axis',
       formatter: (params: unknown) => formatMetricMeanTooltip(params, metricByLabel),
     },
-    legend: { type: 'scroll', top: 0, data: metrics.map((metric) => solveMetricLabel(analysis, metric)) },
+    legend: {
+      type: 'scroll',
+      top: 0,
+      data: plans.map(adjustmentPlanLabel),
+    },
     grid: { top: 42, right: 20, bottom: 44, left: 64 },
-    xAxis: { type: 'category', data: plans.map(adjustmentPlanLabel) },
-    yAxis: { type: 'value', scale: true },
-    series: metrics.map((metric) => ({
-      name: solveMetricLabel(analysis, metric),
+    xAxis: { type: 'category', data: metricLabels },
+    yAxis: {
+      type: 'value',
+      scale: true,
+      axisLabel: {
+        formatter: (value: number) => formatNumber(value),
+      },
+    },
+    series: plans.map((plan) => ({
+      name: adjustmentPlanLabel(plan),
       type: 'bar',
-      data: plans.map((plan) => summaryMetricMean(plan, metric)),
+      data: metrics.map((metric) => summaryMetricMean(plan, metric)),
+      label: {
+        ...barValueLabel(),
+        formatter: (params: { value: unknown; dataIndex?: number }) =>
+          formatMetricValue(numberValue(params.value), metrics[params.dataIndex ?? -1] ?? ''),
+      },
     })),
   }
 }
@@ -430,11 +446,11 @@ export function buildMetricMeanChartOption(
 function formatMetricMeanTooltip(params: unknown, metricByLabel: Map<string, string>) {
   const items = Array.isArray(params) ? params : []
   const first = items[0] as { axisValue?: string } | undefined
+  const metric = metricByLabel.get(first?.axisValue ?? '') ?? ''
   return [
     first?.axisValue ?? '',
     ...items.map((item) => {
       const payload = item as { marker?: string; seriesName?: string; value?: unknown }
-      const metric = metricByLabel.get(payload.seriesName ?? '') ?? ''
       return `${payload.marker ?? ''}${payload.seriesName ?? ''}: ${formatMetricValue(numberValue(payload.value), metric)}`
     }),
   ].filter(Boolean).join('<br/>')
@@ -445,6 +461,7 @@ export function buildComparisonDeltaChartOption(
 ): EChartsCoreOption {
   const plans = analysis?.adjustment_plans ?? []
   const metrics = orderedMetricKeys(analysis)
+  const metricLabels = metrics.map((metric) => solveMetricLabel(analysis, metric))
   const baseline = baselineSolvePlan(analysis)
   return {
     animationDuration: 300,
@@ -455,21 +472,20 @@ export function buildComparisonDeltaChartOption(
     legend: {
       type: 'scroll',
       top: 0,
-      data: metrics.map((metric) => solveMetricLabel(analysis, metric)),
-      selected: defaultSelectedMetricLabels(analysis, metrics, 4),
+      data: plans.map(adjustmentPlanLabel),
     },
     grid: { top: 42, right: 20, bottom: 44, left: 64 },
-    xAxis: { type: 'category', data: plans.map(adjustmentPlanLabel) },
+    xAxis: { type: 'category', data: metricLabels },
     yAxis: {
       type: 'value',
       axisLabel: {
         formatter: (value: number) => formatPercent(value),
       },
     },
-    series: metrics.map((metric) => ({
-      name: solveMetricLabel(analysis, metric),
+    series: plans.map((plan) => ({
+      name: adjustmentPlanLabel(plan),
       type: 'bar',
-      data: plans.map((plan) => relativeMetricError(baseline, plan, metric)),
+      data: metrics.map((metric) => relativeMetricError(baseline, plan, metric)),
       label: {
         ...barValueLabel(),
         formatter: ({ value }: { value: unknown }) => formatPercent(numberValue(value)),
@@ -493,16 +509,6 @@ function relativeMetricError(
   const value = summaryMetricMean(plan, metric)
   if (baselineValue === null || value === null || Math.abs(baselineValue) <= 1e-12) return null
   return Math.abs(value - baselineValue) / Math.abs(baselineValue)
-}
-
-function defaultSelectedMetricLabels(
-  analysis: AdjustmentPlanSolveAnalysis | null,
-  metrics: string[],
-  limit: number,
-) {
-  return Object.fromEntries(
-    metrics.map((metric, index) => [solveMetricLabel(analysis, metric), index < limit]),
-  )
 }
 
 export function solveMetricLabel(

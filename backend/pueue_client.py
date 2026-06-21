@@ -303,6 +303,7 @@ daemon:
         action = str(payload.get("action") or task.get("label") or "")
         raw_params = payload.get("params", {})
         params = raw_params if isinstance(raw_params, dict) else {}
+        created_at = payload.get("created_at") or task.get("created_at")
 
         return {
             "id": task.get("id"),
@@ -316,7 +317,7 @@ daemon:
             "path": task.get("path"),
             "status": status_name or str(status),
             "status_detail": status_payload,
-            "created_at": task.get("created_at"),
+            "created_at": str(created_at) if created_at else None,
             "started_at": task_time(task, status_payload, "started_at", "start_at", "start"),
             "finished_at": task_time(task, status_payload, "finished_at", "end_at", "end"),
             "dependencies": task.get("dependencies", []),
@@ -378,6 +379,8 @@ def task_display_name(action: str, params: Dict[str, object], *, fallback: str) 
         return "删除项目"
     if action == "scenario_set_create":
         return titled(params, "scenario_set_id", "创建场景分类")
+    if action == "run_graph_build":
+        return titled(nested_run_graph_params(params), ("set_id", "graph_id"), "构建运行图")
     if action == "normal_generate":
         return titled(params, "scenario_set_id", "批量生成场景")
     if action == "scenario_add":
@@ -405,6 +408,11 @@ def task_location(params: Dict[str, object], keys: Union[str, Sequence[str]]) ->
         keys = (keys,)
     parts = [str(params.get(key, "") or "").strip() for key in keys]
     return "/".join(part for part in parts if part)
+
+
+def nested_run_graph_params(params: Dict[str, object]) -> Dict[str, object]:
+    value = params.get("run_graph")
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def tail_text(path: Path, *, lines: Optional[int] = None) -> str:

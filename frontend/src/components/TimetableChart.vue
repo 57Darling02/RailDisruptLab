@@ -5,21 +5,22 @@ import { graphic } from 'echarts/core'
 import ChartPanel from '@/components/ChartPanel.vue'
 import type { TimetableDisturbance, TimetableRowState } from '@/types'
 
-const PLAN_NORMAL_COLOR = '#2563eb'
-const PLAN_AFFECTED_COLOR = '#dc2626'
-const ADJUSTED_COLOR = '#16a34a'
-const STATION_LINE_COLOR = '#e5e7eb'
+const PLAN_NORMAL_COLOR = '#1f2937'
+const PLAN_AFFECTED_COLOR = '#b91c1c'
+const ADJUSTED_COLOR = '#0f766e'
+const STATION_LINE_COLOR = '#e7e5e4'
 const DISTURBANCE_COLOR = {
-  delay: '#f59e0b',
-  speed_limit: '#3b82f6',
-  interruption: '#ef4444',
+  delay: '#d97706',
+  speed_limit: '#4f46e5',
+  interruption: '#dc2626',
 } as const
 const DISTURBANCE_LABEL = {
   delay: '晚点',
   speed_limit: '限速',
   interruption: '中断',
 } as const
-const DELAY_BAND_HEIGHT = 0.16
+const DELAY_BAND_HEIGHT = 0.6
+const DELAY_MIN_BAND_PIXEL_HEIGHT = 12
 const SECTION_BAND_PADDING = 0.12
 const MIN_SECTION_BAND_HEIGHT = 0.18
 const TRAIN_SERIES_ID_PREFIX = 'train:'
@@ -201,7 +202,7 @@ interface CustomRenderApi {
 }
 
 interface DisturbanceRect {
-  value: [number, number, number, number, string]
+  value: [number, number, number, number, string, number]
   itemStyle: {
     color: string
     opacity: number
@@ -516,6 +517,7 @@ function disturbanceRect(
       end: start + seconds,
       yCenter: stationY,
       height: DELAY_BAND_HEIGHT,
+      minPixelHeight: DELAY_MIN_BAND_PIXEL_HEIGHT,
       detail: `${DISTURBANCE_LABEL.delay} ${item.train_id ?? ''} ${item.station} ${item.event_type ?? ''} +${item.seconds ?? 0}s`,
     })
   }
@@ -549,6 +551,7 @@ function makeRect({
   end,
   yCenter,
   height,
+  minPixelHeight = 0,
   detail,
 }: {
   type: keyof typeof DISTURBANCE_COLOR
@@ -556,14 +559,15 @@ function makeRect({
   end: number
   yCenter: number
   height: number
+  minPixelHeight?: number
   detail: string
 }): DisturbanceRect {
   const color = DISTURBANCE_COLOR[type]
   return {
-    value: [start, end, yCenter, height, detail],
+    value: [start, end, yCenter, height, detail, minPixelHeight],
     itemStyle: {
       color,
-      opacity: type === 'delay' ? 0.3 : 0.2,
+      opacity: disturbanceOpacity(type),
       borderColor: color,
       borderWidth: 1,
       borderType: type === 'interruption' ? 'dashed' : 'solid',
@@ -572,14 +576,21 @@ function makeRect({
   }
 }
 
+function disturbanceOpacity(type: keyof typeof DISTURBANCE_COLOR) {
+  if (type === 'delay') return 0.42
+  if (type === 'interruption') return 0.38
+  return 0.34
+}
+
 function renderDisturbanceRect(params: CustomRenderParams, api: CustomRenderApi) {
   const start = Number(api.value(0))
   const end = Number(api.value(1))
   const yCenter = Number(api.value(2))
   const heightUnits = Number(api.value(3))
+  const minPixelHeight = Math.max(0, Number(api.value(5)) || 0)
   const startCenter = api.coord([start, yCenter])
   const endCenter = api.coord([end, yCenter])
-  const bandHeight = Math.abs(api.size([0, Math.max(heightUnits, 0.08)])[1])
+  const bandHeight = Math.max(Math.abs(api.size([0, Math.max(heightUnits, 0.08)])[1]), minPixelHeight)
   const coordSys = params.coordSys
   if (!coordSys || !startCenter.every(Number.isFinite) || !endCenter.every(Number.isFinite)) return null
   const shape = graphic.clipRectByRect(

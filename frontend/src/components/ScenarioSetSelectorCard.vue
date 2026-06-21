@@ -40,6 +40,7 @@ const reloadingSelection = computed(
     placeholder="选择场景分类"
     add-label="新增场景分类"
     delete-label="删除场景分类"
+    add-in-dropdown
     :busy="busy"
     @update:model-value="emit('update:selectedScenarioSetId', $event)"
     @visible-change="emit('reloadScenarioSets', $event)"

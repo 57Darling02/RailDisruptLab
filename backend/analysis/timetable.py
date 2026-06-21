@@ -7,22 +7,24 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from backend.analysis.disturbances import read_scenario_disturbances
+from backend.run_graphs import resolve_run_graph_context
 from core.base_context import load_base_context
 from core.postprocess import adjusted_timetable_rows
 from core.project_layout import ProjectLayout, require_id, sanitize_id
+from core.scenario_config import load_scenario_document
 from core.solver import load_solution_values
 
 
-def materialize_case_timetable(case_dir: Path, index: int = 1) -> Dict[str, object]:
+def materialize_case_timetable(layout: ProjectLayout, case_dir: Path, index: int = 1) -> Dict[str, object]:
     started = datetime.now()
     case_id = sanitize_id(case_dir.name)
     sol_path = case_dir / f"{case_id}.sol"
-    context_path = case_dir / "context.json"
     output_path = case_dir / "adjusted_timetable.json"
     record = base_record(index, case_id)
     try:
         if not sol_path.is_file():
             raise FileNotFoundError(f"Solution not found: {sol_path}")
+        context_path = case_context_path(layout, case_dir)
         context = load_base_context(context_path)
         rows = adjusted_timetable_rows(
             context.translated,
@@ -33,7 +35,7 @@ def materialize_case_timetable(case_dir: Path, index: int = 1) -> Dict[str, obje
             {
                 "case_id": case_id,
                 "station_order": list(context.station_order),
-                "source": timetable_source_signature(case_dir),
+                "source": timetable_source_signature(layout, case_dir),
                 "rows": rows,
             },
         )
@@ -53,13 +55,13 @@ def read_case_timetable(layout: ProjectLayout, scenario_set_id: str, plan_id: st
     if not case_dir.is_dir():
         raise FileNotFoundError(f"Adjustment plan case not found: {case_dir}")
 
-    if not is_case_timetable_fresh(case_dir):
-        record = materialize_case_timetable(case_dir)
+    if not is_case_timetable_fresh(layout, case_dir):
+        record = materialize_case_timetable(layout, case_dir)
         if record.get("status") != "ok":
             raise RuntimeError(record_error(record))
 
     adjusted = read_json(case_dir / "adjusted_timetable.json")
-    context = load_base_context(case_dir / "context.json")
+    context = load_base_context(case_context_path(layout, case_dir))
     return {
         "project_id": layout.name,
         "scenario_set_id": scenario_set_id,
@@ -120,23 +122,30 @@ def elapsed_seconds(started: datetime) -> float:
     return round((datetime.now() - started).total_seconds(), 3)
 
 
-def is_case_timetable_fresh(case_dir: Path) -> bool:
+def is_case_timetable_fresh(layout: ProjectLayout, case_dir: Path) -> bool:
     path = case_dir / "adjusted_timetable.json"
     if not path.is_file():
         return False
     try:
         payload = read_json(path)
-        return payload.get("source") == timetable_source_signature(case_dir)
+        return payload.get("source") == timetable_source_signature(layout, case_dir)
     except (OSError, ValueError, json.JSONDecodeError):
         return False
 
 
-def timetable_source_signature(case_dir: Path) -> Dict[str, Dict[str, object]]:
+def timetable_source_signature(layout: ProjectLayout, case_dir: Path) -> Dict[str, Dict[str, object]]:
     case_id = sanitize_id(case_dir.name)
     return {
-        "context": file_signature(case_dir / "context.json"),
+        "context": file_signature(case_context_path(layout, case_dir)),
+        "scenario": file_signature(case_dir / "scenario.yml"),
         "solution": file_signature(case_dir / f"{case_id}.sol"),
     }
+
+
+def case_context_path(layout: ProjectLayout, case_dir: Path) -> Path:
+    scenario_path = case_dir / "scenario.yml"
+    doc = load_scenario_document(scenario_path, require_yaml())
+    return resolve_run_graph_context(layout, doc.run_graph)
 
 
 def file_signature(path: Path) -> Dict[str, object]:
@@ -171,3 +180,11 @@ def read_json(path: Path) -> Dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON must contain an object: {path}")
     return payload
+
+
+def require_yaml():
+    try:
+        import yaml
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("Missing dependency: pyyaml") from exc
+    return yaml
