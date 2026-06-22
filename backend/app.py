@@ -36,7 +36,7 @@ class RunGraphSetCreateRequest(BaseModel):
 class RunGraphReferenceRequest(BaseModel):
     set_id: str
     graph_id: str
-    context_sha256: str
+    context_sha256: str = ""
 
     def to_domain(self):
         from core.scenario_config import RunGraphReference
@@ -61,6 +61,10 @@ class ScenarioDisturbanceWriteRequest(BaseModel):
     delays: List[Dict[str, object]] = []
     speed_limits: List[Dict[str, object]] = []
     overwrite: bool = False
+
+
+class ScenarioValidationRequest(BaseModel):
+    run_graph: Optional[RunGraphReferenceRequest] = None
 
 
 class NormalGenerateRequest(BaseModel):
@@ -402,6 +406,21 @@ def update_scenario_disturbances(
     )
 
 
+@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}/validation")
+def validate_scenario(
+    project_id: str,
+    scenario_set_id: str,
+    scenario_id: str,
+    request: ScenarioValidationRequest,
+) -> Dict[str, object]:
+    return backend.validate_scenario_case(
+        project_id,
+        scenario_set_id,
+        scenario_id,
+        run_graph=request.run_graph.to_domain() if request.run_graph else None,
+    )
+
+
 @api.delete("/projects/{project_id}/scenario-sets/{scenario_set_id}/scenarios/{scenario_id}")
 def delete_scenario(project_id: str, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
     return _task_response(backend.delete_scenario(project_id, scenario_set_id, scenario_id))
@@ -429,6 +448,11 @@ def submit_normal_generate(project_id: str, request: NormalGenerateRequest) -> D
             overwrite=request.overwrite,
         )
     )
+
+
+@api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/tasks/validate-scenarios")
+def submit_validate_scenarios(project_id: str, scenario_set_id: str) -> Dict[str, object]:
+    return _task_response(backend.validate_scenario_set(project_id, scenario_set_id))
 
 
 @api.post("/projects/{project_id}/scenario-sets/{scenario_set_id}/adjustment-plans/{plan_id}/tasks/build")

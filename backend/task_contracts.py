@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping
 
 from backend.run_graphs import create_run_graph_from_files
+from backend.scenario_cases import validate_scenario_set
 from backend.scenarios import add_scenario, create_scenario_set, delete_scenario, normal_generate
 from core.project_layout import ProjectLayout, require_id, sanitize_id
 from core.scenario_config import RunGraphReference
@@ -24,6 +25,7 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "newproject": {},
     "deleteproject": {},
     "scenario_set_create": {"exist_ok": False},
+    "scenario_set_validate": {},
     "run_graph_build": {
         "run_graph": {},
         "timetable_path": "",
@@ -101,6 +103,7 @@ TASK_REQUIRED: Dict[str, tuple[str, ...]] = {
     "newproject": (),
     "deleteproject": (),
     "scenario_set_create": ("scenario_set_id",),
+    "scenario_set_validate": ("scenario_set_id",),
     "run_graph_build": ("run_graph", "timetable_path", "mileage_path"),
     "scenario_add": ("scenario_set_id", "scenario_id", "run_graph"),
     "scenario_delete": ("scenario_set_id", "scenario_id"),
@@ -229,6 +232,8 @@ def execute_task(action: str, layout: ProjectLayout, params: Mapping[str, Any]) 
             text_param(params, "scenario_set_id"),
             exist_ok=bool_param(params, "exist_ok"),
         )
+    elif action == "scenario_set_validate":
+        validate_scenario_set(layout, text_param(params, "scenario_set_id"))
     elif action == "run_graph_build":
         run_graph = run_graph_target_param(params, "run_graph")
         create_run_graph_from_files(
@@ -398,8 +403,6 @@ def run_graph_param(params: Mapping[str, Any], key: str) -> RunGraphReference:
     set_id = require_id(value.get("set_id"), f"{key}.set_id")
     graph_id = require_id(value.get("graph_id"), f"{key}.graph_id")
     context_sha256 = str(value.get("context_sha256") or "").strip()
-    if not context_sha256:
-        raise ValueError(f"Missing required task field: {key}.context_sha256")
     return RunGraphReference(set_id=set_id, graph_id=graph_id, context_sha256=context_sha256)
 
 

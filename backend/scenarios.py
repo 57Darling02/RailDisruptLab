@@ -13,6 +13,7 @@ from backend.scenario_cases import (
     delete_scenario_case,
     scenario_case_layout,
     update_scenario_disturbances,
+    validate_and_stamp_scenario,
     write_scenario_document as write_case_scenario_document,
 )
 
@@ -183,7 +184,10 @@ def normal_generate(
         )
         write_case_scenario_document(
             target,
-            ScenarioDocument(name=target.scenario_yml.stem, run_graph=run_graph, scenarios=payload),
+            validate_and_stamp_scenario(
+                layout,
+                ScenarioDocument(name=target.scenario_yml.stem, run_graph=run_graph, scenarios=payload),
+            ),
         )
         print(f"Generated simulated scenario: {target.scenario_yml}")
 

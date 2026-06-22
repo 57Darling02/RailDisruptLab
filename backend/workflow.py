@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List
 
 from backend.analysis.timetable import materialize_case_timetable
 from backend.run_graphs import load_scenario_context, resolve_run_graph_context
+from backend.scenario_cases import require_scenario_validation, validate_and_stamp_scenario
 from core.base_context import load_base_context
 from core.disturbance_graph import disturbance_graph_to_scenario
 from core.loader import parse_scenario_config
@@ -531,6 +532,7 @@ def generate_scenarios(
             )
         for record in decoded_outputs:
             write_generated_scenario(
+                layout,
                 record["target"],
                 str(record["scenario_id"]),
                 record["scenarios"],
@@ -559,6 +561,7 @@ def generation_target_cases(
 
 
 def write_generated_scenario(
+    layout: ProjectLayout,
     target: Any,
     scenario_id: str,
     scenarios: ScenarioConfig,
@@ -570,7 +573,20 @@ def write_generated_scenario(
         if not overwrite:
             raise FileExistsError(f"Generated scenario already exists: {target.scenario_yml}")
         target.scenario_yml.unlink()
-    write_yaml(target.scenario_yml, scenario_config_to_yaml(scenarios, run_graph))
+    canonical = scenario_config_to_yaml(scenarios, run_graph)
+    stamped = validate_and_stamp_scenario(
+        layout,
+        ScenarioDocument(
+            name=scenario_id,
+            run_graph=run_graph,
+            scenarios={
+                "delays": canonical.get("delays", []) or [],
+                "speed_limits": canonical.get("speed_limits", []) or [],
+            },
+            path=target.scenario_yml,
+        ),
+    )
+    write_yaml(target.scenario_yml, scenario_document_to_yaml(stamped))
 
 
 def source_run_graph_for_context(records: List[Dict[str, object]], context_path: Path) -> RunGraphReference:
@@ -930,14 +946,7 @@ def validate_scenario_documents(layout: ProjectLayout, docs: List[ScenarioDocume
             missing.append(doc.name)
             continue
         try:
-            context = load_base_context(resolve_run_graph_context(layout, doc.run_graph))
-            parse_scenario_config(
-                {
-                    "delays": doc.scenarios.get("delays", []) or [],
-                    "speed_limits": doc.scenarios.get("speed_limits", []) or [],
-                },
-                context,
-            )
+            require_scenario_validation(layout, doc)
         except Exception as exc:
             failed.append(f"{doc.name}: {exc}")
     if missing:

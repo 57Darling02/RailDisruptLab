@@ -9,6 +9,7 @@ defineProps<{
 const emit = defineEmits<{
   createScenario: []
   simulateScenario: []
+  validateScenarios: []
   deleteScenario: [scenarioId: string]
   viewScenario: [scenarioId: string]
 }>()
@@ -30,6 +31,27 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
   }
   return labels[item.category] ?? item.category
 }
+
+function validationTagType(item: ScenarioVisualizationItem) {
+  const status = item.validation_state?.status
+  if (item.yaml_status === 'invalid' || status === 'invalid') return 'danger'
+  if (status === 'valid') return 'success'
+  return 'info'
+}
+
+function validationLabel(item: ScenarioVisualizationItem) {
+  if (item.yaml_status === 'invalid') return '文件错误'
+  const status = item.validation_state?.status
+  if (status === 'valid') return '校验通过'
+  if (status === 'stale') return '需重新校验'
+  if (status === 'pending') return '未校验'
+  return '校验失败'
+}
+
+function validationReason(item: ScenarioVisualizationItem) {
+  if (item.yaml_reason) return item.yaml_reason
+  return item.validation_state?.reason || '-'
+}
 </script>
 
 <template>
@@ -38,6 +60,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
       <div class="card-header">
         <span>场景资源</span>
         <el-space>
+          <el-button :disabled="busy || !scenarios.length" @click="emit('validateScenarios')">批量校验</el-button>
           <el-button type="primary" :disabled="busy" @click="emit('createScenario')">新增场景</el-button>
           <el-button type="primary" :disabled="busy" @click="emit('simulateScenario')">模拟场景</el-button>
         </el-space>
@@ -63,6 +86,11 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
           <el-tag :type="scenarioTagType(row.category)" size="small">{{ scenarioTypeLabel(row) }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="校验" width="120">
+        <template #default="{ row }">
+          <el-tag :type="validationTagType(row)" size="small">{{ validationLabel(row) }}</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="晚点" width="90">
         <template #default="{ row }">{{ row.counts.delay }}</template>
       </el-table-column>
@@ -73,7 +101,7 @@ function scenarioTypeLabel(item: ScenarioVisualizationItem) {
         <template #default="{ row }">{{ row.counts.interruption }}</template>
       </el-table-column>
       <el-table-column label="原因" width="180" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.yaml_reason || '-' }}</template>
+        <template #default="{ row }">{{ validationReason(row) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="90">
         <template #default="{ row }">

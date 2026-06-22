@@ -45,7 +45,21 @@ export type ScenarioYamlStatus = 'valid' | 'invalid'
 export interface RunGraphReference {
   set_id: string
   graph_id: string
+  context_sha256?: string
+}
+
+export type ScenarioValidationStatus = 'valid' | 'stale' | 'pending' | 'invalid'
+
+export interface ScenarioValidationState {
+  status: ScenarioValidationStatus
+  reason: string
   context_sha256: string
+  disturbances_sha256: string
+  validation: {
+    context_sha256?: string
+    disturbances_sha256?: string
+    validated_at?: string
+  }
 }
 
 export interface RunGraphSet {
@@ -93,6 +107,7 @@ export interface ScenarioSummary {
   yaml_status?: ScenarioYamlStatus
   yaml_reason?: string
   run_graph?: RunGraphReference | null
+  validation_state?: ScenarioValidationState
   counts?: {
     delay: number
     speed_limit: number
@@ -120,6 +135,7 @@ export interface ScenarioDetail {
   yaml_status: ScenarioYamlStatus
   yaml_reason: string
   run_graph: RunGraphReference | null
+  validation_state: ScenarioValidationState
   counts: {
     delay: number
     speed_limit: number
@@ -302,6 +318,7 @@ export interface ScenarioVisualizationItem {
   yaml_status: ScenarioYamlStatus
   yaml_reason: string
   run_graph: RunGraphReference | null
+  validation_state?: ScenarioValidationState
   disturbances: TimetableDisturbance[]
   counts: {
     delay: number

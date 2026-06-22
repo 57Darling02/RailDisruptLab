@@ -151,7 +151,6 @@ function updatePath(value: unknown) {
   const runGraph = {
     set_id: summary.run_graph_set_id,
     graph_id: summary.run_graph_id,
-    context_sha256: summary.context_sha256,
   }
   emit('update:modelValue', runGraph)
   emit('change', runGraph, summary)

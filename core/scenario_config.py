@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+import hashlib
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -11,7 +13,7 @@ from core.types import ScenarioConfig
 
 SCENARIO_EXTENSIONS = {".yaml", ".yml"}
 SCENARIO_CASES_DIRNAME = "scenarios"
-SCENARIO_ALLOWED_KEYS = {"run_graph", "delays", "speed_limits"}
+SCENARIO_ALLOWED_KEYS = {"run_graph", "validation", "delays", "speed_limits"}
 SCENARIO_EVENTS_KEYS = {"delays", "speed_limits"}
 DELAY_ALLOWED_KEYS = {"train_id", "station", "event_type", "seconds"}
 SPEED_LIMIT_ALLOWED_KEYS = {"start_station", "end_station", "start_time", "duration", "limit_speed"}
@@ -23,14 +25,33 @@ PROJECTS_ROOT = REPO_ROOT / "projects"
 class RunGraphReference:
     set_id: str
     graph_id: str
-    context_sha256: str
+    context_sha256: str = ""
 
-    def to_payload(self) -> Dict[str, object]:
-        return {
+    def to_payload(self, *, include_context_sha256: bool = True) -> Dict[str, object]:
+        payload: Dict[str, object] = {
             "set_id": self.set_id,
             "graph_id": self.graph_id,
-            "context_sha256": self.context_sha256,
         }
+        if include_context_sha256 and self.context_sha256:
+            payload["context_sha256"] = self.context_sha256
+        return payload
+
+
+@dataclass(frozen=True)
+class ScenarioValidation:
+    context_sha256: str = ""
+    disturbances_sha256: str = ""
+    validated_at: str = ""
+
+    def to_payload(self) -> Dict[str, object]:
+        payload: Dict[str, object] = {}
+        if self.context_sha256:
+            payload["context_sha256"] = self.context_sha256
+        if self.disturbances_sha256:
+            payload["disturbances_sha256"] = self.disturbances_sha256
+        if self.validated_at:
+            payload["validated_at"] = self.validated_at
+        return payload
 
 
 @dataclass(frozen=True)
@@ -39,6 +60,7 @@ class ScenarioDocument:
     run_graph: RunGraphReference
     scenarios: Dict[str, object]
     path: Optional[Path] = None
+    validation: ScenarioValidation = field(default_factory=ScenarioValidation)
 
 
 def load_scenarios_for_config(value: object, owner_path: Path, yaml: Any) -> Dict[str, object]:
@@ -113,6 +135,7 @@ def scenario_document_from_payload(
     return ScenarioDocument(
         name=sanitize_id(fallback_name),
         run_graph=run_graph_reference_from_payload(payload.get("run_graph"), path or Path(fallback_name)),
+        validation=scenario_validation_from_payload(payload, path or Path(fallback_name)),
         scenarios={
             "delays": scenario_event_list(payload.get("delays"), "delays", path or Path(fallback_name)),
             "speed_limits": scenario_event_list(payload.get("speed_limits"), "speed_limits", path or Path(fallback_name)),
@@ -121,9 +144,17 @@ def scenario_document_from_payload(
     )
 
 
-def scenario_config_to_yaml(scenarios: ScenarioConfig, run_graph: RunGraphReference) -> Dict[str, object]:
-    return {
-        "run_graph": run_graph.to_payload(),
+def scenario_config_to_yaml(
+    scenarios: ScenarioConfig,
+    run_graph: RunGraphReference,
+    validation: ScenarioValidation | None = None,
+) -> Dict[str, object]:
+    payload: Dict[str, object] = {
+        "run_graph": run_graph.to_payload(include_context_sha256=False),
+    }
+    if validation is not None and validation.to_payload():
+        payload["validation"] = validation.to_payload()
+    payload.update({
         "delays": [
             {
                 "train_id": item.train_id,
@@ -143,15 +174,30 @@ def scenario_config_to_yaml(scenarios: ScenarioConfig, run_graph: RunGraphRefere
             }
             for item in scenarios.speed_limits
         ],
-    }
+    })
+    return payload
 
 
 def scenario_document_to_yaml(doc: ScenarioDocument) -> Dict[str, object]:
-    return {
-        "run_graph": doc.run_graph.to_payload(),
+    payload: Dict[str, object] = {
+        "run_graph": doc.run_graph.to_payload(include_context_sha256=False),
+    }
+    if doc.validation.to_payload():
+        payload["validation"] = doc.validation.to_payload()
+    payload.update({
         "delays": copy.deepcopy(doc.scenarios.get("delays", []) or []),
         "speed_limits": copy.deepcopy(doc.scenarios.get("speed_limits", []) or []),
+    })
+    return payload
+
+
+def scenario_disturbances_sha256(scenarios: Dict[str, object]) -> str:
+    payload = {
+        "delays": copy.deepcopy(scenarios.get("delays", []) or []),
+        "speed_limits": copy.deepcopy(scenarios.get("speed_limits", []) or []),
     }
+    content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def scenario_events_from_payload(payload: object, owner: Path) -> Dict[str, object]:
@@ -224,14 +270,28 @@ def run_graph_reference_from_payload(value: object, owner: Path) -> RunGraphRefe
         raise ValueError(f"Scenario run_graph must be a YAML object: {owner}")
     set_id = sanitize_id(str(value.get("set_id") or ""))
     graph_id = sanitize_id(str(value.get("graph_id") or ""))
-    context_sha256 = str(value.get("context_sha256") or "").strip()
     if not set_id:
         raise ValueError(f"Scenario run_graph.set_id is required: {owner}")
     if not graph_id:
         raise ValueError(f"Scenario run_graph.graph_id is required: {owner}")
-    if not context_sha256:
-        raise ValueError(f"Scenario run_graph.context_sha256 is required: {owner}")
-    return RunGraphReference(set_id=set_id, graph_id=graph_id, context_sha256=context_sha256)
+    return RunGraphReference(set_id=set_id, graph_id=graph_id)
+
+
+def scenario_validation_from_payload(payload: Dict[str, object], owner: Path) -> ScenarioValidation:
+    value = payload.get("validation")
+    if value is None:
+        run_graph = payload.get("run_graph")
+        legacy_context_sha256 = ""
+        if isinstance(run_graph, dict):
+            legacy_context_sha256 = str(run_graph.get("context_sha256") or "").strip()
+        return ScenarioValidation(context_sha256=legacy_context_sha256)
+    if not isinstance(value, dict):
+        raise ValueError(f"Scenario validation must be a YAML object: {owner}")
+    return ScenarioValidation(
+        context_sha256=str(value.get("context_sha256") or "").strip(),
+        disturbances_sha256=str(value.get("disturbances_sha256") or "").strip(),
+        validated_at=str(value.get("validated_at") or "").strip(),
+    )
 
 
 def scenario_reference_path(value: object, owner_path: Path) -> Optional[Path]:

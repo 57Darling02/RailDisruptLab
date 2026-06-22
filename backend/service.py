@@ -18,6 +18,7 @@ from backend.scenario_cases import (
     read_scenario_set_analysis,
     read_scenario_timetable,
     update_scenario_disturbances,
+    validate_scenario_case,
 )
 from backend.analysis.timetable import read_case_timetable
 from backend.lifecycle import delete_adjustment_plan, delete_model, delete_scenario_set, ensure_no_active_reference
@@ -310,6 +311,22 @@ class RailGraphBackend:
             overwrite=overwrite,
         )
 
+    def validate_scenario_case(
+        self,
+        project_id: str,
+        scenario_set_id: str,
+        scenario_id: str,
+        *,
+        run_graph: RunGraphReference | None = None,
+    ) -> Dict[str, object]:
+        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id)
+        return validate_scenario_case(
+            self.repository.layout(project_id),
+            scenario_set_id,
+            scenario_id,
+            run_graph=run_graph,
+        )
+
     def ensure_no_scenario_case_conflict(
         self,
         project_id: str,
@@ -496,6 +513,16 @@ class RailGraphBackend:
             params={"scenario_set_id": scenario_set_id},
         )
         return delete_scenario_set(self.repository.layout(project_id), scenario_set_id)
+
+    def validate_scenario_set(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
+        project_id = normalize_project_id(project_id)
+        scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+        return self.submit_task(
+            project_id,
+            "scenario_set_validate",
+            {"scenario_set_id": scenario_set_id},
+            label="scenario_set_validate",
+        )
 
     def add_scenario(
         self,

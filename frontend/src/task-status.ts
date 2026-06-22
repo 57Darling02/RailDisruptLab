@@ -53,6 +53,7 @@ export function taskDisplayLabel(task: Task | string | null | undefined) {
       normal_generate: '模拟场景',
       run_graph_build: '构建运行图',
       scenario_set_create: '创建场景分类',
+      scenario_set_validate: '批量校验场景',
       scenario_add: '新增场景',
       scenario_delete: '删除场景',
       build: '构建 MILP',

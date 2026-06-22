@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -15,23 +17,29 @@ from backend.analysis.timetable import plan_rows
 from backend.run_graphs import (
     context_stats,
     load_scenario_context,
+    run_graph_context_sha256,
     resolve_run_graph_context,
     read_run_graph,
-    validate_scenario_document,
 )
 from core.loader import parse_scenario_config
 from core.project_layout import ProjectLayout, ScenarioCaseLayout, require_id, sanitize_id, to_posix
 from core.scenario_config import (
     RunGraphReference,
     ScenarioDocument,
+    ScenarioValidation,
     load_scenario_document,
     scenario_config_to_yaml,
     scenario_document_to_yaml,
+    scenario_disturbances_sha256,
     scenario_files,
 )
 
 VALID_STATUS = "valid"
 INVALID_STATUS = "invalid"
+VALIDATION_VALID = "valid"
+VALIDATION_STALE = "stale"
+VALIDATION_PENDING = "pending"
+VALIDATION_INVALID = "invalid"
 
 
 def create_scenario_case(
@@ -56,7 +64,7 @@ def create_scenario_case(
         scenarios={"delays": list(delays or []), "speed_limits": list(speed_limits or [])},
         path=case.scenario_yml,
     )
-    normalized = normalize_scenario_document(layout, doc) if has_disturbances(doc) else validate_empty_scenario(layout, doc)
+    normalized = validate_and_stamp_scenario(layout, doc)
     write_scenario_document(case, normalized)
     return scenario_case_light_summary(layout, scenario_set_id, scenario_id)
 
@@ -70,7 +78,10 @@ def read_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id:
     if doc is not None:
         scenario_payload = scenario_document_to_yaml(doc)
     if doc is not None:
-        run_graph_detail = read_run_graph(layout, doc.run_graph.set_id, doc.run_graph.graph_id)
+        try:
+            run_graph_detail = read_run_graph(layout, doc.run_graph.set_id, doc.run_graph.graph_id)
+        except Exception:
+            run_graph_detail = None
     return {
         **summary,
         "context_stats": context_stats_from_run_graph_detail(run_graph_detail),
@@ -82,7 +93,7 @@ def read_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id:
 def read_scenario_timetable(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> Dict[str, object]:
     case = existing_scenario_case(layout, scenario_set_id, scenario_id)
     doc = load_case_scenario_document(case, scenario_id)
-    validate_scenario_document(layout, doc)
+    require_scenario_validation(layout, doc)
     context = load_scenario_context(layout, doc)
     return {
         "project_id": layout.name,
@@ -102,8 +113,9 @@ def read_scenario_set_analysis(layout: ProjectLayout, scenario_set_id: str) -> D
     if not root.is_dir():
         raise FileNotFoundError(f"Scenario category not found: {root}")
 
+    sha_cache: Dict[tuple[str, str], str] = {}
     scenarios = [
-        scenario_case_visualization_item(layout, scenario_set_id, path)
+        scenario_case_visualization_item(layout, scenario_set_id, path, sha_cache=sha_cache)
         for path in scenario_files(root)
     ]
     all_disturbances = [
@@ -130,6 +142,8 @@ def scenario_case_visualization_item(
     layout: ProjectLayout,
     scenario_set_id: str,
     scenario_path: Path,
+    *,
+    sha_cache: Dict[tuple[str, str], str] | None = None,
 ) -> Dict[str, object]:
     scenario_id = sanitize_id(scenario_path.stem)
     try:
@@ -150,6 +164,8 @@ def scenario_case_visualization_item(
         "yaml_status": status,
         "yaml_reason": reason,
         "run_graph": doc.run_graph.to_payload() if doc is not None else None,
+        "validation": doc.validation.to_payload() if doc is not None else None,
+        "validation_state": scenario_validation_state(layout, doc, sha_cache=sha_cache) if doc is not None else invalid_validation_state(reason),
         "disturbances": disturbances,
         "counts": counts,
         "category": scenario_category(disturbances),
@@ -162,6 +178,7 @@ def scenario_case_summary(
     scenario_id: str,
     *,
     validate_context: bool = False,
+    sha_cache: Dict[tuple[str, str], str] | None = None,
 ) -> Dict[str, object]:
     scenario_id = require_id(scenario_id, "scenario_id")
     case = existing_scenario_case(layout, scenario_set_id, scenario_id)
@@ -172,6 +189,7 @@ def scenario_case_summary(
         layout=layout if validate_context else None,
     )
     doc = check.get("_document") if isinstance(check.get("_document"), ScenarioDocument) else None
+    validation_state = scenario_validation_state(layout, doc, sha_cache=sha_cache) if doc is not None else invalid_validation_state(check["yaml_reason"])
     scenarios = doc.scenarios if doc is not None else {"delays": [], "speed_limits": []}
     speed_limit_count, interruption_count = speed_limit_counts(scenarios.get("speed_limits", []) or [])
     counts = {
@@ -188,6 +206,8 @@ def scenario_case_summary(
         "yaml_status": check["yaml_status"],
         "yaml_reason": check["yaml_reason"],
         "run_graph": doc.run_graph.to_payload() if doc is not None else None,
+        "validation": doc.validation.to_payload() if doc is not None else None,
+        "validation_state": validation_state,
         "counts": counts,
         "delay_count": counts["delay"],
         "speed_limit_count": counts["speed_limit"],
@@ -200,8 +220,9 @@ def scenario_case_light_summary(layout: ProjectLayout, scenario_set_id: str, sce
 
 
 def list_scenario_cases(layout: ProjectLayout, scenario_set_id: str) -> List[Dict[str, object]]:
+    sha_cache: Dict[tuple[str, str], str] = {}
     return [
-        scenario_case_light_summary(layout, scenario_set_id, path.stem)
+        scenario_case_summary(layout, scenario_set_id, path.stem, sha_cache=sha_cache)
         for path in scenario_files(layout.scenario_set(scenario_set_id).root)
     ]
 
@@ -256,9 +277,62 @@ def update_scenario_disturbances(
         scenarios={"delays": list(delays), "speed_limits": list(speed_limits)},
         path=case.scenario_yml,
     )
-    normalized = normalize_scenario_document(layout, doc)
+    write_scenario_document(case, clear_scenario_validation(doc))
+    return read_scenario_case(layout, scenario_set_id, scenario_id)
+
+
+def validate_scenario_case(
+    layout: ProjectLayout,
+    scenario_set_id: str,
+    scenario_id: str,
+    *,
+    run_graph: RunGraphReference | None = None,
+) -> Dict[str, object]:
+    case = existing_scenario_case(layout, scenario_set_id, scenario_id)
+    existing = load_case_scenario_document(case, scenario_id)
+    doc = ScenarioDocument(
+        name=existing.name,
+        run_graph=run_graph or existing.run_graph,
+        scenarios=existing.scenarios,
+        path=case.scenario_yml,
+    )
+    normalized = validate_and_stamp_scenario(layout, doc)
     write_scenario_document(case, normalized)
     return read_scenario_case(layout, scenario_set_id, scenario_id)
+
+
+def validate_scenario_set(layout: ProjectLayout, scenario_set_id: str) -> Dict[str, object]:
+    scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
+    root = layout.scenario_set(scenario_set_id).root
+    if not root.is_dir():
+        raise FileNotFoundError(f"Scenario category not found: {root}")
+    paths = scenario_files(root)
+    records = []
+    failed = []
+    context_cache: Dict[tuple[str, str, str], object] = {}
+    sha_cache: Dict[tuple[str, str], str] = {}
+    for index, path in enumerate(paths, start=1):
+        scenario_id = sanitize_id(path.stem)
+        try:
+            case = scenario_case_layout(layout, scenario_set_id, scenario_id)
+            doc = load_case_scenario_document(case, scenario_id)
+            normalized = validate_and_stamp_scenario(layout, doc, context_cache=context_cache, sha_cache=sha_cache)
+            write_scenario_document(case, normalized)
+            record = {"index": index, "scenario_id": scenario_id, "status": "ok", "error": ""}
+            print(f"[{index}/{len(paths)}] ok | {scenario_id}")
+        except Exception as exc:
+            record = {"index": index, "scenario_id": scenario_id, "status": "failed", "error": str(exc)}
+            failed.append(record)
+            print(f"[{index}/{len(paths)}] failed | {scenario_id}: {exc}")
+        records.append(record)
+    if failed:
+        first = failed[0]
+        raise RuntimeError(
+            f"Scenario validation failed for {len(failed)} of {len(paths)} scenario(s). "
+            f"First failure: {first['scenario_id']}: {first['error']}"
+        )
+    print(f"Validated {len(paths)} scenario(s): {scenario_set_id}")
+    return {"scenario_set_id": scenario_set_id, "total": len(paths), "failed": 0, "records": records}
 
 
 def delete_scenario_case(layout: ProjectLayout, scenario_set_id: str, scenario_id: str) -> None:
@@ -286,11 +360,18 @@ def load_case_scenario_document(case: ScenarioCaseLayout, scenario_id: str) -> S
         run_graph=doc.run_graph,
         scenarios=doc.scenarios,
         path=case.scenario_yml,
+        validation=doc.validation,
     )
 
 
-def normalize_scenario_document(layout: ProjectLayout, doc: ScenarioDocument) -> ScenarioDocument:
-    context = load_scenario_context(layout, doc)
+def normalize_scenario_document(
+    layout: ProjectLayout,
+    doc: ScenarioDocument,
+    *,
+    context_cache: Dict[tuple[str, str, str], object] | None = None,
+    sha_cache: Dict[tuple[str, str], str] | None = None,
+) -> ScenarioDocument:
+    context = cached_load_scenario_context(layout, doc, context_cache)
     scenarios = parse_scenario_config(
         {
             "delays": list_payload(doc.scenarios.get("delays")),
@@ -299,20 +380,173 @@ def normalize_scenario_document(layout: ProjectLayout, doc: ScenarioDocument) ->
         context,
     )
     canonical = scenario_config_to_yaml(scenarios, doc.run_graph)
+    normalized_scenarios = {
+        "delays": list(canonical.get("delays", []) or []),
+        "speed_limits": list(canonical.get("speed_limits", []) or []),
+    }
+    validation = validation_stamp(
+        layout,
+        ScenarioDocument(name=doc.name, run_graph=doc.run_graph, scenarios=normalized_scenarios, path=doc.path),
+        sha_cache=sha_cache,
+    )
     return ScenarioDocument(
         name=doc.name,
         run_graph=doc.run_graph,
-        scenarios={
-            "delays": list(canonical.get("delays", []) or []),
-            "speed_limits": list(canonical.get("speed_limits", []) or []),
-        },
+        scenarios=normalized_scenarios,
+        path=doc.path,
+        validation=validation,
+    )
+
+
+def validate_empty_scenario(
+    layout: ProjectLayout,
+    doc: ScenarioDocument,
+    *,
+    sha_cache: Dict[tuple[str, str], str] | None = None,
+) -> ScenarioDocument:
+    resolve_run_graph_context(layout, doc.run_graph)
+    return ScenarioDocument(
+        name=doc.name,
+        run_graph=doc.run_graph,
+        scenarios=doc.scenarios,
+        path=doc.path,
+        validation=validation_stamp(layout, doc, sha_cache=sha_cache),
+    )
+
+
+def validate_and_stamp_scenario(
+    layout: ProjectLayout,
+    doc: ScenarioDocument,
+    *,
+    context_cache: Dict[tuple[str, str, str], object] | None = None,
+    sha_cache: Dict[tuple[str, str], str] | None = None,
+) -> ScenarioDocument:
+    if has_disturbances(doc):
+        return normalize_scenario_document(layout, doc, context_cache=context_cache, sha_cache=sha_cache)
+    return validate_empty_scenario(layout, doc, sha_cache=sha_cache)
+
+
+def clear_scenario_validation(doc: ScenarioDocument) -> ScenarioDocument:
+    return ScenarioDocument(
+        name=doc.name,
+        run_graph=RunGraphReference(set_id=doc.run_graph.set_id, graph_id=doc.run_graph.graph_id),
+        scenarios=doc.scenarios,
         path=doc.path,
     )
 
 
-def validate_empty_scenario(layout: ProjectLayout, doc: ScenarioDocument) -> ScenarioDocument:
-    resolve_run_graph_context(layout, doc.run_graph)
-    return doc
+def validation_stamp(
+    layout: ProjectLayout,
+    doc: ScenarioDocument,
+    *,
+    sha_cache: Dict[tuple[str, str], str] | None = None,
+) -> ScenarioValidation:
+    return ScenarioValidation(
+        context_sha256=cached_run_graph_context_sha256(layout, doc.run_graph, sha_cache),
+        disturbances_sha256=scenario_disturbances_sha256(doc.scenarios),
+        validated_at=datetime.now().isoformat(timespec="seconds"),
+    )
+
+
+def scenario_validation_state(
+    layout: ProjectLayout,
+    doc: ScenarioDocument,
+    *,
+    sha_cache: Dict[tuple[str, str], str] | None = None,
+) -> Dict[str, object]:
+    try:
+        actual_context_sha256 = cached_run_graph_context_sha256(layout, doc.run_graph, sha_cache)
+    except Exception as exc:
+        return invalid_validation_state(str(exc))
+    actual_disturbances_sha256 = scenario_disturbances_sha256(doc.scenarios)
+    validation = doc.validation
+    if not validation.context_sha256 and not validation.disturbances_sha256:
+        return validation_state_payload(
+            VALIDATION_PENDING,
+            "未校验",
+            actual_context_sha256=actual_context_sha256,
+            actual_disturbances_sha256=actual_disturbances_sha256,
+            validation=validation,
+        )
+    reasons = []
+    if validation.context_sha256 != actual_context_sha256:
+        reasons.append("运行图已变化")
+    if validation.disturbances_sha256 != actual_disturbances_sha256:
+        reasons.append("扰动已修改")
+    if reasons:
+        return validation_state_payload(
+            VALIDATION_STALE,
+            "，".join(reasons) + "，需重新校验",
+            actual_context_sha256=actual_context_sha256,
+            actual_disturbances_sha256=actual_disturbances_sha256,
+            validation=validation,
+        )
+    return validation_state_payload(
+        VALIDATION_VALID,
+        "校验通过",
+        actual_context_sha256=actual_context_sha256,
+        actual_disturbances_sha256=actual_disturbances_sha256,
+        validation=validation,
+    )
+
+
+def require_scenario_validation(
+    layout: ProjectLayout,
+    doc: ScenarioDocument,
+    *,
+    sha_cache: Dict[tuple[str, str], str] | None = None,
+) -> None:
+    state = scenario_validation_state(layout, doc, sha_cache=sha_cache)
+    if state["status"] != VALIDATION_VALID:
+        raise ValueError(f"Scenario must be validated before use: {doc.name} ({state['reason']})")
+
+
+def cached_run_graph_context_sha256(
+    layout: ProjectLayout,
+    run_graph: RunGraphReference,
+    cache: Dict[tuple[str, str], str] | None,
+) -> str:
+    if cache is None:
+        return run_graph_context_sha256(layout, run_graph)
+    key = (run_graph.set_id, run_graph.graph_id)
+    if key not in cache:
+        cache[key] = run_graph_context_sha256(layout, run_graph)
+    return cache[key]
+
+
+def cached_load_scenario_context(
+    layout: ProjectLayout,
+    doc: ScenarioDocument,
+    cache: Dict[tuple[str, str, str], object] | None,
+) -> object:
+    if cache is None:
+        return load_scenario_context(layout, doc)
+    run_graph = doc.run_graph
+    key = (run_graph.set_id, run_graph.graph_id, run_graph.context_sha256)
+    if key not in cache:
+        cache[key] = load_scenario_context(layout, doc)
+    return cache[key]
+
+
+def invalid_validation_state(reason: str) -> Dict[str, object]:
+    return validation_state_payload(VALIDATION_INVALID, reason)
+
+
+def validation_state_payload(
+    status: str,
+    reason: str,
+    *,
+    actual_context_sha256: str = "",
+    actual_disturbances_sha256: str = "",
+    validation: ScenarioValidation | None = None,
+) -> Dict[str, object]:
+    return {
+        "status": status,
+        "reason": reason,
+        "context_sha256": actual_context_sha256,
+        "disturbances_sha256": actual_disturbances_sha256,
+        "validation": asdict(validation or ScenarioValidation()),
+    }
 
 
 def has_disturbances(doc: ScenarioDocument) -> bool:
@@ -344,7 +578,7 @@ def check_scenario_yaml(
     if layout is None:
         raise ValueError("layout is required when validate_context is true.")
     try:
-        validate_scenario_document(layout, doc)
+        require_scenario_validation(layout, doc)
     except Exception as exc:
         return yaml_check(INVALID_STATUS, str(exc), document=doc)
     return yaml_check(VALID_STATUS, "", document=doc)

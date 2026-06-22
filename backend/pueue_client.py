@@ -379,6 +379,8 @@ def task_display_name(action: str, params: Dict[str, object], *, fallback: str) 
         return "删除项目"
     if action == "scenario_set_create":
         return titled(params, "scenario_set_id", "创建场景分类")
+    if action == "scenario_set_validate":
+        return titled(params, "scenario_set_id", "批量校验场景")
     if action == "run_graph_build":
         return titled(nested_run_graph_params(params), ("set_id", "graph_id"), "构建运行图")
     if action == "normal_generate":

@@ -223,6 +223,19 @@ export const api = {
         ...jsonBody({ ...payload, run_graph: runGraph ?? null }),
       },
     ),
+  validateScenario: (
+    projectId: string,
+    scenarioSetId: string,
+    scenarioId: string,
+    runGraph?: RunGraphReference | null,
+  ) =>
+    request<ScenarioDetail>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}/validation`,
+      {
+        method: 'POST',
+        ...jsonBody({ run_graph: runGraph ?? null }),
+      },
+    ),
   deleteScenario: (projectId: string, scenarioSetId: string, scenarioId: string) =>
     request<TaskResponse>(
       `/projects/${projectId}/scenario-sets/${scenarioSetId}/scenarios/${scenarioId}`,
@@ -235,6 +248,11 @@ export const api = {
       method: 'POST',
       ...jsonBody(payload),
     }),
+  submitValidateScenarios: (projectId: string, scenarioSetId: string) =>
+    request<TaskResponse>(
+      `/projects/${projectId}/scenario-sets/${scenarioSetId}/tasks/validate-scenarios`,
+      { method: 'POST' },
+    ),
   listAdjustmentPlans: (projectId: string, scenarioSetId: string) =>
     request<AdjustmentPlanSummary[]>(
       `/projects/${projectId}/scenario-sets/${scenarioSetId}/adjustment-plans`,

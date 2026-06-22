@@ -265,17 +265,21 @@ def run_graph_ref(layout: ProjectLayout, run_graph_set_id: str, run_graph_id: st
     return RunGraphReference(
         set_id=str(metadata["run_graph_set_id"]),
         graph_id=str(metadata["run_graph_id"]),
-        context_sha256=str(metadata["context_sha256"]),
     )
+
+
+def run_graph_context_sha256(layout: ProjectLayout, run_graph: RunGraphReference) -> str:
+    return file_digest(existing_run_graph(layout, run_graph.set_id, run_graph.graph_id).context_json)
 
 
 def resolve_run_graph_context(layout: ProjectLayout, run_graph: RunGraphReference) -> Path:
     graph = existing_run_graph(layout, run_graph.set_id, run_graph.graph_id)
     actual = file_digest(graph.context_json)
-    if actual != run_graph.context_sha256:
+    expected = str(run_graph.context_sha256 or "").strip()
+    if expected and actual != expected:
         raise ValueError(
             "Run graph context sha256 mismatch: "
-            f"{run_graph.set_id}/{run_graph.graph_id} expected {run_graph.context_sha256}, got {actual}"
+            f"{run_graph.set_id}/{run_graph.graph_id} expected {expected}, got {actual}"
         )
     return graph.context_json
 
@@ -294,19 +298,6 @@ def context_stats(context: Any) -> Dict[str, object]:
         "event_node_count": len(context.event_anchors),
         "section_node_count": len(context.section_anchors),
     }
-
-
-def validate_scenario_document(layout: ProjectLayout, doc: Any) -> None:
-    from core.loader import parse_scenario_config
-
-    context = load_scenario_context(layout, doc)
-    parse_scenario_config(
-        {
-            "delays": list(doc.scenarios.get("delays", []) or []),
-            "speed_limits": list(doc.scenarios.get("speed_limits", []) or []),
-        },
-        context,
-    )
 
 
 def existing_run_graph(layout: ProjectLayout, run_graph_set_id: str, run_graph_id: str) -> RunGraphLayout:

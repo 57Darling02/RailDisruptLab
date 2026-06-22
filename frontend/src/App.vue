@@ -129,7 +129,7 @@ const GENERATION_FIELD_TIPS = {
   overwrite: '开启后会覆盖同名输出场景。',
 } as const
 const TASK_LABELS = {
-  scenarios: ['normal_generate', 'scenario_set_create', 'scenario_add', 'scenario_delete'],
+  scenarios: ['normal_generate', 'scenario_set_create', 'scenario_add', 'scenario_delete', 'scenario_set_validate'],
   adjustmentPlans: ['build', 'solve'],
   models: ['train', 'generation'],
 } as const
@@ -677,7 +677,7 @@ function refreshLoadedResourceForTask(task: Task) {
   const params = task.params ?? {}
   if (
     loadedScenarioSetId.value &&
-    ['normal_generate', 'scenario_delete', 'generation'].includes(label) &&
+    ['normal_generate', 'scenario_delete', 'generation', 'scenario_set_validate'].includes(label) &&
     params.scenario_set_id === loadedScenarioSetId.value
   ) {
     scenarioCategoryDetailLoading.value = false
@@ -1090,6 +1090,20 @@ async function submitNormalGenerate() {
     scenarioCategoryDetailLoading.value = false
     scenarioCategoryRefreshKey.value += 1
     normalGenerateDialogVisible.value = false
+    return response.task
+  })
+}
+
+async function validateLoadedScenarios() {
+  const scenarioSetId = loadedScenarioSetId.value.trim()
+  if (!scenarioSetId) {
+    ElMessage.warning('请先载入场景分类。')
+    return
+  }
+  await submitTask('批量校验场景', async () => {
+    const response = await api.submitValidateScenarios(selectedProjectId.value, scenarioSetId)
+    scenarioCategoryDetailLoading.value = false
+    scenarioCategoryRefreshKey.value += 1
     return response.task
   })
 }
@@ -1834,6 +1848,7 @@ function notifyError(error: unknown) {
                   @delete-scenario-set="deleteScenarioSetById"
                   @create-scenario="openScenarioDialog"
                   @simulate-scenario="openNormalGenerateDialog"
+                  @validate-scenarios="validateLoadedScenarios"
                   @delete-scenario="deleteScenario"
                   @view-scenario="viewScenario"
                   @detail-loading-change="scenarioCategoryDetailLoading = $event"

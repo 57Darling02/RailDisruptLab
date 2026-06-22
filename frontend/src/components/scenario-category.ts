@@ -67,7 +67,7 @@ export function buildRunGraphUsages(scenarios: ScenarioVisualizationItem[]) {
 }
 
 export function runGraphKey(runGraph: RunGraphReference) {
-  return `${runGraph.set_id}\u0000${runGraph.graph_id}\u0000${runGraph.context_sha256}`
+  return `${runGraph.set_id}\u0000${runGraph.graph_id}`
 }
 
 export function runGraphLabel(runGraph: RunGraphReference) {
@@ -79,11 +79,7 @@ export function sameRunGraph(
   right: RunGraphReference | null | undefined,
 ) {
   if (!left || !right) return false
-  return (
-    left.set_id === right.set_id &&
-    left.graph_id === right.graph_id &&
-    left.context_sha256 === right.context_sha256
-  )
+  return left.set_id === right.set_id && left.graph_id === right.graph_id
 }
 
 export function overviewDisturbancesForRunGraph(

@@ -103,6 +103,9 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         writes.add("project")
     elif action == "scenario_set_create":
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
+    elif action == "scenario_set_validate":
+        writes.add(scenario_collection_resource(params))
+        reads.add("run_graph")
     elif action == "scenario_set_delete":
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
     elif action == "run_graph_set_delete":

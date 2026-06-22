@@ -26,6 +26,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   createScenario: []
   simulateScenario: []
+  validateScenarios: []
   deleteScenario: [scenarioId: string]
   viewScenario: [scenarioId: string]
   loadingChange: [loading: boolean]
@@ -192,6 +193,7 @@ defineExpose({ reload: loadDetail })
         :busy="busy"
         @create-scenario="emit('createScenario')"
         @simulate-scenario="emit('simulateScenario')"
+        @validate-scenarios="emit('validateScenarios')"
         @delete-scenario="emit('deleteScenario', $event)"
         @view-scenario="emit('viewScenario', $event)"
       />

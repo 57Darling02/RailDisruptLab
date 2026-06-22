@@ -53,9 +53,16 @@ const scenarioPayload = computed(() => detail.value?.scenario ?? null)
 const contextStats = computed(() => detail.value?.context_stats)
 const runGraphDetail = computed(() => detail.value?.run_graph_detail ?? null)
 const isScenarioFileValid = computed(() => detail.value?.yaml_status === 'valid')
-const canUseScenario = computed(() => Boolean(detail.value?.run_graph) && isScenarioFileValid.value)
+const validationStatus = computed(() => detail.value?.validation_state?.status ?? 'invalid')
+const isScenarioValidated = computed(() => isScenarioFileValid.value && validationStatus.value === 'valid')
+const canUseScenario = computed(() => Boolean(detail.value?.run_graph) && isScenarioValidated.value)
 const hasPendingRunGraph = computed(() => Boolean(selectedRunGraph.value) && !sameRunGraph(selectedRunGraph.value, detail.value?.run_graph))
-const canApplyRunGraph = computed(() => hasPendingRunGraph.value)
+const canValidateRunGraph = computed(() => Boolean(selectedRunGraph.value) && isScenarioFileValid.value)
+const validateButtonLabel = computed(() => {
+  if (hasPendingRunGraph.value) return '校验并应用'
+  if (validationStatus.value === 'pending') return '校验'
+  return '重新校验'
+})
 const disturbances = computed(() => timetable.value?.disturbances ?? [])
 const disturbanceCountItems = computed(() => [
   { key: 'delay', label: '晚点', value: detail.value?.counts.delay ?? 0 },
@@ -175,19 +182,19 @@ function queueTimetableLoad() {
   }, 0)
 }
 
-async function applyRunGraph() {
+async function validateRunGraph() {
   if (saving.value || !selectedRunGraph.value) return
+  const applying = hasPendingRunGraph.value
   saving.value = true
   try {
-    detail.value = await api.updateScenarioDisturbances(
+    detail.value = await api.validateScenario(
       props.projectId,
       props.scenarioSetId,
       props.scenarioId,
-      scenarioData(),
       selectedRunGraph.value,
     )
     selectedRunGraph.value = cloneRunGraph(detail.value.run_graph)
-    ElMessage.success('运行图已应用，扰动校验通过')
+    ElMessage.success(applying ? '运行图已应用，扰动校验通过' : '扰动与运行图匹配，校验通过')
     queueTimetableLoad()
     emit('validated')
   } catch (error) {
@@ -224,31 +231,12 @@ async function saveDisturbances(payload: { scenarioId: string; data: ScenarioPay
     selectedRunGraph.value = cloneRunGraph(detail.value.run_graph)
     disturbanceDialogVisible.value = false
     ElMessage.success('扰动事件已保存')
-    queueTimetableLoad()
+    timetable.value = null
     emit('validated')
   } catch (error) {
     ElMessage.error(formatApiError(error))
   } finally {
     saving.value = false
-  }
-}
-
-function scenarioData(): ScenarioPayload {
-  const payload = scenarioPayload.value ?? {}
-  return {
-    delays: scenarioList(payload.delays).map((item) => ({
-      train_id: stringValue(item.train_id),
-      station: stringValue(item.station),
-      event_type: stringValue(item.event_type),
-      seconds: Math.floor(numberValue(item.seconds) ?? 0),
-    })),
-    speed_limits: scenarioList(payload.speed_limits).map((item) => ({
-      start_station: stringValue(item.start_station),
-      end_station: stringValue(item.end_station),
-      start_time: stringValue(item.start_time),
-      duration: Math.floor(numberValue(item.duration) ?? 0),
-      limit_speed: numberValue(item.limit_speed) ?? 0,
-    })),
   }
 }
 
@@ -299,12 +287,23 @@ function timeLineTooltip(params: unknown) {
 
 function statusTagType() {
   if (hasPendingRunGraph.value) return 'info'
-  return isScenarioFileValid.value ? 'success' : 'danger'
+  if (!isScenarioFileValid.value || validationStatus.value === 'invalid') return 'danger'
+  if (validationStatus.value === 'valid') return 'success'
+  return 'info'
 }
 
 function statusLabel() {
   if (hasPendingRunGraph.value) return '未校验，待校验后应用'
-  return isScenarioFileValid.value ? '场景文件有效' : '场景文件错误'
+  if (!isScenarioFileValid.value) return '场景文件错误'
+  if (validationStatus.value === 'valid') return '校验通过'
+  if (validationStatus.value === 'pending') return '未校验'
+  if (validationStatus.value === 'stale') return '需重新校验'
+  return '校验失败'
+}
+
+function validationReason() {
+  if (hasPendingRunGraph.value) return '应用后会校验当前扰动是否匹配所选运行图，通过后写入场景文件。'
+  return detail.value?.validation_state?.reason ?? ''
 }
 
 function cloneRunGraph(runGraph: RunGraphReference | null | undefined) {
@@ -314,7 +313,7 @@ function cloneRunGraph(runGraph: RunGraphReference | null | undefined) {
 function sameRunGraph(left: RunGraphReference | null | undefined, right: RunGraphReference | null | undefined) {
   if (!left && !right) return true
   if (!left || !right) return false
-  return left.set_id === right.set_id && left.graph_id === right.graph_id && left.context_sha256 === right.context_sha256
+  return left.set_id === right.set_id && left.graph_id === right.graph_id
 }
 
 function scenarioList(value: unknown): JsonObject[] {
@@ -375,15 +374,15 @@ function secondsToHms(value: number | null | undefined) {
                   <span class="overview-title">运行图</span>
                   <el-tag :type="statusTagType()" size="small">{{ statusLabel() }}</el-tag>
                 </div>
-                <el-tooltip content="应用后会校验当前扰动是否匹配所选运行图，通过后写入场景文件">
+                <el-tooltip :content="validationReason()">
                   <span class="tooltip-button">
                     <el-button
                       type="primary"
                       :loading="saving"
-                      :disabled="busy || saving || !canApplyRunGraph"
-                      @click="applyRunGraph"
+                      :disabled="busy || saving || !canValidateRunGraph"
+                      @click="validateRunGraph"
                     >
-                      应用运行图
+                      {{ validateButtonLabel }}
                     </el-button>
                   </span>
                 </el-tooltip>
