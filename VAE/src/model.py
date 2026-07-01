@@ -7,10 +7,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.data import MathGraphSample, TaskRule
+from src.data import MathGraphSample, TaskRule, unit_params_to_decoded_tensor
 
 
-ARCHITECTURE_VERSION = 3
+ARCHITECTURE_VERSION = 4
 DISTURBANCE_POOL_ID = -1
 RELATION_EDGE_KEY = "target_relation"
 
@@ -75,6 +75,7 @@ class RailDisturbanceVAE(nn.Module):
                 "param_dim": int(defn["param_dim"]),
                 "param_bounds": tuple(tuple(float(item) for item in row) for row in defn.get("param_bounds", [])),
                 "param_constraints": tuple(dict(item) for item in defn.get("param_constraints", [])),
+                "param_transform": str(defn.get("param_transform", "identity") or "identity"),
             }
             for task_id, defn in sorted(task_defs.items())
         }
@@ -181,6 +182,7 @@ class RailDisturbanceVAE(nn.Module):
                     "param_dim": rule.param_dim,
                     "param_bounds": rule.param_bounds,
                     "param_constraints": rule.param_constraints,
+                    "param_transform": rule.param_transform,
                 }
                 for task_id, rule in sample.task_rules.items()
             },
@@ -329,10 +331,12 @@ class RailDisturbanceVAE(nn.Module):
             z_rows = z.unsqueeze(0).expand(max_slots, self.latent_dim)
             param_input = torch.cat([task_context, slot_queries, attended_anchor, z_rows], dim=-1)
             params = self.param_heads[_module_key(task_id)](param_input)
+            unit_params = torch.sigmoid(params)
             result[task_id] = {
                 "count_logits": self.count_heads[_module_key(task_id)](hidden),
                 "anchor_logits": anchor_logits,
-                "params": params,
+                "param_logits": params,
+                "params": unit_params,
             }
         return result
 
@@ -578,7 +582,9 @@ def generated_outputs_to_json(
         count_min, count_max = rule.count_bounds
         count = max(int(count_min), min(count, int(count_max)))
         anchor_logits = raw["anchor_logits"]
-        params = _repair_params(raw["params"], rule).detach().cpu()
+        unit_params = raw["params"].detach().cpu()
+        params = unit_params_to_decoded_tensor(unit_params, rule)
+        params = _repair_decoded_params(params, rule)
         outputs[str(task_id)] = {
             "count": count,
             "anchor_index": [
@@ -586,6 +592,7 @@ def generated_outputs_to_json(
                 for slot in range(count)
             ],
             "params": params[:count].tolist(),
+            "unit_params": unit_params[:count].tolist(),
         }
     return {
         "schema_version": 1,
@@ -707,7 +714,7 @@ def _normal_kl(
     return 0.5 * torch.sum(logvar_p - logvar_q + (var_q + (mu_q - mu_p).pow(2)) / var_p - 1.0)
 
 
-def _repair_params(params: torch.Tensor, rule: TaskRule) -> torch.Tensor:
+def _repair_decoded_params(params: torch.Tensor, rule: TaskRule) -> torch.Tensor:
     repaired = params.clone()
     for dim, (lower, upper) in enumerate(rule.param_bounds):
         repaired[:, dim] = repaired[:, dim].clamp(float(lower), float(upper))

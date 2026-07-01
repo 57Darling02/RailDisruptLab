@@ -33,6 +33,7 @@ from core.vae_learning_graph import (
     DEFAULT_SECTION_ORDER_WINDOW,
     DEFAULT_USE_RELATION_GRAPH,
     infer_math_dataset_schema,
+    materialize_inferred_math_context_schema,
     scenario_config_to_typed_vae_learning_graph,
     typed_generated_graph_to_disturbance_graph,
     typed_learning_graph_to_math_context_graph,
@@ -806,10 +807,12 @@ def export_training_graphs(
     if first_context_graph is None:
         raise ValueError(f"No scenarios found for training: {scenario_set_id}")
     _inferred_context, inferred_schema = infer_math_dataset_schema(first_context_graph, samples)
+    effective_context_graph = materialize_inferred_math_context_schema(first_context_graph, inferred_schema)
+    materialize_inferred_context_graphs(model.context_graph_dir, inferred_schema)
     write_json(
         model.graph_dir / "dataset_profile.json",
         math_context_graph_to_dataset_profile(
-            first_context_graph,
+            effective_context_graph,
             samples=sample_records,
             inferred_schema=inferred_schema,
             export_profile=dict(graph_settings),
@@ -822,6 +825,13 @@ def export_training_graphs(
         sample_total=total,
         sample_completed=total,
     )
+
+
+def materialize_inferred_context_graphs(context_graph_dir: Path, inferred_schema: Dict[str, object]) -> None:
+    for context_path in sorted(context_graph_dir.glob("*.json")):
+        context_graph = read_json(context_path)
+        materialized = materialize_inferred_math_context_schema(context_graph, inferred_schema)
+        write_json(context_path, materialized)
 
 
 def math_context_graph_to_dataset_profile(

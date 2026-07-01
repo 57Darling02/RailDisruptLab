@@ -304,6 +304,8 @@ def _schema_summary(sample, *, architecture_version: int) -> Dict[str, object]:
                 "max_slots": rule.max_slots,
                 "count_bounds": rule.count_bounds,
                 "param_dim": rule.param_dim,
+                "param_bounds": rule.param_bounds,
+                "param_transform": rule.param_transform,
             }
             for task_id, rule in sample.task_rules.items()
         },

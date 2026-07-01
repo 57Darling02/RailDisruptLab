@@ -61,20 +61,23 @@ def _generate_model(args: argparse.Namespace, math_graphs_dir: Path) -> None:
 
     import torch
 
-    from src.data import RailDisturbanceContextDataset
+    from src.data import RailDisturbanceContextDataset, apply_task_defs_to_sample
     from src.model import RailDisturbanceVAE, generated_outputs_to_json
 
     torch.manual_seed(args.seed)
     device = _device(args.device, torch)
-    checkpoint = torch.load(args.checkpoint, map_location=device)
+    checkpoint_path = Path(args.checkpoint)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     model = RailDisturbanceVAE.from_config(checkpoint["model_config"]).to(device)
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
     dataset = RailDisturbanceContextDataset(args.context_graphs)
+    task_defs = dict(checkpoint["model_config"]["task_defs"])
 
     with torch.no_grad():
         for index in range(args.num_samples):
             sample = dataset[index % len(dataset)].to(device)
+            sample = apply_task_defs_to_sample(sample, task_defs)
             task_outputs = model.decode_from_prior(sample)
             generated = generated_outputs_to_json(sample, task_outputs)
             path = math_graphs_dir / f"sample_{index + 1:06d}.json"

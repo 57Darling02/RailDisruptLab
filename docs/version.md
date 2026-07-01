@@ -41,6 +41,25 @@ python -m backend.runner <input.json>
 - `scripts/train_vae.py`、`scripts/generate_vae.py`、`scripts/evaluate_vae.py` 作为模型算法脚本保留。
 - `projects/<project>/...` 下的正式产物格式继续作为 Web 平台读取对象。
 
+## 2026-07-01 VAE 参数 schema v4
+
+本次改动把 VAE 参数生成从“直接生成业务归一化值后裁剪”改为“先按训练样本上下界 min-max 化，再由模型生成 unit 参数”。
+
+关键规则：
+
+- 训练图导出阶段会从训练样本统计每个 task 的 `param_bounds`，并把 `param_transform: minmax` 固化到上下文图。
+- 训练时 `VAE/src/data.py` 将落盘 `params` 转成 `[0, 1]` unit 参数作为监督。
+- 生成时 decoder 输出先过 sigmoid，天然落在 `[0, 1]`；随后按 `min + unit * (max - min)` 反归一化为落盘 `params`。
+- `params` 仍是 RailDisruptLab 可解码的业务归一化值，例如延误秒数除以 86400、限速值除以最高速度。
+- `unit_params` 只作为生成调试字段保留，不参与 RailDisruptLab 业务解码。
+
+兼容性规则：
+
+- VAE 架构版本提升为 `architecture_version = 4`。
+- v3 及更早 checkpoint 不再兼容，加载时会直接报错，需要重新训练。
+- 旧生成 scenario set 视为旧模型产物，不再用于后续实验；需要用 v4 checkpoint 重新生成。
+- 已有 source、context、人工或真实训练 scenario set 可以保留；模型图、checkpoint 和生成场景集应按新流程重新导出、训练和生成。
+
 ## ID 与产物命名规范
 
 当前版本对 project、scenario set、dataset、model、case 等 ID 统一做规范化后再作为目录名、文件名前缀和产物字段写入。

@@ -38,6 +38,7 @@ class TaskRule:
     param_dim: int
     param_bounds: Tuple[Tuple[float, float], ...]
     param_constraints: Tuple[Dict[str, object], ...]
+    param_transform: str
 
 
 @dataclass
@@ -232,14 +233,34 @@ def math_context_graph_to_sample(payload: Dict[str, object], graph_path: str = "
     )
 
 
+def apply_task_defs_to_sample(
+    sample: MathGraphSample,
+    task_defs: Dict[int, Dict[str, object]] | Dict[str, Dict[str, object]],
+) -> MathGraphSample:
+    if not task_defs:
+        return sample
+
+    updated_rules: Dict[int, TaskRule] = {}
+    for task_id, rule in sample.task_rules.items():
+        task_def = task_defs.get(task_id, task_defs.get(str(task_id)))  # type: ignore[arg-type]
+        if not isinstance(task_def, dict):
+            updated_rules[task_id] = rule
+            continue
+        updated_rules[task_id] = _task_rule_from_entry(task_def)
+    sample.task_rules = updated_rules
+    return sample
+
+
 def target_copy_sample(sample: MathGraphSample) -> Dict[str, object]:
     task_outputs: Dict[str, object] = {}
     for task_id, rule in sorted(sample.task_rules.items()):
         target = sample.targets[task_id]
+        decoded_params = unit_params_to_decoded_tensor(target.params.cpu(), rule)
         task_outputs[str(task_id)] = {
             "count": int(target.count),
             "anchor_index": [int(value) for value in target.anchor_index.tolist()],
-            "params": target.params.cpu().tolist(),
+            "params": decoded_params.tolist(),
+            "unit_params": target.params.cpu().tolist(),
         }
     return {
         "schema_version": 1,
@@ -310,37 +331,46 @@ def _task_rules(value: object) -> Dict[int, TaskRule]:
     result: Dict[int, TaskRule] = {}
     for item in _list(value, "rules.tasks"):
         entry = _object(item, "rules.tasks[]")
-        task_id = _int(entry.get("task_id"), "task_id")
-        param_dim = _int(entry.get("param_dim"), "param_dim")
-        max_slots = _int(entry.get("max_slots"), "max_slots")
-        count_bounds_raw = _list(entry.get("count_bounds", [0, max_slots]), "count_bounds")
-        if len(count_bounds_raw) != 2:
-            raise ValueError(f"Task {task_id} count_bounds must contain [min, max].")
-        count_bounds = (
-            _int(count_bounds_raw[0], "count_bounds.min"),
-            _int(count_bounds_raw[1], "count_bounds.max"),
-        )
-        if count_bounds[0] < 0 or count_bounds[1] < count_bounds[0] or count_bounds[1] > max_slots:
-            raise ValueError(f"Task {task_id} count_bounds must satisfy 0 <= min <= max <= max_slots.")
-        bounds = tuple(
-            (_float(row[0], "param_bounds.min"), _float(row[1], "param_bounds.max"))
-            for row in _list(entry.get("param_bounds", []), "param_bounds")
-        )
-        if bounds and len(bounds) != param_dim:
-            raise ValueError(f"Task {task_id} param_bounds length must equal param_dim.")
-        result[task_id] = TaskRule(
-            task_id=task_id,
-            target_pool_id=_int(entry.get("target_pool_id"), "target_pool_id"),
-            max_slots=max_slots,
-            count_bounds=count_bounds,
-            param_dim=param_dim,
-            param_bounds=bounds or tuple((0.0, 1.0) for _ in range(param_dim)),
-            param_constraints=tuple(
-                dict(_object(constraint, "param_constraints[]"))
-                for constraint in _list(entry.get("param_constraints", []), "param_constraints")
-            ),
-        )
+        rule = _task_rule_from_entry(entry)
+        result[rule.task_id] = rule
     return result
+
+
+def _task_rule_from_entry(entry: Dict[str, object]) -> TaskRule:
+    task_id = _int(entry.get("task_id"), "task_id")
+    param_dim = _int(entry.get("param_dim"), "param_dim")
+    max_slots = _int(entry.get("max_slots"), "max_slots")
+    count_bounds_raw = _list(entry.get("count_bounds", [0, max_slots]), "count_bounds")
+    if len(count_bounds_raw) != 2:
+        raise ValueError(f"Task {task_id} count_bounds must contain [min, max].")
+    count_bounds = (
+        _int(count_bounds_raw[0], "count_bounds.min"),
+        _int(count_bounds_raw[1], "count_bounds.max"),
+    )
+    if count_bounds[0] < 0 or count_bounds[1] < count_bounds[0] or count_bounds[1] > max_slots:
+        raise ValueError(f"Task {task_id} count_bounds must satisfy 0 <= min <= max <= max_slots.")
+    bounds = tuple(
+        (_float(row[0], "param_bounds.min"), _float(row[1], "param_bounds.max"))
+        for row in _list(entry.get("param_bounds", []), "param_bounds")
+    )
+    if bounds and len(bounds) != param_dim:
+        raise ValueError(f"Task {task_id} param_bounds length must equal param_dim.")
+    transform = str(entry.get("param_transform", "identity") or "identity")
+    if transform not in {"identity", "minmax"}:
+        raise ValueError(f"Task {task_id} param_transform must be identity or minmax.")
+    return TaskRule(
+        task_id=task_id,
+        target_pool_id=_int(entry.get("target_pool_id"), "target_pool_id"),
+        max_slots=max_slots,
+        count_bounds=count_bounds,
+        param_dim=param_dim,
+        param_bounds=bounds or tuple((0.0, 1.0) for _ in range(param_dim)),
+        param_constraints=tuple(
+            dict(_object(constraint, "param_constraints[]"))
+            for constraint in _list(entry.get("param_constraints", []), "param_constraints")
+        ),
+        param_transform=transform,
+    )
 
 
 def _edge_type_rules(value: object) -> Dict[int, EdgeTypeRule]:
@@ -434,12 +464,40 @@ def _target_tensors(
             raise ValueError(f"Task {task_id} anchor_index is out of range.")
         if any(len(row) != rule.param_dim for row in params):
             raise ValueError(f"Task {task_id} params width must equal param_dim.")
+        decoded_params = (
+            torch.tensor(params, dtype=torch.float32)
+            if params
+            else torch.empty((0, rule.param_dim), dtype=torch.float32)
+        )
+        unit_params = decoded_params_to_unit_tensor(decoded_params, rule)
         result[task_id] = TargetData(
             count=count,
             anchor_index=torch.tensor(anchor_index, dtype=torch.long),
-            params=torch.tensor(params, dtype=torch.float32),
+            params=unit_params,
         )
     return result
+
+
+def decoded_params_to_unit_tensor(params: torch.Tensor, rule: TaskRule) -> torch.Tensor:
+    if rule.param_transform == "identity":
+        return params.float()
+    if rule.param_transform != "minmax":
+        raise ValueError(f"Unsupported param_transform: {rule.param_transform}")
+    bounds = torch.tensor(rule.param_bounds, dtype=params.dtype, device=params.device)
+    lower = bounds[:, 0]
+    span = (bounds[:, 1] - bounds[:, 0]).clamp_min(1e-12)
+    return ((params.float() - lower) / span).clamp(0.0, 1.0)
+
+
+def unit_params_to_decoded_tensor(params: torch.Tensor, rule: TaskRule) -> torch.Tensor:
+    if rule.param_transform == "identity":
+        return params.float()
+    if rule.param_transform != "minmax":
+        raise ValueError(f"Unsupported param_transform: {rule.param_transform}")
+    bounds = torch.tensor(rule.param_bounds, dtype=params.dtype, device=params.device)
+    lower = bounds[:, 0]
+    span = bounds[:, 1] - bounds[:, 0]
+    return params.float().clamp(0.0, 1.0) * span + lower
 
 
 def _relation_tensors(value: object, feature_dim: int) -> Tuple[torch.Tensor, torch.Tensor]:

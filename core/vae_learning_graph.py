@@ -319,10 +319,45 @@ def infer_math_dataset_schema(
         updated["max_slots"] = int(stat["count_bounds"][1])
         updated["count_bounds"] = list(stat["count_bounds"])
         updated["param_bounds"] = [list(row) for row in stat["param_bounds"]]
+        updated["param_transform"] = "minmax"
         updated["slot_constraints"] = dict(stat["slot_count_per_disturbance"])
         inferred_tasks.append(updated)
     inferred_rules["tasks"] = inferred_tasks
     return inferred, {"tasks": task_stats}
+
+
+def materialize_inferred_math_context_schema(
+    context_graph: Dict[str, object],
+    inferred_schema: Dict[str, object],
+) -> Dict[str, object]:
+    """Return a context graph with observed task ranges as the formal VAE schema."""
+    if context_graph.get("graph_type") != MATH_CONTEXT_GRAPH_TYPE:
+        raise ValueError(f"Unsupported math context graph graph_type: {context_graph.get('graph_type')}")
+    rules = context_graph.get("rules")
+    if not isinstance(rules, dict):
+        raise ValueError("Math context graph rules must be a JSON object.")
+    task_stats = dict(inferred_schema.get("tasks", {})) if isinstance(inferred_schema, dict) else {}
+    if not task_stats:
+        return deepcopy(context_graph)
+
+    materialized = deepcopy(context_graph)
+    materialized_rules = materialized["rules"]
+    materialized_tasks: List[Dict[str, object]] = []
+    for task in _objects(materialized_rules.get("tasks"), "rules.tasks"):
+        task_id = _int_value(task.get("task_id"), "task.task_id")
+        stat = task_stats.get(str(task_id), task_stats.get(task_id))
+        updated = dict(task)
+        if isinstance(stat, dict):
+            if "count_bounds" in stat:
+                updated["count_bounds"] = list(stat["count_bounds"])
+            if "param_bounds" in stat:
+                updated["param_bounds"] = [list(row) for row in stat["param_bounds"]]
+                updated["param_transform"] = "minmax"
+            if "slot_count_per_disturbance" in stat:
+                updated["slot_constraints"] = dict(stat["slot_count_per_disturbance"])
+        materialized_tasks.append(updated)
+    materialized_rules["tasks"] = materialized_tasks
+    return materialized
 
 
 def typed_learning_graph_to_dataset_profile(
@@ -591,6 +626,7 @@ def _math_task_rules(tasks: List[Dict[str, object]]) -> List[Dict[str, object]]:
             "max_slots": _int_value(task.get("max_slots"), f"task_{task_id}.max_slots"),
             "param_dim": param_dim,
             "param_bounds": _fallback_param_bounds(task_id, param_dim),
+            "param_transform": "identity",
         }
         constraints = _task_param_constraints(task_id)
         if constraints:
@@ -1150,6 +1186,7 @@ def _decode_contract(max_slots: int) -> Dict[str, object]:
                 "disturbance_kind": "delay",
                 "max_slots": int(max_slots),
                 "param_names": ["delay_seconds_norm"],
+                "param_transform": "minmax",
             },
             _task_key(TASK_SECTION_SPEED): {
                 "task_id": TASK_SECTION_SPEED,
@@ -1158,6 +1195,7 @@ def _decode_contract(max_slots: int) -> Dict[str, object]:
                 "disturbance_kind": "speed_limit",
                 "max_slots": int(max_slots),
                 "param_names": ["start_time_norm", "duration_norm", "speed_limit_norm"],
+                "param_transform": "minmax",
                 "speed_limit_rule": "speed_limit = speed_limit_norm * speed_limit_max",
                 "interruption_rule": "speed_limit = 0 if decoded_speed < threshold else decoded_speed",
             },
