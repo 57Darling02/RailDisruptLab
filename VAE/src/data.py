@@ -246,7 +246,9 @@ def apply_task_defs_to_sample(
         if not isinstance(task_def, dict):
             updated_rules[task_id] = rule
             continue
-        updated_rules[task_id] = _task_rule_from_entry(task_def)
+        entry = dict(task_def)
+        entry.setdefault("task_id", task_id)
+        updated_rules[task_id] = _task_rule_from_entry(entry)
     sample.task_rules = updated_rules
     return sample
 
@@ -531,6 +533,8 @@ def _object(value: object, label: str) -> Dict[str, object]:
 
 
 def _list(value: object, label: str) -> List[object]:
+    if isinstance(value, tuple):
+        return list(value)
     if not isinstance(value, list):
         raise ValueError(f"{label} must be a list.")
     return value
