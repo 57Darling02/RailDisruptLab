@@ -114,8 +114,9 @@ def read_scenario_set_analysis(layout: ProjectLayout, scenario_set_id: str) -> D
         raise FileNotFoundError(f"Scenario category not found: {root}")
 
     sha_cache: Dict[tuple[str, str], str] = {}
+    context_cache: Dict[tuple[str, str], Any] = {}
     scenarios = [
-        scenario_case_visualization_item(layout, scenario_set_id, path, sha_cache=sha_cache)
+        scenario_case_visualization_item(layout, scenario_set_id, path, sha_cache=sha_cache, context_cache=context_cache)
         for path in scenario_files(root)
     ]
     all_disturbances = [
@@ -144,11 +145,12 @@ def scenario_case_visualization_item(
     scenario_path: Path,
     *,
     sha_cache: Dict[tuple[str, str], str] | None = None,
+    context_cache: Dict[tuple[str, str], Any] | None = None,
 ) -> Dict[str, object]:
     scenario_id = sanitize_id(scenario_path.stem)
     try:
         doc = load_scenario_document(scenario_path, require_yaml())
-        disturbances = yaml_disturbances(doc)
+        disturbances = visualization_disturbances(layout, scenario_path, doc, context_cache)
         status = VALID_STATUS
         reason = ""
     except Exception as exc:
@@ -170,6 +172,32 @@ def scenario_case_visualization_item(
         "counts": counts,
         "category": scenario_category(disturbances),
     }
+
+
+def visualization_disturbances(
+    layout: ProjectLayout,
+    scenario_path: Path,
+    doc: ScenarioDocument,
+    context_cache: Dict[tuple[str, str], Any] | None,
+) -> List[Dict[str, object]]:
+    try:
+        context = cached_scenario_context(layout, doc, context_cache)
+        return read_scenario_disturbances(scenario_path, context)
+    except Exception:
+        return yaml_disturbances(doc)
+
+
+def cached_scenario_context(
+    layout: ProjectLayout,
+    doc: ScenarioDocument,
+    context_cache: Dict[tuple[str, str], Any] | None,
+) -> Any:
+    key = (str(doc.run_graph.set_id), str(doc.run_graph.graph_id))
+    if context_cache is None:
+        return load_scenario_context(layout, doc)
+    if key not in context_cache:
+        context_cache[key] = load_scenario_context(layout, doc)
+    return context_cache[key]
 
 
 def scenario_case_summary(
@@ -679,7 +707,7 @@ def lightweight_scenario_set_summary(scenarios: List[Dict[str, object]]) -> Dict
             "relation_counts": relation_rows({}),
         },
         "joint_structure": {
-            "time_bins": [item["label"] for item in time_distribution(all_disturbances)],
+            "time_bins": time_bin_labels(),
             "type_time": type_time_rows(all_disturbances),
             "location_time": location_time_rows(all_disturbances),
         },
@@ -724,6 +752,13 @@ def time_distribution(disturbances: Sequence[Mapping[str, object]]) -> List[Dict
     if unknown_count:
         rows.append({"label": "未知", "count": unknown_count})
     return rows
+
+
+def time_bin_labels() -> List[str]:
+    return [
+        f"{hour:02d}-{hour + 2:02d}时"
+        for hour in range(0, 24, 2)
+    ]
 
 
 def space_distribution(disturbances: Sequence[Mapping[str, object]]) -> List[Dict[str, object]]:

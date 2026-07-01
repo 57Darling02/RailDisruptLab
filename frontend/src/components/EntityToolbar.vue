@@ -51,7 +51,7 @@ function handleVisibleChange(visible: boolean) {
 </script>
 
 <template>
-  <el-card shadow="never">
+  <el-card class="entity-toolbar-card" shadow="never">
     <div class="entity-toolbar">
       <el-space alignment="center" class="entity-toolbar-main">
         <span class="control-label">{{ label }}：</span>
@@ -116,6 +116,10 @@ function handleVisibleChange(visible: boolean) {
 </template>
 
 <style scoped>
+.entity-toolbar-card {
+  flex: 0 0 auto;
+}
+
 .entity-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

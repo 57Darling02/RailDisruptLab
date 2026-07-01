@@ -76,14 +76,19 @@ const metricComparisonFilename = computed(() =>
     ? 'adjustment-plan-relative-error'
     : 'adjustment-plan-metric-values',
 )
+const analysisButtonLabel = computed(() =>
+  analysis.value || errorMessage.value || conflictMessage.value ? '刷新' : '加载',
+)
 
 watch(
   () => props.selectedProjectId,
   () => {
+    analysisRequestSeq += 1
     baselinePlan.value = null
     candidatePlans.value = []
     discoveredPlans.value = []
     analysis.value = null
+    analysisLoading.value = false
     errorMessage.value = ''
     conflictMessage.value = ''
   },
@@ -100,13 +105,11 @@ watch(
 watch(
   () => selectedPlans.value.map(planKey).join('\u0000'),
   () => {
-    if (canLoadAnalysis.value) {
-      void loadSolveAnalysis()
-    } else {
-      analysis.value = null
-      errorMessage.value = ''
-      conflictMessage.value = ''
-    }
+    analysisRequestSeq += 1
+    analysis.value = null
+    analysisLoading.value = false
+    errorMessage.value = ''
+    conflictMessage.value = ''
   },
 )
 
@@ -213,7 +216,7 @@ function planKey(plan: Pick<AdjustmentPlanRef, 'scenario_set_id' | 'plan_id'>) {
               :disabled="busy || !baselinePlan"
               @click="refreshAnalysis"
             >
-              刷新
+              {{ analysisButtonLabel }}
             </el-button>
           </div>
         </template>

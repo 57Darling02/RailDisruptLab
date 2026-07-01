@@ -28,6 +28,10 @@ const SCENARIO_SERIES = [
   { key: 'speed_limit', label: '限速', color: '#3b82f6' },
   { key: 'interruption', label: '中断', color: '#ef4444' },
 ] as const
+const SCENARIO_TIME_BINS = Array.from(
+  { length: 12 },
+  (_, index) => `${String(index * 2).padStart(2, '0')}-${String(index * 2 + 2).padStart(2, '0')}时`,
+)
 
 type ScenarioSeriesKey = (typeof SCENARIO_SERIES)[number]['key']
 
@@ -543,15 +547,13 @@ export function roleLabel(role: SolvePlanRow['role']) {
 }
 
 function scenarioTimeBins(items: ScenarioSetVisualization[]) {
-  const bins = items.flatMap((item) => item.summary.joint_structure.time_bins)
-  return unique(bins.length ? bins : items.flatMap((item) => item.time_distribution?.map((row) => row.label) ?? []))
+  const available = new Set(items.flatMap((item) => item.summary.joint_structure.time_bins))
+  const bins = SCENARIO_TIME_BINS.filter((timeBin) => !available.size || available.has(timeBin))
+  return bins.length ? bins : SCENARIO_TIME_BINS
 }
 
 function scenarioTypeTimeValues(item: ScenarioSetVisualization, type: ScenarioSeriesKey, timeBins: string[]) {
-  if (type === 'total') {
-    const counts = new Map((item.time_distribution ?? []).map((row) => [row.label, row.count]))
-    return timeBins.map((timeBin) => counts.get(timeBin) ?? scenarioTypeTimeCount(item, timeBin))
-  }
+  if (type === 'total') return timeBins.map((timeBin) => scenarioTypeTimeCount(item, timeBin))
   const counts = new Map(
     item.summary.joint_structure.type_time
       .filter((row) => row.type === type)
@@ -652,8 +654,4 @@ function formatNumber(value: number) {
   if (absolute >= 10) return value.toFixed(2)
   if (absolute >= 1) return value.toFixed(3)
   return value.toFixed(4)
-}
-
-function unique<T>(items: T[]): T[] {
-  return [...new Set(items)]
 }

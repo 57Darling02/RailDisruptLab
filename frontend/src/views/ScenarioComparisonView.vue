@@ -18,7 +18,6 @@ import {
   buildScenarioTypeCountChartOption,
   buildScenarioTypeTimeChartOption,
   mergeSelectedOptions,
-  reconcileAblationScenarioSelection,
   scenarioSetLabel,
   selectedScenarioSetIds,
   scenarioSetOptions as buildScenarioSetOptions,
@@ -70,18 +69,14 @@ const metricCards = computed(() =>
 const typeTimeChartOption = computed(() => buildScenarioTypeTimeChartOption(visualizations.value))
 const typeCountChartOption = computed(() => buildScenarioTypeCountChartOption(visualizations.value))
 const canLoadAnalysis = computed(() => Boolean(props.selectedProjectId && activeScenarioSetIds.value.length))
+const analysisButtonLabel = computed(() =>
+  visualizations.value.length || errorMessage.value || conflictMessage.value ? '刷新' : '加载',
+)
 
 watch(
   () => props.scenarioSets.map((item) => item.scenario_set_id).join('\u0000'),
   () => {
-    const fillDefaultCandidates = !selection.value.baselineScenarioSetId &&
-      !selection.value.candidateScenarioSetIds.length
-    selection.value = reconcileAblationScenarioSelection(
-      props.scenarioSets,
-      selection.value,
-      DEFAULT_ABLATION_SCENARIO_LIMIT,
-      fillDefaultCandidates,
-    )
+    setSelection(pruneScenarioSelection(selection.value))
   },
   { immediate: true },
 )
@@ -89,13 +84,11 @@ watch(
 watch(
   () => [props.selectedProjectId, activeScenarioSetIds.value.join('\u0000')] as const,
   () => {
-    if (canLoadAnalysis.value) {
-      void loadAnalysis()
-    } else {
-      visualizations.value = []
-      errorMessage.value = ''
-      conflictMessage.value = ''
-    }
+    requestSeq += 1
+    loading.value = false
+    visualizations.value = []
+    errorMessage.value = ''
+    conflictMessage.value = ''
   },
   { immediate: true },
 )
@@ -144,29 +137,23 @@ async function loadAnalysis() {
 
 function updateBaselineScenarioSetId(value: string | string[]) {
   const baselineScenarioSetId = String(value || '')
-  selection.value = reconcileAblationScenarioSelection(
-    props.scenarioSets,
-    {
+  setSelection({
+    baselineScenarioSetId,
+    candidateScenarioSetIds: limitCandidateScenarioSetIds(
+      selection.value.candidateScenarioSetIds.filter((scenarioSetId) => scenarioSetId !== baselineScenarioSetId),
       baselineScenarioSetId,
-      candidateScenarioSetIds: selection.value.candidateScenarioSetIds.filter(
-        (scenarioSetId) => scenarioSetId !== baselineScenarioSetId,
-      ),
-    },
-    DEFAULT_ABLATION_SCENARIO_LIMIT,
-    false,
-  )
+    ),
+  })
 }
 
 function updateCandidateScenarioSetIds(value: string | string[]) {
-  selection.value = reconcileAblationScenarioSelection(
-    props.scenarioSets,
-    {
-      baselineScenarioSetId: selection.value.baselineScenarioSetId,
-      candidateScenarioSetIds: Array.isArray(value) ? value.map(String) : [String(value)].filter(Boolean),
-    },
-    DEFAULT_ABLATION_SCENARIO_LIMIT,
-    false,
-  )
+  setSelection({
+    baselineScenarioSetId: selection.value.baselineScenarioSetId,
+    candidateScenarioSetIds: limitCandidateScenarioSetIds(
+      Array.isArray(value) ? value.map(String) : [String(value)].filter(Boolean),
+      selection.value.baselineScenarioSetId,
+    ),
+  })
 }
 
 function refreshAnalysis() {
@@ -175,6 +162,42 @@ function refreshAnalysis() {
   } else {
     ElMessage.warning('请先选择基准场景分类。')
   }
+}
+
+function pruneScenarioSelection(current: AblationScenarioSelection): AblationScenarioSelection {
+  const knownIds = new Set(props.scenarioSets.map((item) => item.scenario_set_id))
+  if (!knownIds.size) return { baselineScenarioSetId: '', candidateScenarioSetIds: [] }
+  const baselineScenarioSetId = knownIds.has(current.baselineScenarioSetId)
+    ? current.baselineScenarioSetId
+    : ''
+  return {
+    baselineScenarioSetId,
+    candidateScenarioSetIds: limitCandidateScenarioSetIds(
+      current.candidateScenarioSetIds.filter((scenarioSetId) => knownIds.has(scenarioSetId)),
+      baselineScenarioSetId,
+    ),
+  }
+}
+
+function limitCandidateScenarioSetIds(values: string[], baselineScenarioSetId: string) {
+  const candidateLimit = Math.max(0, DEFAULT_ABLATION_SCENARIO_LIMIT - 1)
+  const result: string[] = []
+  for (const value of values) {
+    if (!value || value === baselineScenarioSetId || result.includes(value)) continue
+    result.push(value)
+    if (result.length >= candidateLimit) break
+  }
+  return result
+}
+
+function setSelection(next: AblationScenarioSelection) {
+  if (
+    next.baselineScenarioSetId === selection.value.baselineScenarioSetId &&
+    next.candidateScenarioSetIds.join('\u0000') === selection.value.candidateScenarioSetIds.join('\u0000')
+  ) {
+    return
+  }
+  selection.value = next
 }
 
 </script>
@@ -193,7 +216,7 @@ function refreshAnalysis() {
               :disabled="busy || !selection.baselineScenarioSetId"
               @click="refreshAnalysis"
             >
-              刷新
+              {{ analysisButtonLabel }}
             </el-button>
           </div>
         </template>
