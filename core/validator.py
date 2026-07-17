@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 
 from core.types import AppConfig, MileageRow, RawTable, TimetableRow, ValidatedInput
 
-TRAIN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+TRAIN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_/()_-]+$")
 TIME_PATTERN = re.compile(r"^(\d{1,2}):(\d{1,2}):(\d{1,2})$")
 
 REQUIRED_TIMETABLE_HEADERS = ["train_id", "station", "arrival_time", "departure_time"]
@@ -64,7 +64,7 @@ def _validate_timetable_rows(table: RawTable) -> List[TimetableRow]:
             raise ValueError(f"Empty train_id at row {idx}.")
         if not TRAIN_ID_PATTERN.match(train_id):
             raise ValueError(
-                f"Invalid train_id at row {idx}: {train_id}. Use only A-Z a-z 0-9 _ -"
+                f"Invalid train_id at row {idx}: {train_id}. Use only A-Z a-z 0-9 _ - / ( )"
             )
         if not station:
             raise ValueError(f"Empty station at row {idx}.")
@@ -103,11 +103,12 @@ def _validate_timetable_rows(table: RawTable) -> List[TimetableRow]:
                 )
             seen.add(row.station)
 
-        last_row = train_rows[-1]
-        if last_row.departure_time is not None:
-            if last_row.arrival_time is None or last_row.departure_time != last_row.arrival_time:
+        for current_row, next_row in zip(train_rows, train_rows[1:]):
+            if current_row.departure_time is None or next_row.arrival_time is None:
                 raise ValueError(
-                    f"Train {train_id} last row allows departure_time only when it equals arrival_time (row {last_row.row_number})."
+                    "Cannot compute section runtime for train "
+                    f"{train_id}: row {current_row.row_number} requires departure_time and "
+                    f"row {next_row.row_number} requires arrival_time."
                 )
 
     return rows
