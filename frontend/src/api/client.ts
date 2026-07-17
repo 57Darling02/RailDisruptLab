@@ -362,8 +362,10 @@ export const api = {
     request<Task[]>(projectId ? `/tasks?project_id=${encodeURIComponent(projectId)}` : '/tasks'),
   removeTask: (taskId: number) => request<JsonObject>(`/tasks/${taskId}`, { method: 'DELETE' }),
   getTask: (taskId: number) => request<Task>(`/tasks/${taskId}`),
-  getTaskLog: (taskId: number, lines = 120) =>
-    request<string>(`/tasks/${taskId}/log?lines=${lines}`),
+  getTaskLog: (taskId: number, lines?: number) =>
+    request<string>(
+      `/tasks/${taskId}/log${lines == null ? '' : `?lines=${encodeURIComponent(lines)}`}`,
+    ),
   cancelTask: (taskId: number) =>
     request<Task | JsonObject>(`/tasks/${taskId}/cancel`, { method: 'POST' }),
   listArtifacts: (projectId: string, scenarioSetId: string, planId: string) =>

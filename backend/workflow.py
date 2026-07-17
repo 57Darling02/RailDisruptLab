@@ -14,8 +14,9 @@ from backend.run_graphs import load_scenario_context, resolve_run_graph_context
 from backend.scenario_cases import require_scenario_validation, validate_and_stamp_scenario
 from core.base_context import load_base_context
 from core.disturbance_graph import disturbance_graph_to_scenario
+from core.file_ops import atomic_write_text
 from core.loader import parse_scenario_config
-from core.project_layout import ProjectLayout, REPO_ROOT, reset_dir, sanitize_id, to_posix
+from core.project_layout import ProjectLayout, REPO_ROOT, replace_dir_with_rollback, reset_dir, sanitize_id, to_posix
 from core.scenario_config import (
     ScenarioDocument,
     RunGraphReference,
@@ -99,28 +100,56 @@ def build_adjustment_plan(
     docs = load_scenario_documents(layout, scenario_set_id, scenario_id=scenario_id)
     validate_scenario_documents(layout, docs)
     plan = layout.scenario_set(scenario_set_id).adjustment_plan(plan_id)
-    if plan.root.exists() and not plan.root.is_dir():
-        raise NotADirectoryError(f"Adjustment plan path is not a directory: {plan.root}")
-    if not plan.root.is_dir():
-        plan.root.mkdir(parents=True, exist_ok=False)
-    prepare_output_dir(plan.root, overwrite=True)
+    build_config = {
+        "objective_delay_weight": objective_delay_weight,
+        "objective_mode": objective_mode,
+        "cancellation_enabled": cancellation_enabled,
+        "cancellation_penalty_weight": cancellation_penalty_weight,
+        "arr_arr_headway_seconds": arr_arr_headway_seconds,
+        "dep_dep_headway_seconds": dep_dep_headway_seconds,
+        "dwell_seconds_at_stops": dwell_seconds_at_stops,
+        "big_m": big_m,
+        "tolerance_delay_seconds": tolerance_delay_seconds,
+    }
+    with replace_dir_with_rollback(
+        plan.root,
+        allowed_root=layout.scenario_set(scenario_set_id).adjustment_plans_dir,
+    ):
+        _build_adjustment_plan_output(
+            layout,
+            plan,
+            docs,
+            scenario_set_id=scenario_set_id,
+            scenario_id=scenario_id,
+            build_config=build_config,
+        )
+    print(f"Adjustment plan built: {plan.root}")
+
+
+def _build_adjustment_plan_output(
+    layout: ProjectLayout,
+    plan: Any,
+    docs: List[ScenarioDocument],
+    *,
+    scenario_set_id: str,
+    scenario_id: str,
+    build_config: Dict[str, object],
+) -> None:
+    objective_delay_weight = float(build_config["objective_delay_weight"])
+    objective_mode = str(build_config["objective_mode"])
+    cancellation_enabled = bool(build_config["cancellation_enabled"])
+    cancellation_penalty_weight = float(build_config["cancellation_penalty_weight"])
+    arr_arr_headway_seconds = int(build_config["arr_arr_headway_seconds"])
+    dep_dep_headway_seconds = int(build_config["dep_dep_headway_seconds"])
+    dwell_seconds_at_stops = int(build_config["dwell_seconds_at_stops"])
+    big_m = int(build_config["big_m"])
+    tolerance_delay_seconds = int(build_config["tolerance_delay_seconds"])
 
     for index, doc in enumerate(docs, start=1):
         started = datetime.now()
         case_id = sanitize_id(doc.name)
         case_dir = plan.cases_dir / case_id
         record = base_record(index, case_id)
-        build_config = {
-            "objective_delay_weight": objective_delay_weight,
-            "objective_mode": objective_mode,
-            "cancellation_enabled": cancellation_enabled,
-            "cancellation_penalty_weight": cancellation_penalty_weight,
-            "arr_arr_headway_seconds": arr_arr_headway_seconds,
-            "dep_dep_headway_seconds": dep_dep_headway_seconds,
-            "dwell_seconds_at_stops": dwell_seconds_at_stops,
-            "big_m": big_m,
-            "tolerance_delay_seconds": tolerance_delay_seconds,
-        }
         lp_path = case_dir / f"{case_id}.lp"
         cli_summary_path = case_dir / "core_build_summary.json"
         try:
@@ -181,7 +210,7 @@ def build_adjustment_plan(
                 "case_id": case_id,
                 "scenario_set_id": sanitize_id(scenario_set_id),
                 "source_scenario_id": sanitize_id(doc.name),
-                "build_config": build_config,
+                "build_config": dict(build_config),
                 "result": record,
                 "artifacts": {
                     "scenario": to_posix(case_dir / "scenario.yml"),
@@ -197,23 +226,12 @@ def build_adjustment_plan(
             "plan_id": sanitize_id(plan_id),
             "scenario_set_id": sanitize_id(scenario_set_id),
             "scenario_id": sanitize_id(scenario_id) if scenario_id else "",
-            "build_config": {
-                "objective_delay_weight": objective_delay_weight,
-                "objective_mode": objective_mode,
-                "cancellation_enabled": cancellation_enabled,
-                "cancellation_penalty_weight": cancellation_penalty_weight,
-                "arr_arr_headway_seconds": arr_arr_headway_seconds,
-                "dep_dep_headway_seconds": dep_dep_headway_seconds,
-                "dwell_seconds_at_stops": dwell_seconds_at_stops,
-                "big_m": big_m,
-                "tolerance_delay_seconds": tolerance_delay_seconds,
-            },
+            "build_config": dict(build_config),
             "case_count": len(docs),
             "created_at": datetime.now().isoformat(timespec="seconds"),
         },
     )
     fail_if_records_failed(read_case_stage_records(plan.cases_dir, "build.json"), "build")
-    print(f"Adjustment plan built: {plan.root}")
 
 
 def solve_adjustment_plan(
@@ -362,64 +380,62 @@ def train_model(
     model = layout.model(model_id)
     docs = load_scenario_set(layout, scenario_set_id)
     validate_scenario_documents(layout, docs)
-    if model.root.exists():
-        reset_dir(model.root)
-    model.root.mkdir(parents=True, exist_ok=True)
-    export_training_graphs(
-        layout,
-        model,
-        scenario_set_id,
-        docs=docs,
-        graph_settings={
-            "max_slots": max_slots,
-            "event_time_window": event_time_window,
-            "event_top_k": event_top_k,
-            "section_order_window": section_order_window,
-            "use_relation_graph": use_relation_graph,
-        },
-    )
+    with replace_dir_with_rollback(model.root, allowed_root=layout.model_dir):
+        export_training_graphs(
+            layout,
+            model,
+            scenario_set_id,
+            docs=docs,
+            graph_settings={
+                "max_slots": max_slots,
+                "event_time_window": event_time_window,
+                "event_top_k": event_top_k,
+                "section_order_window": section_order_window,
+                "use_relation_graph": use_relation_graph,
+            },
+        )
 
-    run(
-        [
-            sys.executable,
-            "scripts/train_vae.py",
-            "--graphs-root",
-            to_posix(model.graph_dir),
-            "--output-dir",
-            to_posix(model.root),
-            "--hidden-dim",
-            str(hidden_dim),
-            "--latent-dim",
-            str(latent_dim),
-            "--message-passing-steps",
-            str(message_passing_steps),
-            "--epochs",
-            str(epochs),
-            "--checkpoint-every",
-            str(checkpoint_every),
-            "--batch-size",
-            str(batch_size),
-            "--lr",
-            str(lr),
-            "--seed",
-            str(seed),
-            "--device",
-            device,
-            "--log-every",
-            str(log_every),
-            "--count-weight",
-            str(count_weight),
-            "--anchor-weight",
-            str(anchor_weight),
-            "--param-weight",
-            str(param_weight),
-            "--kl-weight",
-            str(kl_weight),
-            *relation_graph_cli_args(use_relation_graph),
-            "--relation-weight",
-            str(relation_weight),
-        ]
-    )
+        run(
+            [
+                sys.executable,
+                "scripts/train_vae.py",
+                "--graphs-root",
+                to_posix(model.graph_dir),
+                "--output-dir",
+                to_posix(model.root),
+                "--hidden-dim",
+                str(hidden_dim),
+                "--latent-dim",
+                str(latent_dim),
+                "--message-passing-steps",
+                str(message_passing_steps),
+                "--epochs",
+                str(epochs),
+                "--checkpoint-every",
+                str(checkpoint_every),
+                "--batch-size",
+                str(batch_size),
+                "--lr",
+                str(lr),
+                "--seed",
+                str(seed),
+                "--device",
+                device,
+                "--log-every",
+                str(log_every),
+                "--count-weight",
+                str(count_weight),
+                "--anchor-weight",
+                str(anchor_weight),
+                "--param-weight",
+                str(param_weight),
+                "--kl-weight",
+                str(kl_weight),
+                *relation_graph_cli_args(use_relation_graph),
+                "--relation-weight",
+                str(relation_weight),
+            ]
+        )
     print(f"Model trained: {model.root}")
 
 
@@ -1060,13 +1076,11 @@ def record_error(record: Dict[str, object]) -> str:
 
 
 def write_yaml(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    atomic_write_text(path, require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False))
 
 
 def write_json(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def read_json_if_exists(path: Path) -> Dict[str, object]:

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 from core.translator import translate
+from core.file_ops import atomic_write_text
 from core.types import (
     BaseContext,
     EventAnchor,
@@ -76,7 +75,6 @@ def section_anchor_by_key(context: BaseContext) -> Dict[SectionKey, SectionAncho
 
 
 def write_base_context(context: BaseContext, output_path: Path, metadata: Dict[str, Any] | None = None) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _base_context_to_payload(context)
     if metadata:
         payload = {
@@ -84,21 +82,7 @@ def write_base_context(context: BaseContext, output_path: Path, metadata: Dict[s
             "project": dict(metadata),
             **{key: value for key, value in payload.items() if key != "schema_version"},
         }
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=output_path.parent,
-        prefix=f".{output_path.name}.",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        tmp_path = Path(handle.name)
-        handle.write(json.dumps(payload, ensure_ascii=False, indent=2))
-    try:
-        os.replace(tmp_path, output_path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+    atomic_write_text(output_path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def load_base_context(path: Path) -> BaseContext:

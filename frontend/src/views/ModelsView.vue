@@ -85,6 +85,7 @@ const modelDetailLoading = ref(false)
 const modelDetailError = ref('')
 let modelDetailRequestSeq = 0
 let modelDetailPollHandle = 0
+let modelDetailPolling = false
 
 type LossMetricKey = (typeof LOSS_METRICS)[number]['key']
 type ProgressStatus = 'success' | 'exception' | 'warning' | undefined
@@ -244,16 +245,25 @@ function useCheckpointForGeneration(checkpoint: ModelCheckpoint | null) {
 }
 
 function startModelDetailPolling() {
-  if (modelDetailPollHandle) return
-  modelDetailPollHandle = window.setInterval(() => {
-    void loadModelDetails({ showLoading: false })
-  }, MODEL_DETAIL_POLL_MS)
+  if (modelDetailPolling) return
+  modelDetailPolling = true
+  scheduleModelDetailPoll()
 }
 
 function stopModelDetailPolling() {
+  modelDetailPolling = false
   if (!modelDetailPollHandle) return
-  window.clearInterval(modelDetailPollHandle)
+  window.clearTimeout(modelDetailPollHandle)
   modelDetailPollHandle = 0
+}
+
+function scheduleModelDetailPoll() {
+  if (!modelDetailPolling) return
+  modelDetailPollHandle = window.setTimeout(async () => {
+    modelDetailPollHandle = 0
+    await loadModelDetails({ showLoading: false })
+    scheduleModelDetailPoll()
+  }, MODEL_DETAIL_POLL_MS)
 }
 
 function formatMetadataValue(key: string, value: unknown) {

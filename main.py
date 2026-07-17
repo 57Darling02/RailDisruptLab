@@ -26,8 +26,7 @@ def main() -> None:
     if not (FRONTEND_DIST / "index.html").is_file():
         print(
             "Frontend dist not found. The backend API will still start, but '/' has no built UI yet.\n"
-            "Build it with: pnpm --dir frontend build\n"
-            "For development, run the Vue dev server separately: pnpm --dir frontend dev",
+            "Build it with: pnpm --dir frontend build",
             file=sys.stderr,
         )
 

@@ -4,7 +4,6 @@ import { barValueLabel } from '@/chart-options'
 import type {
   AdjustmentPlanSolveAnalysis,
   AdjustmentPlanSolveErrorRow,
-  AdjustmentPlanSolveMetricSummary,
   AdjustmentPlanSolveState,
   AdjustmentPlanSummary,
   ResourceOption,

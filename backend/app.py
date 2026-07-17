@@ -631,9 +631,15 @@ def value_error_exception_handler(_request, exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-frontend_root = REPO_ROOT / "frontend"
-frontend_dist = frontend_root / "dist"
-frontend_dir = frontend_dist if frontend_dist.is_dir() else frontend_root
+frontend_dist = REPO_ROOT / "frontend" / "dist"
 app.mount("/api", api)
-if frontend_dir.is_dir():
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+if (frontend_dist / "index.html").is_file():
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+else:
+
+    @app.get("/", include_in_schema=False)
+    def frontend_not_built() -> PlainTextResponse:
+        return PlainTextResponse(
+            "Frontend build is missing. Run: pnpm --dir frontend build",
+            status_code=503,
+        )

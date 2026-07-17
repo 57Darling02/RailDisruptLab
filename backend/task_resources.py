@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import shlex
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping
+from typing import Any, Dict, Iterable, Iterator, Mapping
 
 from core.project_layout import sanitize_id
 
+try:  # Pueue is a local Unix service; retain an in-process fallback for other platforms.
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
 
 RUNNING_TASK_STATUSES = {"Queued", "Running", "Paused", "Stashed", "Locked"}
+_PROJECT_LOCKS: dict[Path, threading.RLock] = {}
+_PROJECT_LOCKS_GUARD = threading.Lock()
 
 
 class TaskResourceConflict(ValueError):
@@ -20,6 +29,31 @@ class TaskResourceConflict(ValueError):
 class TaskResources:
     reads: frozenset[str] = frozenset()
     writes: frozenset[str] = frozenset()
+
+
+@contextmanager
+def project_resource_lock(repo_root: Path, project_id: str) -> Iterator[None]:
+    """Serialize resource admission for one project across backend processes."""
+    lock_dir = repo_root / "var" / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"{sanitize_id(project_id)}.lock"
+    with _local_lock(lock_path):
+        with lock_path.open("a", encoding="utf-8") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _local_lock(path: Path) -> Iterator[None]:
+    with _PROJECT_LOCKS_GUARD:
+        lock = _PROJECT_LOCKS.setdefault(path.resolve(), threading.RLock())
+    with lock:
+        yield
 
 
 def ensure_no_active_conflict(
@@ -103,6 +137,12 @@ def task_resources(action: str, params: Mapping[str, Any]) -> TaskResources:
         writes.add("project")
     elif action == "scenario_set_create":
         writes.add(resource("scenario_set", params.get("scenario_set_id")))
+    elif action == "adjustment_plan_create":
+        writes.add(adjustment_plan_resource(params))
+    elif action == "model_delete":
+        writes.add(resource("model", params.get("model_id")))
+    elif action == "run_graph_set_create":
+        writes.add(run_graph_set_resource(params.get("run_graph_set_id")))
     elif action == "scenario_set_validate":
         writes.add(scenario_collection_resource(params))
         reads.add("run_graph")

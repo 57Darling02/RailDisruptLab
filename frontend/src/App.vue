@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ScrollbarInstance } from 'element-plus'
 
@@ -11,16 +11,7 @@ import ProjectSelector from '@/components/ProjectSelector.vue'
 import RemoteResourceSelect from '@/components/RemoteResourceSelect.vue'
 import RunGraphSelector from '@/components/RunGraphSelector.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
-import TimetableDialog from '@/components/TimetableDialog.vue'
 import TaskLogDialog from '@/components/TaskLogDialog.vue'
-import AdjustmentPlanAnalysisView from '@/views/AdjustmentPlanAnalysisView.vue'
-import AdjustmentPlansView from '@/views/AdjustmentPlansView.vue'
-import DashboardView from '@/views/DashboardView.vue'
-import ModelsView from '@/views/ModelsView.vue'
-import RunGraphsView from '@/views/RunGraphsView.vue'
-import ScenarioComparisonView from '@/views/ScenarioComparisonView.vue'
-import ScenarioDetailView from '@/views/ScenarioDetailView.vue'
-import ScenarioSetsView from '@/views/ScenarioSetsView.vue'
 import { Menu, Tickets } from '@/icons'
 import {
   isTaskCancellable,
@@ -42,7 +33,6 @@ import type {
   ResourceOption,
   RunGraphReference,
   ScenarioSet,
-  ScenarioSummary,
   Task,
 } from '@/types'
 
@@ -51,7 +41,18 @@ type AdjustmentPlanBuildSource = 'scenario_set' | 'scenario'
 type GenerationContextSource = 'run_graph' | 'scenario_set'
 type ResourceKind = 'scenario_sets' | 'models'
 
-const TASK_POLL_MS = 2500
+const TimetableDialog = defineAsyncComponent(() => import('@/components/TimetableDialog.vue'))
+const AdjustmentPlanAnalysisView = defineAsyncComponent(() => import('@/views/AdjustmentPlanAnalysisView.vue'))
+const AdjustmentPlansView = defineAsyncComponent(() => import('@/views/AdjustmentPlansView.vue'))
+const DashboardView = defineAsyncComponent(() => import('@/views/DashboardView.vue'))
+const ModelsView = defineAsyncComponent(() => import('@/views/ModelsView.vue'))
+const RunGraphsView = defineAsyncComponent(() => import('@/views/RunGraphsView.vue'))
+const ScenarioComparisonView = defineAsyncComponent(() => import('@/views/ScenarioComparisonView.vue'))
+const ScenarioDetailView = defineAsyncComponent(() => import('@/views/ScenarioDetailView.vue'))
+const ScenarioSetsView = defineAsyncComponent(() => import('@/views/ScenarioSetsView.vue'))
+
+const ACTIVE_TASK_POLL_MS = 2500
+const IDLE_TASK_POLL_MS = 15000
 const TASK_DURATION_TICK_MS = 1000
 const DEFAULT_PLAN_RUN_FORM: AdjustmentPlanRunForm = {
   solveLimit: 0,
@@ -129,7 +130,6 @@ const GENERATION_FIELD_TIPS = {
   overwrite: '开启后会覆盖同名输出场景。',
 } as const
 const TASK_LABELS = {
-  scenarios: ['normal_generate', 'scenario_set_create', 'scenario_add', 'scenario_delete', 'scenario_set_validate'],
   adjustmentPlans: ['build', 'solve'],
   models: ['train', 'generation'],
 } as const
@@ -154,7 +154,6 @@ const scenarioCategoryRefreshKey = ref(0)
 const scenarioCategoryDetailLoading = ref(false)
 const scenarioSetOptions = ref<ResourceOption[]>([])
 const scenarioSetOptionsLoading = ref(false)
-const scenarios = ref<ScenarioSummary[]>([])
 const scenarioOptions = ref<ResourceOption[]>([])
 const scenarioOptionsLoading = ref(false)
 const selectedScenarioId = ref('')
@@ -229,7 +228,10 @@ const generationForm = ref({
   overwrite: false,
 })
 
-let pollHandle = 0
+let taskPollHandle = 0
+let taskPolling = false
+let taskPollInFlight = false
+let taskRequestSeq = 0
 let durationTickHandle = 0
 const resourceOptionRequestSeq = reactive<Record<ResourceKind, number>>({
   scenario_sets: 0,
@@ -346,7 +348,6 @@ const taskProjectOptions = computed(() => [
   { label: '全部项目', value: '' },
   ...projects.value.map((item) => ({ label: item.project_id, value: item.project_id })),
 ])
-const scenarioTasks = computed(() => filterTasks(TASK_LABELS.scenarios))
 const modelTasks = computed(() => filterTasks(TASK_LABELS.models))
 const visibleTasks = computed(() => tasks.value)
 const hasRunningTasks = computed(() => tasks.value.some((task) => !isTaskTerminal(task)))
@@ -410,18 +411,17 @@ watch(hasRunningTasks, (hasRunning) => {
   } else {
     stopDurationTick()
   }
+  rescheduleTaskPoll()
 })
 
 onMounted(async () => {
   await bootstrap()
-  pollHandle = window.setInterval(() => {
-    void pollTasks()
-  }, TASK_POLL_MS)
+  startTaskPolling()
   if (hasRunningTasks.value) startDurationTick()
 })
 
 onUnmounted(() => {
-  window.clearInterval(pollHandle)
+  stopTaskPolling()
   stopDurationTick()
 })
 
@@ -610,22 +610,65 @@ async function hydrateActivePage(showLoading = true) {
 }
 
 async function refreshTasks(showMessage = true) {
+  const requestSeq = taskRequestSeq + 1
+  taskRequestSeq = requestSeq
   try {
-    tasks.value = await api.listTasks()
+    const nextTasks = await api.listTasks()
+    if (requestSeq !== taskRequestSeq) return null
+    const previousTasks = tasks.value
+    tasks.value = nextTasks
     reconcilePendingModel()
+    return previousTasks
   } catch (error) {
-    if (showMessage) notifyError(error)
+    if (requestSeq === taskRequestSeq && showMessage) notifyError(error)
+    return null
   }
 }
 
 async function pollTasks() {
   taskNow.value = Date.now()
-  const previousTasks = tasks.value
-  await refreshTasks(false)
+  const previousTasks = await refreshTasks(false)
+  if (previousTasks == null) return
   if (shouldRefreshSelectedProjectAfterTaskPoll(previousTasks, tasks.value)) {
     await loadSelectedProject(false)
   }
   refreshLoadedResourceDetailsAfterTaskPoll(previousTasks, tasks.value)
+}
+
+function startTaskPolling() {
+  if (taskPolling) return
+  taskPolling = true
+  scheduleTaskPoll()
+}
+
+function stopTaskPolling() {
+  taskPolling = false
+  taskRequestSeq += 1
+  if (!taskPollHandle) return
+  window.clearTimeout(taskPollHandle)
+  taskPollHandle = 0
+}
+
+function rescheduleTaskPoll() {
+  if (!taskPolling || taskPollInFlight) return
+  if (taskPollHandle) window.clearTimeout(taskPollHandle)
+  taskPollHandle = 0
+  scheduleTaskPoll()
+}
+
+function scheduleTaskPoll() {
+  if (!taskPolling || taskPollHandle || taskPollInFlight) return
+  const delay = hasRunningTasks.value ? ACTIVE_TASK_POLL_MS : IDLE_TASK_POLL_MS
+  taskPollHandle = window.setTimeout(async () => {
+    taskPollHandle = 0
+    taskPollInFlight = true
+    try {
+      await pollTasks()
+    } finally {
+      taskPollInFlight = false
+      scheduleTaskPoll()
+    }
+  }, delay)
 }
 
 function shouldRefreshSelectedProjectAfterTaskPoll(previous: Task[], current: Task[]) {
@@ -793,7 +836,6 @@ async function deleteScenarioSetById(scenarioSetId: string) {
     await api.deleteScenarioSet(selectedProjectId.value, scenarioSetId)
     if (selectedScenarioSetId.value === scenarioSetId) {
       selectedScenarioSetId.value = ''
-      scenarios.value = []
     }
     if (loadedScenarioSetId.value === scenarioSetId) {
       loadedScenarioSetId.value = ''
@@ -830,30 +872,6 @@ function reloadSelectedModelDetail() {
   }
   loadedModelId.value = selectedModelId.value
   retrainModelDetail.value = null
-}
-
-async function loadScenarios(
-  showMessage = true,
-  projectId = selectedProjectId.value,
-  scenarioSetId = selectedScenarioSetId.value,
-) {
-  if (!projectId || !scenarioSetId) {
-    if (projectId === selectedProjectId.value && scenarioSetId === selectedScenarioSetId.value) {
-      scenarios.value = []
-    }
-    return
-  }
-  try {
-    const result = await api.listScenarios(projectId, scenarioSetId)
-    if (projectId === selectedProjectId.value && scenarioSetId === selectedScenarioSetId.value) {
-      scenarios.value = result
-    }
-  } catch (error) {
-    if (projectId === selectedProjectId.value && scenarioSetId === selectedScenarioSetId.value) {
-      scenarios.value = []
-    }
-    if (showMessage) notifyError(error)
-  }
 }
 
 async function reloadScenarioSetsOnOpen(visible: boolean) {
@@ -1663,15 +1681,6 @@ function trainFormDefaultsFromConfig(config: Record<string, unknown>): Partial<T
 
 function stringConfigValue(value: unknown) {
   return typeof value === 'string' ? value : ''
-}
-
-function nextTimestampSuffix() {
-  return new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
-}
-
-function nextScenarioId() {
-  const stamp = nextTimestampSuffix()
-  return `scenario_${stamp}`
 }
 
 async function scrollMainToTop() {
@@ -2649,6 +2658,7 @@ function notifyError(error: unknown) {
     </el-dialog>
 
     <TimetableDialog
+      v-if="timetableDialogVisible"
       v-model="timetableDialogVisible"
       :project-id="selectedProjectId"
       :scenario-set-id="loadedScenarioSetId"

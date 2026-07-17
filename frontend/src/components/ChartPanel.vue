@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type { EChartsCoreOption } from 'echarts/core'
 import VChart from 'vue-echarts'
 
+import '@/echarts'
 import { Download, FullScreen } from '@/icons'
 const props = withDefaults(
   defineProps<{

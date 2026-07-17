@@ -8,6 +8,7 @@ from backend.analysis.model import (
     read_model_detail as read_model_detail_payload,
     read_training_summary as read_training_summary_payload,
 )
+from core.file_ops import atomic_write_text
 from core.project_layout import PROJECTS_ROOT, ProjectLayout, require_id, sanitize_id, to_posix
 from backend.scenario_cases import (
     list_scenario_cases,
@@ -87,8 +88,7 @@ def read_yaml(path: Path) -> Dict[str, object]:
 
 
 def write_yaml(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    atomic_write_text(path, require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False))
 
 
 def require_yaml():

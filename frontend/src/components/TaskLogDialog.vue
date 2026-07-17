@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { api, ApiError } from '@/api/client'
 import {
   isTaskFailed,
-  isTaskTerminal,
   taskDisplayLabel,
   taskDisplayStatus,
   taskTagType,
@@ -13,8 +12,6 @@ import {
 import { formatTaskDuration, formatTaskTime } from '@/task-time'
 import { Refresh } from '@/icons'
 import type { Task } from '@/types'
-
-const RUNNING_LOG_POLL_MS = 1000
 
 const props = withDefaults(
   defineProps<{
@@ -36,7 +33,7 @@ const log = ref('')
 const liveTask = ref<Task | null>(null)
 const logView = ref<HTMLElement | null>(null)
 const now = ref(Date.now())
-let pollHandle = 0
+let logRequestSeq = 0
 
 const visible = computed({
   get: () => props.modelValue,
@@ -46,24 +43,20 @@ const activeTask = computed(() => liveTask.value ?? props.task)
 const paramEntries = computed(() => Object.entries(activeTask.value?.params ?? {}))
 const command = computed(() => activeTask.value?.command || activeTask.value?.original_command || '-')
 const activeTaskId = computed(() => activeTask.value?.id ?? props.task?.id ?? null)
-const activeTaskRunning = computed(() => Boolean(activeTask.value) && !isTaskTerminal(activeTask.value as Task))
 
 watch(
   () => [props.modelValue, props.task?.id] as const,
   ([isVisible, taskId]) => {
-    stopLogPolling()
+    logRequestSeq += 1
     liveTask.value = props.task
+    log.value = ''
     if (!isVisible || taskId == null) {
-      log.value = ''
       return
     }
     void refreshLog(taskId, { showLoading: true })
-    startLogPolling(taskId)
   },
   { immediate: true },
 )
-
-onUnmounted(stopLogPolling)
 
 async function refreshCurrentLog() {
   if (activeTaskId.value == null) return
@@ -71,22 +64,23 @@ async function refreshCurrentLog() {
 }
 
 async function refreshLog(taskId: number, options: { showLoading?: boolean } = {}) {
+  const requestSeq = logRequestSeq + 1
+  logRequestSeq = requestSeq
   now.value = Date.now()
   if (options.showLoading) {
     loading.value = true
-    log.value = ''
   }
   try {
-    const [nextLog, nextTask] = await Promise.all([api.getTaskLog(taskId, 400), readTask(taskId)])
+    const [nextLog, nextTask] = await Promise.all([api.getTaskLog(taskId), readTask(taskId)])
+    if (requestSeq !== logRequestSeq || taskId !== activeTaskId.value) return
     log.value = nextLog
     liveTask.value = nextTask ?? liveTask.value
-    if (nextTask && isTaskTerminal(nextTask)) stopLogPolling()
     await nextTick()
-    scrollLogToBottom()
+    if (requestSeq === logRequestSeq) scrollLogToBottom()
   } catch (error) {
-    notifyError(error)
+    if (requestSeq === logRequestSeq) notifyError(error)
   } finally {
-    if (options.showLoading) loading.value = false
+    if (options.showLoading && requestSeq === logRequestSeq) loading.value = false
   }
 }
 
@@ -96,19 +90,6 @@ async function readTask(taskId: number) {
   } catch {
     return null
   }
-}
-
-function startLogPolling(taskId: number) {
-  if (!activeTaskRunning.value) return
-  pollHandle = window.setInterval(() => {
-    void refreshLog(taskId)
-  }, RUNNING_LOG_POLL_MS)
-}
-
-function stopLogPolling() {
-  if (!pollHandle) return
-  window.clearInterval(pollHandle)
-  pollHandle = 0
 }
 
 function scrollLogToBottom() {
@@ -183,9 +164,6 @@ function formatParamValue(value: unknown) {
 
     <el-divider content-position="left">日志</el-divider>
     <div class="log-toolbar">
-      <span class="log-refresh-note">
-        {{ activeTaskRunning ? '运行中，自动每 1s 刷新' : '任务已结束，可手动刷新' }}
-      </span>
       <el-button
         :icon="Refresh"
         :loading-icon="Refresh"
@@ -221,14 +199,8 @@ function formatParamValue(value: unknown) {
 .log-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: 10px;
-}
-
-.log-refresh-note {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
 }
 
 .task-log-view {

@@ -56,9 +56,6 @@ const candidatePlanRefs = computed(() =>
   selectedPlans.value.filter((plan) => planKey(plan) !== (baselinePlan.value ? planKey(baselinePlan.value) : '')),
 )
 const selectedPlanCount = computed(() => selectedPlans.value.length)
-const canLoadAnalysis = computed(() =>
-  Boolean(props.selectedProjectId && baselinePlan.value && selectedPlans.value.length),
-)
 const loading = computed(() => analysisLoading.value)
 const metricCards = computed(() => buildAblationMetricCards(analysis.value, selectedPlanCount.value))
 const solvePlanRows = computed(() => buildSolvePlanRows(analysis.value))

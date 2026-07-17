@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 from datetime import datetime
 import sys
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 from backend.analysis.adjustment_plan import (
     read_adjustment_plan_detail,
@@ -21,7 +22,7 @@ from backend.scenario_cases import (
     validate_scenario_case,
 )
 from backend.analysis.timetable import read_case_timetable
-from backend.lifecycle import delete_adjustment_plan, delete_model, delete_scenario_set, ensure_no_active_reference
+from backend.lifecycle import delete_adjustment_plan, delete_model, delete_scenario_set
 from backend.pueue_client import PueueClient
 from backend.repository import ProjectRepository
 from backend.run_graphs import (
@@ -36,7 +37,7 @@ from backend.run_graphs import (
 )
 from backend.scenarios import create_scenario_set as create_scenario_set_dir, read_scenario_options
 from backend.task_contracts import TASK_DEFAULTS, normalize_project_id, normalize_task_params
-from backend.task_resources import RUNNING_TASK_STATUSES, ensure_no_active_conflict
+from backend.task_resources import RUNNING_TASK_STATUSES, ensure_no_active_conflict, project_resource_lock
 from backend.workflow import create_adjustment_plan as create_adjustment_plan_dir, new_project
 from core.project_layout import PROJECTS_ROOT, REPO_ROOT, require_id, sanitize_id, to_posix
 from core.scenario_config import RunGraphReference
@@ -109,15 +110,20 @@ class RailGraphBackend:
         return list_run_graph_sets(self.repository.layout(project_id))
 
     def create_run_graph_set(self, project_id: str, run_graph_set_id: str, *, exist_ok: bool = False) -> Dict[str, object]:
-        return create_run_graph_set(self.repository.layout(project_id), run_graph_set_id, exist_ok=exist_ok)
+        with self.project_mutation(
+            project_id,
+            action="run_graph_set_create",
+            params={"run_graph_set_id": run_graph_set_id},
+        ) as layout:
+            return create_run_graph_set(layout, run_graph_set_id, exist_ok=exist_ok)
 
     def delete_run_graph_set(self, project_id: str, run_graph_set_id: str) -> Dict[str, object]:
-        self.ensure_no_resource_conflict(
+        with self.project_mutation(
             project_id,
             action="run_graph_set_delete",
             params={"run_graph_set_id": run_graph_set_id},
-        )
-        return delete_run_graph_set(self.repository.layout(project_id), run_graph_set_id)
+        ) as layout:
+            return delete_run_graph_set(layout, run_graph_set_id)
 
     def list_run_graphs(self, project_id: str, run_graph_set_id: str) -> List[Dict[str, object]]:
         return list_run_graphs(self.repository.layout(project_id), run_graph_set_id)
@@ -166,12 +172,12 @@ class RailGraphBackend:
         return read_run_graph_timetable(self.repository.layout(project_id), run_graph_set_id, run_graph_id)
 
     def delete_run_graph(self, project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
-        self.ensure_no_resource_conflict(
+        with self.project_mutation(
             project_id,
             action="run_graph_write",
             params={"run_graph": {"set_id": run_graph_set_id, "graph_id": run_graph_id}},
-        )
-        return delete_run_graph(self.repository.layout(project_id), run_graph_set_id, run_graph_id)
+        ) as layout:
+            return delete_run_graph(layout, run_graph_set_id, run_graph_id)
 
     def read_run_graph_options(self, project_id: str, run_graph_set_id: str, run_graph_id: str) -> Dict[str, object]:
         return read_run_graph_options(self.repository.layout(project_id), run_graph_set_id, run_graph_id)
@@ -278,16 +284,24 @@ class RailGraphBackend:
         speed_limits: List[Dict[str, object]] | None = None,
         overwrite: bool = False,
     ) -> Dict[str, object]:
-        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id)
-        return create_scenario_case(
-            self.repository.layout(project_id),
-            scenario_set_id,
-            scenario_id,
-            run_graph=run_graph,
-            delays=delays or [],
-            speed_limits=speed_limits or [],
-            overwrite=overwrite,
-        )
+        with self.project_mutation(
+            project_id,
+            action="scenario_add",
+            params={
+                "scenario_set_id": scenario_set_id,
+                "scenario_id": scenario_id,
+                "run_graph": run_graph.to_payload(),
+            },
+        ) as layout:
+            return create_scenario_case(
+                layout,
+                scenario_set_id,
+                scenario_id,
+                run_graph=run_graph,
+                delays=delays or [],
+                speed_limits=speed_limits or [],
+                overwrite=overwrite,
+            )
 
     def update_scenario_disturbances(
         self,
@@ -300,16 +314,24 @@ class RailGraphBackend:
         speed_limits: List[Dict[str, object]],
         overwrite: bool = False,
     ) -> Dict[str, object]:
-        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id)
-        return update_scenario_disturbances(
-            self.repository.layout(project_id),
-            scenario_set_id,
-            scenario_id,
-            run_graph=run_graph,
-            delays=delays,
-            speed_limits=speed_limits,
-            overwrite=overwrite,
-        )
+        with self.project_mutation(
+            project_id,
+            action="scenario_add",
+            params={
+                "scenario_set_id": scenario_set_id,
+                "scenario_id": scenario_id,
+                "run_graph": run_graph.to_payload() if run_graph else {},
+            },
+        ) as layout:
+            return update_scenario_disturbances(
+                layout,
+                scenario_set_id,
+                scenario_id,
+                run_graph=run_graph,
+                delays=delays,
+                speed_limits=speed_limits,
+                overwrite=overwrite,
+            )
 
     def validate_scenario_case(
         self,
@@ -319,13 +341,21 @@ class RailGraphBackend:
         *,
         run_graph: RunGraphReference | None = None,
     ) -> Dict[str, object]:
-        self.ensure_no_scenario_case_conflict(project_id, scenario_set_id, scenario_id)
-        return validate_scenario_case(
-            self.repository.layout(project_id),
-            scenario_set_id,
-            scenario_id,
-            run_graph=run_graph,
-        )
+        with self.project_mutation(
+            project_id,
+            action="scenario_add",
+            params={
+                "scenario_set_id": scenario_set_id,
+                "scenario_id": scenario_id,
+                "run_graph": run_graph.to_payload() if run_graph else {},
+            },
+        ) as layout:
+            return validate_scenario_case(
+                layout,
+                scenario_set_id,
+                scenario_id,
+                run_graph=run_graph,
+            )
 
     def ensure_no_scenario_case_conflict(
         self,
@@ -403,6 +433,19 @@ class RailGraphBackend:
             params=params,
         )
 
+    @contextmanager
+    def project_mutation(
+        self,
+        project_id: str,
+        *,
+        action: str,
+        params: Dict[str, Any],
+    ) -> Iterator[ProjectLayout]:
+        project_id = normalize_project_id(project_id)
+        with project_resource_lock(self.tasks.repo_root, project_id):
+            self.ensure_no_resource_conflict(project_id, action=action, params=params)
+            yield self.repository.layout(project_id)
+
     def read_case_timetable(self, project_id: str, scenario_set_id: str, plan_id: str, case_id: str) -> Dict[str, object]:
         self.ensure_no_adjustment_plan_case_read_conflict(project_id, scenario_set_id, plan_id, case_id)
         return read_case_timetable(self.repository.layout(project_id), scenario_set_id, plan_id, case_id)
@@ -462,15 +505,12 @@ class RailGraphBackend:
         return self.repository.list_model_files(project_id, model_id)
 
     def delete_model(self, project_id: str, model_id: str) -> Dict[str, object]:
-        project_id = normalize_project_id(project_id)
-        model_id = require_id(model_id, "model_id")
-        ensure_no_active_reference(
-            self.tasks.list_active_tasks(group=project_id),
-            field="model_id",
-            value=model_id,
-            action_labels=("train", "generation"),
-        )
-        return delete_model(self.repository.layout(project_id), model_id)
+        with self.project_mutation(
+            project_id,
+            action="model_delete",
+            params={"model_id": model_id},
+        ) as layout:
+            return delete_model(layout, model_id)
 
     def list_tasks(self, project_id: Optional[str] = None) -> List[Dict[str, object]]:
         return self.tasks.list_tasks(group=project_id)
@@ -498,7 +538,12 @@ class RailGraphBackend:
     def create_scenario_set(self, project_id: str, scenario_set_id: str, *, exist_ok: bool = False) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
         scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
-        create_scenario_set_dir(self.repository.layout(project_id), scenario_set_id, exist_ok=exist_ok)
+        with self.project_mutation(
+            project_id,
+            action="scenario_set_create",
+            params={"scenario_set_id": scenario_set_id},
+        ) as layout:
+            create_scenario_set_dir(layout, scenario_set_id, exist_ok=exist_ok)
         for item in self.repository.list_scenario_sets(project_id):
             if item["scenario_set_id"] == scenario_set_id:
                 return item
@@ -507,12 +552,12 @@ class RailGraphBackend:
     def delete_scenario_set(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
         scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
-        ensure_no_active_conflict(
-            self.tasks.list_active_tasks(group=project_id),
+        with self.project_mutation(
+            project_id,
             action="scenario_set_delete",
             params={"scenario_set_id": scenario_set_id},
-        )
-        return delete_scenario_set(self.repository.layout(project_id), scenario_set_id)
+        ) as layout:
+            return delete_scenario_set(layout, scenario_set_id)
 
     def validate_scenario_set(self, project_id: str, scenario_set_id: str) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
@@ -601,7 +646,12 @@ class RailGraphBackend:
         project_id = normalize_project_id(project_id)
         scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
         plan_id = require_id(plan_id, "plan_id")
-        create_adjustment_plan_dir(self.repository.layout(project_id), scenario_set_id, plan_id, exist_ok=exist_ok)
+        with self.project_mutation(
+            project_id,
+            action="adjustment_plan_create",
+            params={"scenario_set_id": scenario_set_id, "plan_id": plan_id},
+        ) as layout:
+            create_adjustment_plan_dir(layout, scenario_set_id, plan_id, exist_ok=exist_ok)
         for item in self.repository.list_adjustment_plans(project_id, scenario_set_id):
             if item["plan_id"] == plan_id:
                 return item
@@ -611,12 +661,12 @@ class RailGraphBackend:
         project_id = normalize_project_id(project_id)
         scenario_set_id = require_id(scenario_set_id, "scenario_set_id")
         plan_id = require_id(plan_id, "plan_id")
-        ensure_no_active_conflict(
-            self.tasks.list_active_tasks(group=project_id),
+        with self.project_mutation(
+            project_id,
             action="adjustment_plan_delete",
             params={"scenario_set_id": scenario_set_id, "plan_id": plan_id},
-        )
-        return delete_adjustment_plan(self.repository.layout(project_id), scenario_set_id, plan_id)
+        ) as layout:
+            return delete_adjustment_plan(layout, scenario_set_id, plan_id)
 
     def build(
         self,
@@ -787,13 +837,14 @@ class RailGraphBackend:
     ) -> Dict[str, object]:
         project_id = normalize_project_id(project_id)
         params = normalize_task_params(action, params)
-        ensure_no_active_conflict(
-            self.tasks.list_active_tasks(group=project_id),
-            action=action,
-            params=params,
-        )
-        task_input = self._write_task_input(project_id, action, params, task_root=task_root)
-        return self.tasks.submit_runner(project_id, task_input, label=label)
+        with project_resource_lock(self.tasks.repo_root, project_id):
+            ensure_no_active_conflict(
+                self.tasks.list_active_tasks(group=project_id),
+                action=action,
+                params=params,
+            )
+            task_input = self._write_task_input(project_id, action, params, task_root=task_root)
+            return self.tasks.submit_runner(project_id, task_input, label=label)
 
     def _new_task_root(self, project_id: str, action: str) -> Path:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")

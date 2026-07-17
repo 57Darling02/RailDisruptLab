@@ -16,7 +16,6 @@ import {
   formatDayClockTime,
 } from '@/components/scenario-category'
 import type {
-  JsonObject,
   PlanTimetableState,
   RunGraphReference,
   ScenarioDetail,
@@ -316,23 +315,6 @@ function sameRunGraph(left: RunGraphReference | null | undefined, right: RunGrap
   return left.set_id === right.set_id && left.graph_id === right.graph_id
 }
 
-function scenarioList(value: unknown): JsonObject[] {
-  return Array.isArray(value) ? value.filter(isRecord) : []
-}
-
-function isRecord(value: unknown): value is JsonObject {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function stringValue(value: unknown) {
-  return typeof value === 'string' ? value : String(value ?? '')
-}
-
-function numberValue(value: unknown) {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : null
-}
-
 function secondsToHms(value: number | null | undefined) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return ''
   const total = Math.max(0, Math.round(value))
@@ -527,7 +509,7 @@ function secondsToHms(value: number | null | undefined) {
       :scenario-set-id="scenarioSetId"
       :initial-scenario-id="scenarioId"
       :options-scenario-id="scenarioId"
-      :existing-scenario="scenarioPayload as JsonObject | null"
+      :existing-scenario="scenarioPayload"
       :busy="busy || saving"
       :submitting="saving"
       @submit="saveDisturbances"

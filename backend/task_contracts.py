@@ -43,7 +43,7 @@ TASK_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "speed_count": 10,
         "interruption_count": 10,
         "combo_per_type": 10,
-        "overwrite": True,
+        "overwrite": False,
     },
     "build": {
         "scenario_id": "",
@@ -157,6 +157,16 @@ def validate_task_params(action: str, params: Mapping[str, Any]) -> None:
         return
     if action == "normal_generate":
         run_graph_param(params, "run_graph")
+        require_positive_int(params, "simulation_count", action)
+        require_non_negative_ints(
+            params,
+            action,
+            "seed",
+            "delay_count",
+            "speed_count",
+            "interruption_count",
+            "combo_per_type",
+        )
         return
     if action == "generation":
         has_category_source = bool(str(params.get("source_scenario_set_id") or "").strip())
@@ -165,46 +175,118 @@ def validate_task_params(action: str, params: Mapping[str, Any]) -> None:
             raise ValueError("generation requires exactly one context source: source_scenario_set_id or run_graph")
         if has_run_graph_source:
             run_graph_param(params, "run_graph")
+        require_positive_int(params, "num_samples", action)
+        require_non_negative_int(params, "seed", action)
+        require_non_negative_float(params, "speed_interruption_threshold", action)
+        require_non_empty_text(params, "device", action)
         return
+    if action == "solve":
+        require_non_negative_ints(params, action, "limit", "threads")
+        require_non_negative_floats(params, action, "time_limit", "mip_gap")
+        return
+    if action == "train":
+        require_positive_ints(
+            params,
+            action,
+            "max_slots",
+            "event_time_window",
+            "event_top_k",
+            "section_order_window",
+            "hidden_dim",
+            "latent_dim",
+            "message_passing_steps",
+            "epochs",
+            "checkpoint_every",
+            "batch_size",
+            "log_every",
+        )
+        require_non_negative_int(params, "seed", action)
+        require_positive_float(params, "lr", action)
+        require_non_negative_floats(
+            params,
+            action,
+            "count_weight",
+            "anchor_weight",
+            "param_weight",
+            "kl_weight",
+            "relation_weight",
+        )
+        require_non_empty_text(params, "device", action)
+        return
+
     if action != "build":
         return
+
     objective_mode = str(params.get("objective_mode", "") or "").strip()
     if objective_mode not in {"abs", "delay"}:
         raise ValueError("build.objective_mode must be one of: abs, delay")
-    require_positive_float(params, "objective_delay_weight")
-    require_non_negative_float(params, "cancellation_penalty_weight")
-    require_positive_int(params, "arr_arr_headway_seconds")
-    require_positive_int(params, "dep_dep_headway_seconds")
-    require_positive_int(params, "dwell_seconds_at_stops")
-    require_positive_int(params, "big_m")
-    require_positive_int(params, "tolerance_delay_seconds")
+    require_positive_float(params, "objective_delay_weight", action)
+    require_non_negative_float(params, "cancellation_penalty_weight", action)
+    require_positive_ints(
+        params,
+        action,
+        "arr_arr_headway_seconds",
+        "dep_dep_headway_seconds",
+        "dwell_seconds_at_stops",
+        "big_m",
+        "tolerance_delay_seconds",
+    )
 
 
-def require_positive_float(params: Mapping[str, Any], key: str) -> None:
-    value = numeric_param(params, key)
+def require_positive_float(params: Mapping[str, Any], key: str, action: str) -> None:
+    value = numeric_param(params, key, action)
     if value <= 0:
-        raise ValueError(f"build.{key} must be > 0")
+        raise ValueError(f"{action}.{key} must be > 0")
 
 
-def require_non_negative_float(params: Mapping[str, Any], key: str) -> None:
-    value = numeric_param(params, key)
+def require_non_negative_float(params: Mapping[str, Any], key: str, action: str) -> None:
+    value = numeric_param(params, key, action)
     if value < 0:
-        raise ValueError(f"build.{key} must be >= 0")
+        raise ValueError(f"{action}.{key} must be >= 0")
 
 
-def require_positive_int(params: Mapping[str, Any], key: str) -> None:
-    value = numeric_param(params, key)
+def require_positive_int(params: Mapping[str, Any], key: str, action: str) -> None:
+    value = numeric_param(params, key, action)
     if value <= 0 or int(value) != value:
-        raise ValueError(f"build.{key} must be a positive integer")
+        raise ValueError(f"{action}.{key} must be a positive integer")
 
 
-def numeric_param(params: Mapping[str, Any], key: str) -> float:
+def require_non_negative_int(params: Mapping[str, Any], key: str, action: str) -> None:
+    value = numeric_param(params, key, action)
+    if value < 0 or int(value) != value:
+        raise ValueError(f"{action}.{key} must be a non-negative integer")
+
+
+def require_positive_ints(params: Mapping[str, Any], action: str, *keys: str) -> None:
+    for key in keys:
+        require_positive_int(params, key, action)
+
+
+def require_non_negative_ints(params: Mapping[str, Any], action: str, *keys: str) -> None:
+    for key in keys:
+        require_non_negative_int(params, key, action)
+
+
+def require_non_negative_floats(params: Mapping[str, Any], action: str, *keys: str) -> None:
+    for key in keys:
+        require_non_negative_float(params, key, action)
+
+
+def require_non_empty_text(params: Mapping[str, Any], key: str, action: str) -> None:
+    if not str(params.get(key, "") or "").strip():
+        raise ValueError(f"{action}.{key} must not be empty")
+
+
+def numeric_param(params: Mapping[str, Any], key: str, action: str) -> float:
+    raw_value = params.get(key)
+    if isinstance(raw_value, bool):
+        raise ValueError(f"{action}.{key} must be a finite number")
     try:
-        value = float(params[key])
+        value = float(raw_value)
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"build.{key} must be a finite number") from exc
+        raise ValueError(f"{action}.{key} must be a finite number") from exc
     if not math.isfinite(value):
-        raise ValueError(f"build.{key} must be a finite number")
+        raise ValueError(f"{action}.{key} must be a finite number")
     return value
 
 

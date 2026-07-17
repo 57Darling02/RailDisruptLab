@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from backend.analysis.disturbances import read_scenario_disturbances
 from backend.run_graphs import resolve_run_graph_context
 from core.base_context import load_base_context
+from core.file_ops import atomic_write_text
 from core.postprocess import adjusted_timetable_rows
 from core.project_layout import ProjectLayout, require_id, sanitize_id
 from core.scenario_config import load_scenario_document
@@ -167,10 +168,7 @@ def file_digest(path: Path) -> str:
 
 
 def write_json(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def read_json(path: Path) -> Dict[str, object]:

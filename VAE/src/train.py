@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List
 
+from core.file_ops import atomic_write_text
+
 DEFAULT_OUTPUT_DIR = Path("projects/demo/model/default")
 
 
@@ -72,13 +74,10 @@ def main() -> None:
     config_payload["created_at"] = datetime.now().isoformat(timespec="seconds")
     config_payload["run_dir"] = str(output_dir.resolve()).replace("\\", "/")
     config_payload["resolved_output_dir"] = str(output_dir.resolve()).replace("\\", "/")
-    (output_dir / "training_config.json").write_text(
-        json.dumps(config_payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    (output_dir / "schema_summary.json").write_text(
+    atomic_write_text(output_dir / "training_config.json", json.dumps(config_payload, ensure_ascii=False, indent=2))
+    atomic_write_text(
+        output_dir / "schema_summary.json",
         json.dumps(_schema_summary(first_sample, architecture_version=ARCHITECTURE_VERSION), ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
     logger.log("Training started")
     logger.log(f"graphs_root={args.graphs_root}")
@@ -155,7 +154,7 @@ def main() -> None:
             averaged = {key: value / max(1, steps) for key, value in epoch_metrics.items()}
             averaged["epoch"] = float(epoch)
             history.append(averaged)
-            (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+            atomic_write_text(output_dir / "history.json", json.dumps(history, indent=2))
             should_check_checkpoint = epoch % max(1, args.checkpoint_every) == 0 or epoch == args.epochs
             if should_check_checkpoint and (best_metrics is None or averaged["loss"] < best_metrics["loss"]):
                 previous_best_path = best_path
@@ -174,7 +173,8 @@ def main() -> None:
             _save_checkpoint(model, last_path, last_metrics)
         keep_paths = {path for path in (best_path, last_path) if path is not None}
         _cleanup_checkpoints(checkpoints_dir, keep_paths)
-        (output_dir / "training_summary.json").write_text(
+        atomic_write_text(
+            output_dir / "training_summary.json",
             json.dumps(
                 {
                     "last_epoch": last_epoch,
@@ -187,7 +187,6 @@ def main() -> None:
                 ensure_ascii=False,
                 indent=2,
             ),
-            encoding="utf-8",
         )
         logger.log(f"Last checkpoint: {last_path}")
         logger.log(f"Best checkpoint: {best_path}")

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from backend.run_graphs import load_scenario_context, resolve_run_graph_context
 from core.base_context import event_anchor_by_key, load_base_context, section_anchor_by_key
+from core.file_ops import atomic_write_text
 from core.project_layout import ProjectLayout, require_id, sanitize_id
 from core.scenario_config import RunGraphReference, ScenarioDocument, load_scenario_document
 from core.types import BaseContext, SectionAnchor
@@ -567,8 +569,7 @@ def seconds_to_hms(seconds: int) -> str:
 
 
 def write_yaml(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    atomic_write_text(path, require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False))
 
 
 def require_yaml() -> Any:

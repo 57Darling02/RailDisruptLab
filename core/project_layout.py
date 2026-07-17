@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import shutil
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
+from uuid import uuid4
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +45,42 @@ def reset_dir(path: Path, *, allowed_root: Path = PROJECTS_ROOT) -> None:
         path.unlink()
     elif path.exists():
         shutil.rmtree(path)
+
+
+@contextmanager
+def replace_dir_with_rollback(path: Path, *, allowed_root: Path = PROJECTS_ROOT) -> Iterator[Path]:
+    """Replace a project artifact directory, restoring its previous version on failure."""
+    resolved = path.resolve()
+    root = allowed_root.resolve()
+    if resolved == root or root not in resolved.parents:
+        raise ValueError(f"Refusing to replace path outside {root}: {path}")
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise ValueError(f"Artifact path must be a directory: {path}")
+
+    had_previous = path.is_dir()
+    backup = path.with_name(f".{path.name}.backup-{uuid4().hex}")
+    if had_previous:
+        path.replace(backup)
+    try:
+        path.mkdir(parents=True, exist_ok=False)
+    except BaseException:
+        if had_previous and backup.exists() and not path.exists():
+            backup.replace(path)
+        raise
+
+    try:
+        yield path
+    except BaseException:
+        try:
+            if path.exists():
+                reset_dir(path, allowed_root=allowed_root)
+        finally:
+            if had_previous and backup.exists():
+                backup.replace(path)
+        raise
+    else:
+        if had_previous and backup.exists():
+            reset_dir(backup, allowed_root=allowed_root)
 
 
 @dataclass(frozen=True)

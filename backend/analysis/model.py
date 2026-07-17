@@ -377,7 +377,7 @@ def normalize_loss_point(payload: Dict[str, Any]) -> Dict[str, object]:
         }
     except (KeyError, TypeError, ValueError):
         return {}
-    for key in ("count_loss", "anchor_loss", "param_loss", "kl", "elapsed"):
+    for key in (*LOSS_METRICS[1:], "elapsed"):
         value = payload.get(key)
         if isinstance(value, (int, float)):
             point[key] = float(value)

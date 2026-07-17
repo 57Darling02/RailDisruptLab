@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from core.base_context import build_base_context, load_base_context, write_base_context
-from core.file_ops import file_digest
+from core.file_ops import atomic_write_text, file_digest
 from core.loader import load_mileage_table, load_timetable
 from core.project_layout import ProjectLayout, RunGraphLayout, require_id, reset_dir, to_posix
 from core.scenario_config import RunGraphReference, load_scenario_document, scenario_files
@@ -383,10 +383,7 @@ def run_graph_references(layout: ProjectLayout) -> List[ScenarioRunGraphReferenc
 
 
 def write_json(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def read_json(path: Path) -> Dict[str, object]:

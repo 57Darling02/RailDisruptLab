@@ -21,6 +21,7 @@ from backend.run_graphs import (
     resolve_run_graph_context,
     read_run_graph,
 )
+from core.file_ops import atomic_write_text
 from core.loader import parse_scenario_config
 from core.project_layout import ProjectLayout, ScenarioCaseLayout, require_id, sanitize_id, to_posix
 from core.scenario_config import (
@@ -586,8 +587,7 @@ def write_scenario_document(case: ScenarioCaseLayout, doc: ScenarioDocument) -> 
 
 
 def write_yaml(path: Path, payload: Dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    atomic_write_text(path, require_yaml().safe_dump(payload, allow_unicode=True, sort_keys=False))
 
 
 def check_scenario_yaml(
